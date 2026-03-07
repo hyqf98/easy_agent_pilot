@@ -260,10 +260,7 @@ const handleRetry = () => {
           :title="t('common.stop')"
           @click="handleStop"
         >
-          <EaIcon
-            name="square"
-            :size="12"
-          />
+          ⏹
         </button>
         <!-- 重试按钮 - 用户消息失败 -->
         <button
