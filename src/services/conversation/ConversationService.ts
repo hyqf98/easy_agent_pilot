@@ -3,12 +3,11 @@ import { useSessionStore } from '@/stores/session'
 import { useSessionExecutionStore } from '@/stores/sessionExecution'
 import { useProjectStore } from '@/stores/project'
 import { useAgentStore, type AgentConfig } from '@/stores/agent'
-import { useAgentConfigStore } from '@/stores/agentConfig'
-import { useSkillConfigStore } from '@/stores/skillConfig'
 import { useTokenStore } from '@/stores/token'
 import { agentExecutor } from './AgentExecutor'
-import type { ConversationContext, StreamEvent, McpServerConfig } from './strategies/types'
+import type { ConversationContext, StreamEvent } from './strategies/types'
 import { compressionService } from '@/services/compression/CompressionService'
+import { buildConversationMessages } from './buildConversationMessages'
 
 /**
  * 对话服务
@@ -44,8 +43,6 @@ export class ConversationService {
     const sessionExecutionStore = useSessionExecutionStore()
     const projectStore = useProjectStore()
     const agentStore = useAgentStore()
-    const agentConfigStore = useAgentConfigStore()
-    const skillConfigStore = useSkillConfigStore()
 
     // 获取智能体配置
     const agent = agentStore.agents.find(a => a.id === agentId)
@@ -111,7 +108,20 @@ export class ConversationService {
       }
 
       // 构建对话上下文
-      const messages = messageStore.messagesBySession(sessionId)
+      const messages = buildConversationMessages(
+        messageStore.messagesBySession(sessionId),
+        content,
+        sessionId
+      )
+      const userMessages = messages.filter(message => message.role === 'user')
+
+      console.info('[ConversationService] assembled context messages', {
+        sessionId,
+        messageCount: messages.length,
+        lastUserMessageLength: userMessages.length > 0
+          ? userMessages[userMessages.length - 1].content.length
+          : 0
+      })
 
       const context: ConversationContext = {
         sessionId,

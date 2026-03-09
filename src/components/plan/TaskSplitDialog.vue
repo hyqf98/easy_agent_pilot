@@ -4,14 +4,12 @@ import { usePlanStore } from '@/stores/plan'
 import { useTaskSplitStore } from '@/stores/taskSplit'
 import { useTaskStore } from '@/stores/task'
 import { useProjectStore } from '@/stores/project'
-import DynamicForm from './DynamicForm.vue'
 import TaskSplitPreview from './TaskSplitPreview.vue'
 import TaskResplitModal from './TaskResplitModal.vue'
-import ThinkingDisplay from '@/components/message/ThinkingDisplay.vue'
-import ToolCallDisplay from '@/components/message/ToolCallDisplay.vue'
-import MarkdownRenderer from '@/components/message/MarkdownRenderer.vue'
-import type { AITaskItem, TaskResplitConfig, PlanSplitLogRecord } from '@/types/plan'
-import type { ToolCall } from '@/stores/message'
+import ExecutionTimeline from '@/components/message/ExecutionTimeline.vue'
+import type { AITaskItem, TaskResplitConfig } from '@/types/plan'
+import type { TimelineEntry } from '@/types/timeline'
+import { buildToolCallFromLogs, extractDynamicFormSchema } from '@/utils/toolCallLog'
 
 const planStore = usePlanStore()
 const taskSplitStore = useTaskSplitStore()
@@ -43,18 +41,87 @@ function scrollMessagesToBottom() {
   container.scrollTop = container.scrollHeight
 }
 
-function shouldRenderMessage(message: { role: string; content: string; formSchema?: unknown; formValues?: unknown }): boolean {
-  if (message.role !== 'assistant') return true
-  return Boolean(message.content.trim() || message.formSchema || message.formValues)
-}
+const timelineEntries = computed<TimelineEntry[]>(() => {
+  const entries: TimelineEntry[] = []
+
+  for (const message of taskSplitStore.messages) {
+    if (message.role === 'assistant' && !message.content.trim()) {
+      continue
+    }
+
+    entries.push({
+      id: `message-${message.id}`,
+      type: 'message',
+      role: message.role,
+      content: message.content,
+      timestamp: message.timestamp
+    })
+  }
+
+  for (const log of taskSplitStore.logs) {
+    if (log.type === 'tool_result' || log.type === 'content') {
+      continue
+    }
+
+    if (log.type === 'tool_use') {
+      const toolCall = buildToolCallFromLogs(log, taskSplitStore.logs)
+      if (!toolCall) continue
+
+      const fallbackFormSchema = !activeFormSchema.value && !showPreview.value
+        ? extractDynamicFormSchema(toolCall.arguments)
+        : null
+
+      if (fallbackFormSchema) {
+        entries.push({
+          id: `form-log-${log.id}`,
+          type: 'form',
+          formSchema: fallbackFormSchema,
+          formDisabled: true,
+          timestamp: log.createdAt
+        })
+      }
+
+      entries.push({
+        id: `tool-${log.id}`,
+        type: 'tool',
+        toolCall,
+        timestamp: log.createdAt
+      })
+      continue
+    }
+
+    entries.push({
+      id: `log-${log.id}`,
+      type: log.type === 'thinking' ? 'thinking' : log.type === 'error' ? 'error' : 'system',
+      content: log.content,
+      timestamp: log.createdAt
+    })
+  }
+
+  entries.sort((left, right) =>
+    new Date(left.timestamp || 0).getTime() - new Date(right.timestamp || 0).getTime()
+  )
+
+  if (activeFormSchema.value && !showPreview.value) {
+    entries.push({
+      id: `form-${activeFormSchema.value.formId}`,
+      type: 'form',
+      formSchema: activeFormSchema.value,
+      formDisabled: taskSplitStore.isProcessing,
+      timestamp: taskSplitStore.session?.updatedAt || new Date().toISOString()
+    })
+  }
+
+  return entries
+})
 
 const messageRenderState = computed(() => {
-  const lastMessage = taskSplitStore.messages[taskSplitStore.messages.length - 1]
+  const lastEntry = timelineEntries.value[timelineEntries.value.length - 1]
   return [
     planStore.splitDialogVisible,
-    taskSplitStore.messages.length,
-    lastMessage?.id ?? '',
-    lastMessage?.content.length ?? 0,
+    timelineEntries.value.length,
+    lastEntry?.id ?? '',
+    lastEntry?.content?.length ?? 0,
     taskSplitStore.isProcessing,
     activeFormSchema.value?.formId ?? '',
     showPreview.value
@@ -100,6 +167,10 @@ async function restartSplit() {
 async function handleFormSubmit(values: Record<string, any>) {
   if (!activeFormSchema.value) return
   await taskSplitStore.submitFormResponse(activeFormSchema.value.formId, values)
+}
+
+function handleTimelineFormSubmit(_entryId: string, values: Record<string, unknown>) {
+  void handleFormSubmit(values as Record<string, any>)
 }
 
 // 打开继续拆分弹框
@@ -203,40 +274,6 @@ watch(messageRenderState, async () => {
   await nextTick()
   scrollMessagesToBottom()
 }, { flush: 'post' })
-
-function createToolCallFromLog(log: PlanSplitLogRecord, logs: PlanSplitLogRecord[]): ToolCall | null {
-  if (log.type !== 'tool_use') return null
-  let metadata: Record<string, any> = {}
-  try {
-    metadata = log.metadata ? JSON.parse(log.metadata) : {}
-  } catch {
-    metadata = {}
-  }
-  const toolCallId = metadata.toolCallId || ''
-  const resultLog = logs.find(item => {
-    if (item.type !== 'tool_result') return false
-    try {
-      const resultMetadata = item.metadata ? JSON.parse(item.metadata) : {}
-      return resultMetadata.toolCallId === toolCallId
-    } catch {
-      return false
-    }
-  })
-
-  return {
-    id: toolCallId || log.id,
-    name: metadata.toolName || 'tool',
-    arguments: (() => {
-      try {
-        return metadata.toolInput ? JSON.parse(metadata.toolInput) : {}
-      } catch {
-        return {}
-      }
-    })(),
-    status: resultLog ? 'success' : 'running',
-    result: resultLog?.content
-  }
-}
 </script>
 
 <template>
@@ -276,66 +313,11 @@ function createToolCallFromLog(log: PlanSplitLogRecord, logs: PlanSplitLogRecord
                 ref="messagesContainerRef"
                 class="messages-container"
               >
-                <div
-                  v-for="message in taskSplitStore.messages"
-                  v-show="shouldRenderMessage(message)"
-                  :key="message.id"
-                  class="message"
-                  :class="[message.role]"
-                >
-                  <div class="message-content">
-                    <p>{{ message.content }}</p>
-                  </div>
-                </div>
-
-                <div
-                  v-if="activeFormSchema && !showPreview"
-                  class="message assistant message-form"
-                >
-                  <div
-                    class="message-content form-message-content"
-                    :class="{ disabled: taskSplitStore.isProcessing }"
-                  >
-                    <DynamicForm
-                      :schema="activeFormSchema"
-                      @submit="handleFormSubmit"
-                      @cancel="closeDialog"
-                    />
-                  </div>
-                </div>
-
-                <div
-                  v-if="taskSplitStore.logs.length > 0"
-                  class="split-log-panel"
-                >
-                  <div class="split-log-panel__header">
-                    <span>执行明细</span>
-                    <span class="split-log-panel__status">{{ taskSplitStore.session?.status || '' }}</span>
-                  </div>
-                  <div class="split-log-panel__body">
-                    <template
-                      v-for="log in taskSplitStore.logs"
-                      :key="log.id"
-                    >
-                      <ThinkingDisplay
-                        v-if="log.type === 'thinking'"
-                        :thinking="log.content"
-                      />
-                      <ToolCallDisplay
-                        v-else-if="log.type === 'tool_use' && createToolCallFromLog(log, taskSplitStore.logs)"
-                        :tool-call="createToolCallFromLog(log, taskSplitStore.logs)!"
-                      />
-                      <div
-                        v-else-if="log.type !== 'tool_result'"
-                        class="split-log-panel__entry"
-                        :class="`split-log-panel__entry--${log.type}`"
-                      >
-                        <div class="split-log-panel__entry-type">{{ log.type }}</div>
-                        <MarkdownRenderer :content="log.content" />
-                      </div>
-                    </template>
-                  </div>
-                </div>
+                <ExecutionTimeline
+                  :entries="timelineEntries"
+                  @form-submit="handleTimelineFormSubmit"
+                  @form-cancel="closeDialog"
+                />
 
                 <div
                   v-if="showLoadingIndicator"

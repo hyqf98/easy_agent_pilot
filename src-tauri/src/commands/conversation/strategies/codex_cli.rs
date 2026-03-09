@@ -208,6 +208,10 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         let messages = request.messages.clone();
         let mcp_servers = request.mcp_servers.clone();
         let is_stream_json = cli_output_format == "stream-json";
+        let enable_web_search = allowed_tools
+            .as_ref()
+            .map(|tools| tools.iter().any(|tool| tool == "WebSearch"))
+            .unwrap_or(false);
 
         let schema_text = json_schema
             .as_deref()
@@ -244,12 +248,9 @@ impl AgentExecutionStrategy for CodexCliStrategy {
             }
         }
 
-        // 添加允许的工具
-        if let Some(tools) = &allowed_tools {
-            if !tools.is_empty() {
-                args.push("--allowedTools".to_string());
-                args.push(tools.join(","));
-            }
+        // Codex CLI 当前不支持 --allowedTools；仅在请求中包含 WebSearch 时显式开启联网搜索。
+        if enable_web_search {
+            args.push("--search".to_string());
         }
 
         // 添加 MCP 服务器配置

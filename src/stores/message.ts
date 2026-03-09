@@ -55,21 +55,26 @@ interface RustToolCall {
   name: string
   arguments: string // JSON string
   status: string
-  result: string | null
-  error_message: string | null
+  result?: string | null
+  errorMessage?: string | null
+  error_message?: string | null
 }
 
 interface RustMessage {
   id: string
-  session_id: string
+  sessionId?: string
+  session_id?: string
   role: string
   content: string
   status: string
   tokens: number | null
-  error_message: string | null
-  tool_calls: RustToolCall[] | null
-  thinking: string | null
-  created_at: string
+  errorMessage?: string | null
+  error_message?: string | null
+  toolCalls?: RustToolCall[] | null
+  tool_calls?: RustToolCall[] | null
+  thinking?: string | null
+  createdAt?: string
+  created_at?: string
 }
 
 interface PaginatedRustMessages {
@@ -107,27 +112,38 @@ export interface PaginationState {
 }
 
 function transformMessage(rustMsg: RustMessage): Message {
+  const rawToolCalls = rustMsg.toolCalls ?? rustMsg.tool_calls
   // 转换 tool calls
-  const toolCalls: ToolCall[] | undefined = rustMsg.tool_calls?.map(tc => ({
+  const toolCalls: ToolCall[] | undefined = rawToolCalls?.map(tc => ({
     id: tc.id,
     name: tc.name,
-    arguments: JSON.parse(tc.arguments || '{}'),
+    arguments: (() => {
+      try {
+        return JSON.parse(tc.arguments || '{}') as Record<string, unknown>
+      } catch {
+        return {}
+      }
+    })(),
     status: tc.status as ToolCallStatus,
     result: tc.result ?? undefined,
-    errorMessage: tc.error_message ?? undefined
+    errorMessage: tc.errorMessage ?? tc.error_message ?? undefined
   })) ?? undefined
+
+  const sessionId = rustMsg.sessionId ?? rustMsg.session_id
+  const createdAt = rustMsg.createdAt ?? rustMsg.created_at
+  const errorMessage = rustMsg.errorMessage ?? rustMsg.error_message
 
   return {
     id: rustMsg.id,
-    sessionId: rustMsg.session_id,
+    sessionId: sessionId || '',
     role: rustMsg.role as MessageRole,
     content: rustMsg.content,
     status: rustMsg.status as MessageStatus,
     tokens: rustMsg.tokens ?? undefined,
-    errorMessage: rustMsg.error_message ?? undefined,
+    errorMessage: errorMessage ?? undefined,
     toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined,
     thinking: rustMsg.thinking ?? undefined,
-    createdAt: rustMsg.created_at
+    createdAt: createdAt || new Date().toISOString()
   }
 }
 

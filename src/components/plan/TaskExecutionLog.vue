@@ -2,12 +2,10 @@
 import { computed, ref, watch, nextTick, onMounted } from 'vue'
 import { useTaskExecutionStore } from '@/stores/taskExecution'
 import { useTaskStore } from '@/stores/task'
-import ThinkingDisplay from '@/components/message/ThinkingDisplay.vue'
-import ToolCallDisplay from '@/components/message/ToolCallDisplay.vue'
-import MarkdownRenderer from '@/components/message/MarkdownRenderer.vue'
+import ExecutionTimeline from '@/components/message/ExecutionTimeline.vue'
 import DynamicForm from '@/components/plan/DynamicForm.vue'
-import type { ExecutionLogEntry, ExecutionLogType } from '@/types/taskExecution'
-import type { ToolCall } from '@/stores/message'
+import type { TimelineEntry } from '@/types/timeline'
+import { buildToolCallFromLogs } from '@/utils/toolCallLog'
 
 const props = defineProps<{
   taskId: string
@@ -118,51 +116,41 @@ function handleScroll() {
   autoScroll.value = scrollHeight - scrollTop - clientHeight < 50
 }
 
-// 格式化时间
-function formatTime(timestamp: string): string {
-  const date = new Date(timestamp)
-  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-}
+const timelineEntries = computed<TimelineEntry[]>(() => {
+  return logs.value.reduce<TimelineEntry[]>((entries, log) => {
+    if (log.type === 'tool_result') {
+      return entries
+    }
 
-// 获取日志图标
-function getLogIcon(type: ExecutionLogType): string {
-  switch (type) {
-    case 'content': return '📝'
-    case 'thinking': return '💭'
-    case 'tool_use': return '🔧'
-    case 'tool_result': return '📋'
-    case 'error': return '❌'
-    case 'system': return '⚙️'
-    default: return '•'
-  }
-}
-
-// 将工具调用日志转换为 ToolCall 类型
-function createToolCallFromLog(log: ExecutionLogEntry, logs: ExecutionLogEntry[]): ToolCall | null {
-  if (log.type !== 'tool_use' || !log.metadata?.toolName) return null
-
-  // 查找对应的结果日志
-  const resultLog = logs.find(l =>
-    l.type === 'tool_result' &&
-    l.metadata?.toolCallId === log.metadata?.toolCallId
-  )
-
-  return {
-    id: log.metadata?.toolCallId || log.id,
-    name: log.metadata.toolName,
-    arguments: (() => {
-      if (typeof log.content !== 'string') return log.content
-      try {
-        return JSON.parse(log.content || '{}')
-      } catch {
-        return {}
+    if (log.type === 'tool_use') {
+      const toolCall = buildToolCallFromLogs(log, logs.value)
+      if (toolCall) {
+        entries.push({
+          id: `tool-${log.id}`,
+          type: 'tool',
+          toolCall,
+          timestamp: log.timestamp
+        })
       }
-    })(),
-    status: resultLog ? (resultLog.metadata?.isError ? 'error' : 'success') : 'running',
-    result: resultLog?.content,
-    errorMessage: resultLog?.metadata?.isError ? resultLog.content : undefined
-  }
-}
+      return entries
+    }
+
+    entries.push({
+      id: `entry-${log.id}`,
+      type:
+        log.type === 'content'
+          ? 'content'
+          : log.type === 'thinking'
+            ? 'thinking'
+            : log.type === 'error'
+              ? 'error'
+              : 'system',
+      content: log.content,
+      timestamp: log.timestamp
+    })
+    return entries
+  }, [])
+})
 
 // 加载历史日志
 onMounted(async () => {
@@ -265,53 +253,7 @@ watch(
         v-else
         class="log-entries"
       >
-        <template
-          v-for="log in logs"
-          :key="log.id"
-        >
-          <!-- 系统消息 -->
-          <div
-            v-if="log.type === 'system'"
-            class="log-entry log-entry--system"
-          >
-            <span class="log-time">{{ formatTime(log.timestamp) }}</span>
-            <span class="log-icon">{{ getLogIcon(log.type) }}</span>
-            <span class="log-content-text">{{ log.content }}</span>
-          </div>
-
-          <!-- 错误消息 -->
-          <div
-            v-else-if="log.type === 'error'"
-            class="log-entry log-entry--error"
-          >
-            <span class="log-time">{{ formatTime(log.timestamp) }}</span>
-            <span class="log-icon">{{ getLogIcon(log.type) }}</span>
-            <pre class="log-content-text">{{ log.content }}</pre>
-          </div>
-
-          <!-- 思考内容 -->
-          <ThinkingDisplay
-            v-else-if="log.type === 'thinking'"
-            :thinking="log.content"
-          />
-
-          <!-- 工具调用 -->
-          <ToolCallDisplay
-            v-else-if="log.type === 'tool_use' && createToolCallFromLog(log, logs)"
-            :tool-call="createToolCallFromLog(log, logs)!"
-          />
-
-          <!-- 工具结果（已在上面的 tool_use 中处理，这里跳过） -->
-          <template v-else-if="log.type === 'tool_result'" />
-
-          <!-- 普通内容 -->
-          <div
-            v-else-if="log.type === 'content'"
-            class="log-entry log-entry--content"
-          >
-            <MarkdownRenderer :content="log.content" />
-          </div>
-        </template>
+        <ExecutionTimeline :entries="timelineEntries" />
       </div>
 
       <!-- 运行指示器 -->

@@ -509,6 +509,54 @@ fn load_content_logs(conn: &rusqlite::Connection, session_id: &str) -> Result<St
     Ok(chunks.join(""))
 }
 
+fn load_structured_output_logs(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+) -> Result<Vec<String>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT content, metadata FROM plan_split_logs
+             WHERE session_id = ?1 AND log_type = 'tool_use'
+             ORDER BY created_at ASC",
+        )
+        .map_err(|error| error.to_string())?;
+
+    let rows = stmt
+        .query_map([session_id], |row| {
+            let content: String = row.get(0)?;
+            let metadata: Option<String> = row.get(1)?;
+            Ok((content, metadata))
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+
+    let outputs = rows
+        .into_iter()
+        .filter_map(|(content, metadata)| {
+            let metadata_value = metadata
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
+            let tool_name = metadata_value
+                .as_ref()
+                .and_then(|value| {
+                    as_non_empty_string(value.get("toolName").or_else(|| value.get("tool_name")))
+                })
+                .unwrap_or_default();
+
+            if tool_name.eq_ignore_ascii_case("StructuredOutput")
+                || tool_name.eq_ignore_ascii_case("structured_output")
+            {
+                Some(content)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    Ok(outputs)
+}
+
 fn serialize_json<T: Serialize>(value: &T) -> Result<String, String> {
     serde_json::to_string(value).map_err(|error| error.to_string())
 }
@@ -523,9 +571,24 @@ fn refresh_session_after_turn(app: &AppHandle, plan_id: &str, session_id: &str) 
     }
 
     let raw_content = load_content_logs(&conn, session_id)?;
-    let parsed = parse_split_output(&raw_content, session.granularity);
+    let parsed = match parse_split_output(&raw_content, session.granularity) {
+        Ok(output) => Ok((output, raw_content.clone())),
+        Err(content_error) => {
+            let structured_outputs = load_structured_output_logs(&conn, session_id)?;
+            let parsed_from_tool = structured_outputs
+                .iter()
+                .rev()
+                .find_map(|candidate| {
+                    parse_split_output(candidate, session.granularity)
+                        .ok()
+                        .map(|output| (output, candidate.clone()))
+                });
+
+            parsed_from_tool.ok_or(content_error)
+        }
+    };
     let now = chrono::Utc::now().to_rfc3339();
-    session.raw_content = Some(raw_content);
+    session.raw_content = Some(raw_content.clone());
     session.updated_at = now.clone();
     session.completed_at = Some(now);
     session.execution_session_id = Some(session_id.to_string());
@@ -536,7 +599,8 @@ fn refresh_session_after_turn(app: &AppHandle, plan_id: &str, session_id: &str) 
     let mut messages = load_messages_json(session.messages_json.as_ref());
 
     match parsed {
-        Ok(output) => {
+        Ok((output, parsed_raw_content)) => {
+            session.raw_content = Some(parsed_raw_content);
             append_ui_message(
                 &mut messages,
                 "assistant",
