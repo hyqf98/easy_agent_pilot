@@ -1,6 +1,7 @@
 use anyhow::Result;
-use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+
+use super::support::{now_rfc3339, open_db_connection_with_foreign_keys};
 
 // ==================== 类型定义 ====================
 
@@ -125,26 +126,13 @@ pub struct MemoryStats {
 
 // ==================== 数据库辅助函数 ====================
 
-/// 获取数据库路径
-fn get_db_path() -> Result<std::path::PathBuf> {
-    let persistence_dir = super::get_persistence_dir_path()?;
-    Ok(persistence_dir.join("data").join("easy-agent.db"))
-}
-
 /// 获取数据库连接
-fn get_db_connection() -> Result<Connection> {
-    let db_path = get_db_path()?;
-    let conn = Connection::open(db_path)?;
-    conn.execute("PRAGMA foreign_keys = ON", [])?;
-    Ok(conn)
+fn get_db_connection() -> Result<rusqlite::Connection> {
+    open_db_connection_with_foreign_keys()
 }
 
 fn generate_id() -> String {
     uuid::Uuid::new_v4().to_string()
-}
-
-fn now_rfc3339() -> String {
-    chrono::Utc::now().to_rfc3339()
 }
 
 // ==================== 记忆分类命令 ====================

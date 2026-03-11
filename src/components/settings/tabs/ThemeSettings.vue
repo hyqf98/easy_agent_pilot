@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useThemeStore, presetThemeColors } from '@/stores/theme'
 import { EaSelect } from '@/components/common'
+import SettingsSectionCard from '@/components/settings/common/SettingsSectionCard.vue'
 
 const { t } = useI18n()
 const themeStore = useThemeStore()
@@ -31,11 +32,7 @@ const handleThemeColorChange = async (themeColorId: string) => {
       {{ t('settings.theme.title') }}
     </h3>
 
-    <div class="settings-card">
-      <h4 class="settings-card__title">
-        {{ t('settings.theme.appearance') }}
-      </h4>
-
+    <SettingsSectionCard :title="t('settings.theme.appearance')">
       <div class="settings-item">
         <div class="settings-item__info">
           <span class="settings-item__label">{{ t('settings.theme.themeMode') }}</span>
@@ -47,16 +44,12 @@ const handleThemeColorChange = async (themeColorId: string) => {
           @update:model-value="handleThemeChange"
         />
       </div>
-    </div>
+    </SettingsSectionCard>
 
-    <div class="settings-card">
-      <h4 class="settings-card__title">
-        {{ t('settings.theme.themeColor') }}
-      </h4>
-      <p class="settings-card__desc">
-        {{ t('settings.theme.themeColorDesc') }}
-      </p>
-
+    <SettingsSectionCard
+      :title="t('settings.theme.themeColor')"
+      :description="t('settings.theme.themeColorDesc')"
+    >
       <div class="theme-colors-grid">
         <button
           v-for="themeColor in presetThemeColors"
@@ -79,7 +72,7 @@ const handleThemeColorChange = async (themeColorId: string) => {
           </span>
         </button>
       </div>
-    </div>
+    </SettingsSectionCard>
   </div>
 </template>
 
@@ -95,30 +88,6 @@ const handleThemeColorChange = async (themeColorId: string) => {
   font-size: var(--font-size-xl);
   font-weight: var(--font-weight-semibold);
   color: var(--color-text-primary);
-}
-
-.settings-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-4);
-  padding: var(--spacing-5);
-  background-color: var(--color-bg-secondary);
-  border-radius: var(--radius-lg);
-}
-
-.settings-card__title {
-  margin: 0;
-  font-size: var(--font-size-base);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-  padding-bottom: var(--spacing-3);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.settings-card__desc {
-  margin: 0;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-tertiary);
 }
 
 .settings-item {

@@ -162,4 +162,34 @@ function handleMessageFormCancel(formId: string) {
   opacity: 0.72;
   pointer-events: none;
 }
+
+[data-theme='dark'] .timeline-message__content {
+  background: rgba(15, 23, 42, 0.8);
+  border-color: rgba(148, 163, 184, 0.18);
+  box-shadow: 0 12px 28px rgba(2, 6, 23, 0.28);
+}
+
+[data-theme='dark'] .timeline-message--user .timeline-message__content {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.28), rgba(14, 165, 233, 0.16));
+  border-color: rgba(96, 165, 250, 0.24);
+}
+
+[data-theme='dark'] .timeline-message__text {
+  color: #f8fafc;
+}
+
+[data-theme='dark'] .timeline-entry {
+  border-color: rgba(148, 163, 184, 0.18);
+  background: rgba(15, 23, 42, 0.76);
+}
+
+[data-theme='dark'] .timeline-entry--error {
+  border-color: rgba(248, 113, 113, 0.26);
+  background: rgba(69, 10, 10, 0.34);
+}
+
+[data-theme='dark'] .timeline-entry--system {
+  border-color: rgba(56, 189, 248, 0.22);
+  background: rgba(12, 74, 110, 0.28);
+}
 </style>

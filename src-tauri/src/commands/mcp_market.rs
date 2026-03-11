@@ -1,4 +1,5 @@
 use anyhow::Result;
+use reqwest::Url;
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -6,41 +7,11 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 
-/// MCP market item category
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-#[allow(dead_code)]
-pub enum McpCategory {
-    Database,
-    FileSystem,
-    NetworkService,
-    DevelopmentTools,
-    Other,
-}
+use crate::commands::mcp_shared::{
+    ensure_mcp_servers_object, read_json_config_or_default, write_json_config_pretty,
+};
 
-impl From<&str> for McpCategory {
-    fn from(s: &str) -> Self {
-        match s {
-            "database" => McpCategory::Database,
-            "file_system" => McpCategory::FileSystem,
-            "network_service" => McpCategory::NetworkService,
-            "development_tools" => McpCategory::DevelopmentTools,
-            _ => McpCategory::Other,
-        }
-    }
-}
-
-impl std::fmt::Display for McpCategory {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            McpCategory::Database => write!(f, "database"),
-            McpCategory::FileSystem => write!(f, "file_system"),
-            McpCategory::NetworkService => write!(f, "network_service"),
-            McpCategory::DevelopmentTools => write!(f, "development_tools"),
-            McpCategory::Other => write!(f, "other"),
-        }
-    }
-}
+const MCP_MARKET_BASE_URL: &str = "https://modelscope.cn/api/v1/mcp";
 
 /// MCP market item
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,35 +93,87 @@ impl Default for McpMarketQuery {
     }
 }
 
+fn build_mcp_market_url(query: &McpMarketQuery) -> Result<Url, String> {
+    let mut url = Url::parse(MCP_MARKET_BASE_URL)
+        .map_err(|e| format!("Invalid MCP market URL: {}", e))?;
+
+    {
+        let mut pairs = url.query_pairs_mut();
+        pairs.append_pair("page", &query.page.to_string());
+        pairs.append_pair("page_size", &query.page_size.to_string());
+
+        if let Some(category) = &query.category {
+            pairs.append_pair("category", category);
+        }
+
+        if let Some(search) = &query.search {
+            pairs.append_pair("search", search);
+        }
+    }
+
+    Ok(url)
+}
+
+fn sanitize_mcp_key(name: &str) -> String {
+    let sanitized = name
+        .replace(' ', "-")
+        .replace(|c: char| !c.is_alphanumeric() && c != '-', "")
+        .to_lowercase();
+
+    if sanitized.is_empty() {
+        "mcp-server".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn create_settings_backup(settings_path: &PathBuf, error_prefix: &str) -> Result<Option<String>, String> {
+    if !settings_path.exists() {
+        return Ok(None);
+    }
+
+    let backup = settings_path.with_extension("json.backup");
+    fs::copy(settings_path, &backup)
+        .map_err(|e| format!("{error_prefix}: {}", e))?;
+    Ok(Some(backup.to_string_lossy().to_string()))
+}
+
+fn load_settings_config(settings_path: &PathBuf) -> Result<serde_json::Value, String> {
+    read_json_config_or_default(settings_path, serde_json::json!({}))
+}
+
+fn ensure_settings_parent_dir(settings_path: &PathBuf) -> Result<(), String> {
+    if let Some(parent) = settings_path.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {}", e))?;
+        }
+    }
+    Ok(())
+}
+
+fn build_installed_mcp_config(
+    command: String,
+    args: Vec<String>,
+    env: HashMap<String, String>,
+) -> serde_json::Value {
+    let mut config = serde_json::Map::new();
+    config.insert("command".to_string(), serde_json::json!(command));
+    if !args.is_empty() {
+        config.insert("args".to_string(), serde_json::json!(args));
+    }
+    if !env.is_empty() {
+        config.insert("env".to_string(), serde_json::json!(env));
+    }
+    serde_json::Value::Object(config)
+}
+
 /// Fetch MCP market items from ModelScope API
 #[tauri::command]
 pub async fn fetch_mcp_market(query: McpMarketQuery) -> Result<McpMarketListResponse, String> {
     let client = crate::commands::market_source_support::build_market_http_client()?;
+    let url = build_mcp_market_url(&query)?;
 
-    // Try to fetch from ModelScope API
-    // Using ModelScope's model hub API structure as reference
-    let base_url = "https://modelscope.cn/api/v1/mcp";
-
-    let mut url = format!(
-        "{}?page={}&page_size={}",
-        base_url, query.page, query.page_size
-    );
-
-    if let Some(category) = &query.category {
-        url.push_str(&format!("&category={}", category));
-    }
-
-    if let Some(search) = &query.search {
-        // Simple URL encoding for search parameter
-        let encoded = search
-            .replace(' ', "%20")
-            .replace('&', "%26")
-            .replace('=', "%3D")
-            .replace('+', "%2B");
-        url.push_str(&format!("&search={}", encoded));
-    }
-
-    match client.get(&url).send().await {
+    match client.get(url).send().await {
         Ok(response) => {
             if response.status().is_success() {
                 match response.json::<McpMarketListResponse>().await {
@@ -173,7 +196,7 @@ pub async fn fetch_mcp_market(query: McpMarketQuery) -> Result<McpMarketListResp
 pub async fn fetch_mcp_market_detail(mcp_id: String) -> Result<McpMarketDetail, String> {
     let client = crate::commands::market_source_support::build_market_http_client()?;
 
-    let url = format!("https://modelscope.cn/api/v1/mcp/{}", mcp_id);
+    let url = format!("{}/{}", MCP_MARKET_BASE_URL, mcp_id);
 
     match client.get(&url).send().await {
         Ok(response) => {
@@ -284,100 +307,43 @@ fn perform_rollback(settings_path: &PathBuf, backup_path: &Option<String>) -> (b
     }
 }
 
+fn delete_installed_mcp_test_result(config_path: &str, mcp_name: &str) {
+    if let Ok(conn) = get_db_connection() {
+        let _ = conn.execute(
+            "DELETE FROM installed_mcp_test_results WHERE config_path = ?1 AND mcp_name = ?2",
+            rusqlite::params![config_path, mcp_name],
+        );
+    }
+}
+
 /// Install MCP to CLI settings.json
 #[tauri::command]
 pub async fn install_mcp_to_cli(input: McpInstallInput) -> Result<McpInstallResult, String> {
     // Get the settings file path
     let settings_path =
         get_cli_settings_path(&input.cli_path, &input.scope, input.project_path.as_deref())?;
-
-    // Track whether the parent directory was newly created
-    let _parent_existed = settings_path.parent().map(|p| p.exists()).unwrap_or(false);
-
-    // Ensure parent directory exists
-    if let Some(parent) = settings_path.parent() {
-        if !parent.exists() {
-            fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {}", e))?;
-        }
-    }
-
-    // Track whether the settings file existed before
-    let _file_existed = settings_path.exists();
+    ensure_settings_parent_dir(&settings_path)?;
 
     // Read existing settings or create new
-    let mut settings: serde_json::Value = if settings_path.exists() {
-        let content =
-            fs::read_to_string(&settings_path).map_err(|e| format!("读取配置文件失败: {}", e))?;
-        serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))
-    } else {
-        serde_json::json!({})
-    };
+    let mut settings = load_settings_config(&settings_path)?;
 
     // Create backup
-    let backup_path = if settings_path.exists() {
-        let backup = settings_path.with_extension("json.backup");
-        fs::copy(&settings_path, &backup).map_err(|e| format!("创建备份失败: {}", e))?;
-        Some(backup.to_string_lossy().to_string())
-    } else {
-        None
-    };
+    let backup_path = create_settings_backup(&settings_path, "创建备份失败")?;
 
     // Build MCP server config
-    let mcp_config = serde_json::json!({
-        "command": input.command,
-        "args": input.args,
-        "env": input.env
-    });
+    let mcp_config = build_installed_mcp_config(input.command.clone(), input.args.clone(), input.env.clone());
 
-    // Ensure mcpServers object exists
-    if !settings.is_object() {
-        settings = serde_json::json!({});
-    }
-    if let Some(obj) = settings.as_object_mut() {
-        if !obj.contains_key("mcpServers") {
-            obj.insert("mcpServers".to_string(), serde_json::json!({}));
-        }
-    }
-
-    // Add the new MCP server
-    if let Some(obj) = settings.as_object_mut() {
-        if let Some(mcp_servers) = obj.get_mut("mcpServers") {
-            if let Some(servers_obj) = mcp_servers.as_object_mut() {
-                // Use sanitized name as key
-                let server_key = input
-                    .mcp_name
-                    .replace(' ', "-")
-                    .replace(|c: char| !c.is_alphanumeric() && c != '-', "")
-                    .to_lowercase();
-
-                servers_obj.insert(server_key, mcp_config);
-            }
-        }
-    }
-
-    // Write back to file
-    let content = match serde_json::to_string_pretty(&settings) {
-        Ok(c) => c,
-        Err(e) => {
-            // Rollback on serialization failure
-            let (rollback_success, rollback_msg) = perform_rollback(&settings_path, &backup_path);
-            return Ok(McpInstallResult {
-                success: false,
-                message: format!("序列化配置失败: {}", e),
-                config_path: Some(settings_path.to_string_lossy().to_string()),
-                backup_path: None,
-                rollback_performed: rollback_success,
-                rollback_message: Some(rollback_msg),
-            });
-        }
+    let write_result = {
+        let mcp_servers = ensure_mcp_servers_object(&mut settings)?;
+        mcp_servers.insert(sanitize_mcp_key(&input.mcp_name), mcp_config);
+        write_json_config_pretty(&settings_path, &settings)
     };
 
-    if let Err(e) = fs::write(&settings_path, content) {
-        // Rollback on write failure
+    if let Err(e) = write_result {
         let (rollback_success, rollback_msg) = perform_rollback(&settings_path, &backup_path);
         return Ok(McpInstallResult {
             success: false,
-            message: format!("写入配置文件失败: {}", e),
+            message: e,
             config_path: Some(settings_path.to_string_lossy().to_string()),
             backup_path: None,
             rollback_performed: rollback_success,
@@ -639,32 +605,21 @@ pub fn toggle_installed_mcp(
     disabled: bool,
 ) -> Result<(), String> {
     let settings_path = PathBuf::from(&config_path);
+    let mut settings = load_settings_config(&settings_path)?;
+    let mcp_servers = ensure_mcp_servers_object(&mut settings)?;
 
-    let content = fs::read_to_string(&settings_path)
-        .map_err(|e| format!("Failed to read settings file: {}", e))?;
-
-    let mut settings: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse settings file: {}", e))?;
-
-    if let Some(mcp_servers) = settings
-        .get_mut("mcpServers")
-        .and_then(|v| v.as_object_mut())
-    {
-        if let Some(mcp_config) = mcp_servers.get_mut(&mcp_name) {
-            if let Some(config_obj) = mcp_config.as_object_mut() {
-                if disabled {
-                    config_obj.insert("disabled".to_string(), serde_json::json!(true));
-                } else {
-                    config_obj.remove("disabled");
-                }
+    if let Some(mcp_config) = mcp_servers.get_mut(&mcp_name) {
+        if let Some(config_obj) = mcp_config.as_object_mut() {
+            if disabled {
+                config_obj.insert("disabled".to_string(), serde_json::json!(true));
+            } else {
+                config_obj.remove("disabled");
             }
         }
     }
 
-    let content = serde_json::to_string_pretty(&settings)
-        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-    fs::write(&settings_path, content)
-        .map_err(|e| format!("Failed to write settings file: {}", e))?;
+    write_json_config_pretty(&settings_path, &settings)
+        .map_err(|e| format!("Failed to persist settings file: {}", e))?;
 
     Ok(())
 }
@@ -673,41 +628,16 @@ pub fn toggle_installed_mcp(
 #[tauri::command]
 pub fn uninstall_mcp(config_path: String, mcp_name: String) -> Result<McpInstallResult, String> {
     let settings_path = PathBuf::from(&config_path);
-
-    let content = fs::read_to_string(&settings_path)
-        .map_err(|e| format!("Failed to read settings file: {}", e))?;
-
-    let mut settings: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse settings file: {}", e))?;
+    let mut settings = load_settings_config(&settings_path)?;
 
     // Create backup
-    let backup_path = {
-        let backup = settings_path.with_extension("json.backup");
-        fs::copy(&settings_path, &backup).map_err(|e| format!("Failed to create backup: {}", e))?;
-        Some(backup.to_string_lossy().to_string())
-    };
-
-    // Remove the MCP server
-    if let Some(mcp_servers) = settings
-        .get_mut("mcpServers")
-        .and_then(|v| v.as_object_mut())
-    {
-        mcp_servers.remove(&mcp_name);
-    }
-
-    // Write back to file
-    let content = serde_json::to_string_pretty(&settings)
-        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-    fs::write(&settings_path, content)
+    let backup_path = create_settings_backup(&settings_path, "Failed to create backup")?;
+    let mcp_servers = ensure_mcp_servers_object(&mut settings)?;
+    mcp_servers.remove(&mcp_name);
+    write_json_config_pretty(&settings_path, &settings)
         .map_err(|e| format!("Failed to write settings file: {}", e))?;
 
-    // Delete test result from database
-    if let Ok(conn) = get_db_connection() {
-        let _ = conn.execute(
-            "DELETE FROM installed_mcp_test_results WHERE config_path = ?1 AND mcp_name = ?2",
-            rusqlite::params![&config_path, &mcp_name],
-        );
-    }
+    delete_installed_mcp_test_result(&config_path, &mcp_name);
 
     Ok(McpInstallResult {
         success: true,
@@ -739,7 +669,7 @@ pub async fn check_mcp_updates(
     for mcp_name in mcp_names {
         // Try to fetch market detail to get latest version
         let market_detail =
-            fetch_mcp_market_detail(format!("mcp-{}", mcp_name.replace(' ', "-"))).await;
+            fetch_mcp_market_detail(format!("mcp-{}", sanitize_mcp_key(&mcp_name))).await;
 
         let (latest_version, update_notes) = match market_detail {
             Ok(detail) => {
@@ -783,35 +713,13 @@ pub fn update_installed_mcp(
     env: HashMap<String, String>,
 ) -> Result<McpInstallResult, String> {
     let settings_path = PathBuf::from(&config_path);
-
-    let content = fs::read_to_string(&settings_path)
-        .map_err(|e| format!("Failed to read settings file: {}", e))?;
-
-    let mut settings: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse settings file: {}", e))?;
+    let mut settings = load_settings_config(&settings_path)?;
 
     // Create backup
-    let backup_path = {
-        let backup = settings_path.with_extension("json.backup");
-        fs::copy(&settings_path, &backup).map_err(|e| format!("Failed to create backup: {}", e))?;
-        Some(backup.to_string_lossy().to_string())
-    };
-
-    // Get or create mcpServers object
-    let mcp_servers = settings
-        .get_mut("mcpServers")
-        .and_then(|v| v.as_object_mut())
-        .ok_or("Failed to get mcpServers object")?;
-
-    // Build new config
-    let mut new_config = serde_json::Map::new();
-    new_config.insert("command".to_string(), serde_json::json!(command));
-    if !args.is_empty() {
-        new_config.insert("args".to_string(), serde_json::json!(args));
-    }
-    if !env.is_empty() {
-        new_config.insert("env".to_string(), serde_json::json!(env));
-    }
+    let backup_path = create_settings_backup(&settings_path, "Failed to create backup")?;
+    let mcp_servers = ensure_mcp_servers_object(&mut settings)
+        .map_err(|e| format!("Failed to get mcpServers object: {}", e))?;
+    let new_config = build_installed_mcp_config(command, args, env);
 
     // If name changed, remove old entry
     if old_name != new_name {
@@ -819,12 +727,8 @@ pub fn update_installed_mcp(
     }
 
     // Insert/update the new config
-    mcp_servers.insert(new_name.clone(), serde_json::Value::Object(new_config));
-
-    // Write back to file
-    let content = serde_json::to_string_pretty(&settings)
-        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-    fs::write(&settings_path, content)
+    mcp_servers.insert(new_name.clone(), new_config);
+    write_json_config_pretty(&settings_path, &settings)
         .map_err(|e| format!("Failed to write settings file: {}", e))?;
 
     Ok(McpInstallResult {

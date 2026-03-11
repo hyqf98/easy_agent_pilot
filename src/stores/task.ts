@@ -23,6 +23,8 @@ interface RustTask {
   status: string
   priority: string
   assignee?: string
+  agent_id?: string
+  model_id?: string
   session_id?: string
   progress_file?: string
   dependencies?: string | string[] // JSON 字符串或数组
@@ -96,6 +98,8 @@ function transformTask(rustTask: RustTask): Task {
     status: rustTask.status as TaskStatus,
     priority: rustTask.priority as TaskPriority,
     assignee: rustTask.assignee as AgentRole | undefined,
+    agentId: rustTask.agent_id,
+    modelId: rustTask.model_id,
     sessionId: rustTask.session_id,
     progressFile: rustTask.progress_file,
     dependencies,
@@ -264,6 +268,8 @@ export const useTaskStore = defineStore('task', () => {
       description: input.description ?? null,
       priority: input.priority ?? null,
       assignee: input.assignee ?? null,
+      agent_id: input.agentId ?? null,
+      model_id: input.modelId ?? null,
       dependencies: input.dependencies ?? null,
       order: input.order ?? null,
       max_retries: input.maxRetries ?? null,
@@ -598,6 +604,8 @@ export const useTaskStore = defineStore('task', () => {
       description: input.description ?? null,
       priority: input.priority ?? null,
       assignee: input.assignee ?? null,
+      agent_id: input.agentId ?? null,
+      model_id: input.modelId ?? null,
       dependencies: null, // 先不设置依赖，创建后再更新
       order: input.order ?? null,
       max_retries: input.maxRetries ?? null,

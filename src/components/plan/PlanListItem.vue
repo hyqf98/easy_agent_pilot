@@ -259,8 +259,8 @@ const emit = defineEmits<{
   padding: 0.125rem 0.4rem;
   font-size: 0.625rem;
   font-weight: var(--font-weight-medium, 500);
-  color: #7c3aed;
-  background-color: #f3e8ff;
+  color: #1d4ed8;
+  background-color: #dbeafe;
 }
 
 .plan-desc {
@@ -346,8 +346,27 @@ const emit = defineEmits<{
 }
 
 .btn-resume-split:hover {
-  color: #8b5cf6;
-  background-color: #f5f3ff;
+  color: #b45309;
+  background-color: #fef3c7;
+}
+
+[data-theme='dark'] .plan-item {
+  background-color: color-mix(in srgb, var(--color-surface) 92%, #0f172a);
+  border-color: color-mix(in srgb, var(--color-border) 70%, transparent);
+}
+
+[data-theme='dark'] .plan-item:hover {
+  border-color: color-mix(in srgb, var(--color-primary) 32%, var(--color-border));
+  box-shadow: 0 10px 24px rgba(2, 6, 23, 0.24);
+}
+
+[data-theme='dark'] .plan-item.active {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 34%, transparent);
+}
+
+[data-theme='dark'] .plan-schedule-chip {
+  color: #bfdbfe;
+  background-color: rgba(30, 64, 175, 0.28);
 }
 
 .btn-edit:hover {

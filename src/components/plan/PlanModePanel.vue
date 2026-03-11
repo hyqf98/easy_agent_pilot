@@ -44,6 +44,7 @@ watch(
 )
 
 function handlePlanClick(plan: Plan) {
+  planStore.setCurrentPlan(plan.id)
   rightPanelOpen.value = true
   rightPanelView.value = 'plan_progress'
   selectedPlanId.value = plan.id
@@ -51,6 +52,7 @@ function handlePlanClick(plan: Plan) {
 }
 
 function handleTaskClick(task: Task) {
+  planStore.setCurrentPlan(task.planId)
   rightPanelOpen.value = true
   selectedTaskId.value = task.id
   selectedPlanId.value = task.planId
@@ -65,6 +67,12 @@ function handleTaskClick(task: Task) {
     rightPanelView.value = 'task_log'
     void taskExecutionStore.loadTaskLogs(task.id)
   }
+}
+
+function handlePlanTaskSelect(taskId: string) {
+  const task = taskStore.tasks.find(item => item.id === taskId)
+  if (!task) return
+  handleTaskClick(task)
 }
 
 function closeRightPanel() {
@@ -158,6 +166,7 @@ onUnmounted(() => {
       <PlanProgressDetail
         v-if="rightPanelView === 'plan_progress' && selectedPlanId"
         :plan-id="selectedPlanId"
+        @task-select="handlePlanTaskSelect"
       />
       <TaskDetail
         v-else-if="rightPanelView === 'task_detail' && selectedTaskId"

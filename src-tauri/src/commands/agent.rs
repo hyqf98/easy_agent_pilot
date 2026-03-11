@@ -1,6 +1,11 @@
 use anyhow::Result;
-use rusqlite::Connection;
+use rusqlite::{Connection, Row};
 use serde::{Deserialize, Serialize};
+
+use super::support::{
+    bind_optional, bind_optional_mapped, bind_value, bool_from_int, now_rfc3339,
+    open_db_connection, UpdateSqlBuilder,
+};
 
 /// 智能体配置数据结构
 /// 统一支持 CLI 和 SDK 两种类型的智能体
@@ -89,17 +94,55 @@ pub struct UpdateAgentInput {
     pub status: Option<String>,
 }
 
-/// 获取数据库路径
-fn get_db_path() -> Result<std::path::PathBuf> {
-    let persistence_dir = super::get_persistence_dir_path()?;
-    Ok(persistence_dir.join("data").join("easy-agent.db"))
+fn map_agent_row(row: &Row<'_>) -> rusqlite::Result<Agent> {
+    Ok(Agent {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        agent_type: row.get(2)?,
+        provider: row.get(3)?,
+        cli_path: row.get(4)?,
+        api_key: row.get(5)?,
+        base_url: row.get(6)?,
+        model_id: row.get(7)?,
+        custom_model_enabled: bool_from_int(row.get::<_, Option<i32>>(8)?),
+        mode: row.get(9)?,
+        model: row.get(10)?,
+        status: row.get(11)?,
+        test_message: row.get(12)?,
+        tested_at: row.get(13)?,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
+    })
+}
+
+fn resolve_agent_mode(
+    agent_type: &str,
+    provider: Option<&String>,
+    mode: Option<&String>,
+) -> (String, Option<String>, String) {
+    if ["claude", "codex", "custom"].contains(&agent_type) {
+        let resolved_mode = mode.cloned().unwrap_or_else(|| "cli".to_string());
+        let resolved_provider = if agent_type == "custom" {
+            None
+        } else {
+            Some(agent_type.to_string())
+        };
+
+        return (resolved_mode.clone(), resolved_provider, resolved_mode);
+    }
+
+    let resolved_mode = mode.cloned().unwrap_or_else(|| agent_type.to_string());
+    (
+        agent_type.to_string(),
+        provider.cloned(),
+        resolved_mode,
+    )
 }
 
 /// 获取所有智能体配置
 #[tauri::command]
 pub fn list_agents() -> Result<Vec<Agent>, String> {
-    let db_path = get_db_path().map_err(|e| e.to_string())?;
-    let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
 
     let mut stmt = conn
         .prepare(
@@ -113,26 +156,7 @@ pub fn list_agents() -> Result<Vec<Agent>, String> {
         .map_err(|e| e.to_string())?;
 
     let agents = stmt
-        .query_map([], |row| {
-            Ok(Agent {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                agent_type: row.get(2)?,
-                provider: row.get(3)?,
-                cli_path: row.get(4)?,
-                api_key: row.get(5)?,
-                base_url: row.get(6)?,
-                model_id: row.get(7)?,
-                custom_model_enabled: row.get::<_, Option<i32>>(8)?.map(|v| v != 0),
-                mode: row.get(9)?,
-                model: row.get(10)?,
-                status: row.get(11)?,
-                test_message: row.get(12)?,
-                tested_at: row.get(13)?,
-                created_at: row.get(14)?,
-                updated_at: row.get(15)?,
-            })
-        })
+        .query_map([], map_agent_row)
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
@@ -143,35 +167,17 @@ pub fn list_agents() -> Result<Vec<Agent>, String> {
 /// 创建新智能体配置
 #[tauri::command]
 pub fn create_agent(input: CreateAgentInput) -> Result<Agent, String> {
-    let db_path = get_db_path().map_err(|e| e.to_string())?;
-    let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
 
     let id = uuid::Uuid::new_v4().to_string();
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = now_rfc3339();
     let status = "offline".to_string();
 
-    // 兼容性处理：如果 agent_type 是旧的值（claude/codex/custom），则将其作为 provider
-    // 并将 mode 作为 type
-    let (final_type, final_provider, final_mode) =
-        if ["claude", "codex", "custom"].contains(&input.agent_type.as_str()) {
-            // 旧格式：type=claude/codex, mode=cli/api
-            let t = input.mode.clone().unwrap_or_else(|| "cli".to_string());
-            let p = if input.agent_type == "custom" {
-                None
-            } else {
-                Some(input.agent_type.clone())
-            };
-            let m = input.mode.clone().unwrap_or_else(|| "cli".to_string());
-            (t, p, m)
-        } else {
-            // 新格式：type=cli/sdk, provider=claude/codex
-            // mode 字段使用 type 的值作为默认值
-            let m = input
-                .mode
-                .clone()
-                .unwrap_or_else(|| input.agent_type.clone());
-            (input.agent_type.clone(), input.provider.clone(), m)
-        };
+    let (final_type, final_provider, final_mode) = resolve_agent_mode(
+        &input.agent_type,
+        input.provider.as_ref(),
+        input.mode.as_ref(),
+    );
 
     let custom_model_enabled_int = if input.custom_model_enabled.unwrap_or(false) {
         1
@@ -224,133 +230,47 @@ pub fn create_agent(input: CreateAgentInput) -> Result<Agent, String> {
 /// 更新智能体配置
 #[tauri::command]
 pub fn update_agent(id: String, input: UpdateAgentInput) -> Result<Agent, String> {
-    let db_path = get_db_path().map_err(|e| e.to_string())?;
-    let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
 
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = now_rfc3339();
 
-    // 构建动态更新语句
-    let mut updates: Vec<String> = vec!["updated_at = ?1".to_string()];
-    let mut param_index = 2;
+    let mut updates = UpdateSqlBuilder::new();
+    updates.push("name", input.name.is_some());
+    updates.push("type", input.agent_type.is_some());
+    updates.push("provider", input.provider.is_some());
+    updates.push("cli_path", input.cli_path.is_some());
+    updates.push("api_key", input.api_key.is_some());
+    updates.push("base_url", input.base_url.is_some());
+    updates.push("model_id", input.model_id.is_some());
+    updates.push("custom_model_enabled", input.custom_model_enabled.is_some());
+    updates.push("mode", input.mode.is_some());
+    updates.push("model", input.model.is_some());
+    updates.push("status", input.status.is_some());
 
-    if input.name.is_some() {
-        updates.push(format!("name = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.agent_type.is_some() {
-        updates.push(format!("type = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.provider.is_some() {
-        updates.push(format!("provider = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.cli_path.is_some() {
-        updates.push(format!("cli_path = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.api_key.is_some() {
-        updates.push(format!("api_key = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.base_url.is_some() {
-        updates.push(format!("base_url = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.model_id.is_some() {
-        updates.push(format!("model_id = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.custom_model_enabled.is_some() {
-        updates.push(format!("custom_model_enabled = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.mode.is_some() {
-        updates.push(format!("mode = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.model.is_some() {
-        updates.push(format!("model = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.status.is_some() {
-        updates.push(format!("status = ?{}", param_index));
-        param_index += 1;
-    }
-
-    let sql = format!(
-        "UPDATE agents SET {} WHERE id = ?{}",
-        updates.join(", "),
-        param_index
-    );
+    let sql = updates.finish("agents", "id");
 
     let mut stmt = conn.prepare_cached(&sql).map_err(|e| e.to_string())?;
 
-    // 绑定参数
     let mut param_count = 1;
-    stmt.raw_bind_parameter(param_count, &now)
-        .map_err(|e| e.to_string())?;
-    param_count += 1;
-
-    if let Some(ref name) = input.name {
-        stmt.raw_bind_parameter(param_count, name)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref agent_type) = input.agent_type {
-        stmt.raw_bind_parameter(param_count, agent_type)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref provider) = input.provider {
-        stmt.raw_bind_parameter(param_count, provider)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref cli_path) = input.cli_path {
-        stmt.raw_bind_parameter(param_count, cli_path)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref api_key) = input.api_key {
-        stmt.raw_bind_parameter(param_count, api_key)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref base_url) = input.base_url {
-        stmt.raw_bind_parameter(param_count, base_url)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref model_id) = input.model_id {
-        stmt.raw_bind_parameter(param_count, model_id)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(custom_model_enabled) = input.custom_model_enabled {
-        let val = if custom_model_enabled { 1 } else { 0 };
-        stmt.raw_bind_parameter(param_count, val)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref mode) = input.mode {
-        stmt.raw_bind_parameter(param_count, mode)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref model) = input.model {
-        stmt.raw_bind_parameter(param_count, model)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref status) = input.status {
-        stmt.raw_bind_parameter(param_count, status)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-
-    stmt.raw_bind_parameter(param_count, &id)
-        .map_err(|e| e.to_string())?;
+    bind_value(&mut stmt, &mut param_count, &now).map_err(|e| e.to_string())?;
+    bind_optional(&mut stmt, &mut param_count, &input.name).map_err(|e| e.to_string())?;
+    bind_optional(&mut stmt, &mut param_count, &input.agent_type).map_err(|e| e.to_string())?;
+    bind_optional(&mut stmt, &mut param_count, &input.provider).map_err(|e| e.to_string())?;
+    bind_optional(&mut stmt, &mut param_count, &input.cli_path).map_err(|e| e.to_string())?;
+    bind_optional(&mut stmt, &mut param_count, &input.api_key).map_err(|e| e.to_string())?;
+    bind_optional(&mut stmt, &mut param_count, &input.base_url).map_err(|e| e.to_string())?;
+    bind_optional(&mut stmt, &mut param_count, &input.model_id).map_err(|e| e.to_string())?;
+    bind_optional_mapped(
+        &mut stmt,
+        &mut param_count,
+        &input.custom_model_enabled,
+        |value| if *value { 1 } else { 0 },
+    )
+    .map_err(|e| e.to_string())?;
+    bind_optional(&mut stmt, &mut param_count, &input.mode).map_err(|e| e.to_string())?;
+    bind_optional(&mut stmt, &mut param_count, &input.model).map_err(|e| e.to_string())?;
+    bind_optional(&mut stmt, &mut param_count, &input.status).map_err(|e| e.to_string())?;
+    bind_value(&mut stmt, &mut param_count, &id).map_err(|e| e.to_string())?;
 
     stmt.raw_execute().map_err(|e| e.to_string())?;
 
@@ -373,28 +293,7 @@ fn get_agent_by_id(conn: &Connection, id: &str) -> Result<Agent, String> {
         )
         .map_err(|e| e.to_string())?;
 
-    let agent = stmt
-        .query_row([id], |row| {
-            Ok(Agent {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                agent_type: row.get(2)?,
-                provider: row.get(3)?,
-                cli_path: row.get(4)?,
-                api_key: row.get(5)?,
-                base_url: row.get(6)?,
-                model_id: row.get(7)?,
-                custom_model_enabled: row.get::<_, Option<i32>>(8)?.map(|v| v != 0),
-                mode: row.get(9)?,
-                model: row.get(10)?,
-                status: row.get(11)?,
-                test_message: row.get(12)?,
-                tested_at: row.get(13)?,
-                created_at: row.get(14)?,
-                updated_at: row.get(15)?,
-            })
-        })
-        .map_err(|e| e.to_string())?;
+    let agent = stmt.query_row([id], map_agent_row).map_err(|e| e.to_string())?;
 
     Ok(agent)
 }
@@ -402,8 +301,7 @@ fn get_agent_by_id(conn: &Connection, id: &str) -> Result<Agent, String> {
 /// 删除智能体配置
 #[tauri::command]
 pub fn delete_agent(id: String) -> Result<(), String> {
-    let db_path = get_db_path().map_err(|e| e.to_string())?;
-    let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
 
     conn.execute("DELETE FROM agents WHERE id = ?1", [&id])
         .map_err(|e| e.to_string())?;
@@ -414,14 +312,13 @@ pub fn delete_agent(id: String) -> Result<(), String> {
 /// 测试智能体连接
 #[tauri::command]
 pub async fn test_agent_connection(id: String) -> Result<TestResult, String> {
-    let db_path = get_db_path().map_err(|e| e.to_string())?;
-    let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
 
     // 获取智能体配置
     let agent = get_agent_by_id(&conn, &id)?;
 
     // 更新状态为 testing
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = now_rfc3339();
     conn.execute(
         "UPDATE agents SET status = 'testing', updated_at = ?1 WHERE id = ?2",
         rusqlite::params![&now, &id],
@@ -437,7 +334,7 @@ pub async fn test_agent_connection(id: String) -> Result<TestResult, String> {
 
     // 更新测试结果
     let status = if success { "online" } else { "error" };
-    let tested_at = chrono::Utc::now().to_rfc3339();
+    let tested_at = now_rfc3339();
     conn.execute(
         "UPDATE agents SET status = ?1, test_message = ?2, tested_at = ?3, updated_at = ?3 WHERE id = ?4",
         rusqlite::params![status, &message, &tested_at, &id],

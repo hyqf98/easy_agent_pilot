@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSettingsStore } from '@/stores/settings'
 import { EaSelect } from '@/components/common'
+import SettingsSectionCard from '@/components/settings/common/SettingsSectionCard.vue'
 
 const { t } = useI18n()
 const settingsStore = useSettingsStore()
@@ -42,11 +43,7 @@ const compressionThresholdOptions = computed(() => [
       {{ t('settings.general.title') }}
     </h3>
 
-    <div class="settings-card">
-      <h4 class="settings-card__title">
-        {{ t('settings.general.appSettings') }}
-      </h4>
-
+    <SettingsSectionCard :title="t('settings.general.appSettings')">
       <div class="settings-item">
         <div class="settings-item__info">
           <span class="settings-item__label">{{ t('settings.general.language') }}</span>
@@ -81,13 +78,9 @@ const compressionThresholdOptions = computed(() => [
           <span class="font-size-slider__label">24px</span>
         </div>
       </div>
-    </div>
+    </SettingsSectionCard>
 
-    <div class="settings-card">
-      <h4 class="settings-card__title">
-        {{ t('settings.general.behaviorSettings') }}
-      </h4>
-
+    <SettingsSectionCard :title="t('settings.general.behaviorSettings')">
       <div class="settings-item">
         <div class="settings-item__info">
           <span class="settings-item__label">{{ t('settings.general.autoSave') }}</span>
@@ -137,14 +130,9 @@ const compressionThresholdOptions = computed(() => [
           <span class="settings-toggle__slider" />
         </label>
       </div>
-    </div>
+    </SettingsSectionCard>
 
-    <!-- 会话压缩设置 -->
-    <div class="settings-card">
-      <h4 class="settings-card__title">
-        {{ t('settings.general.compressionSettings') }}
-      </h4>
-
+    <SettingsSectionCard :title="t('settings.general.compressionSettings')">
       <div class="settings-item">
         <div class="settings-item__info">
           <span class="settings-item__label">{{ t('settings.general.autoCompression') }}</span>
@@ -182,13 +170,9 @@ const compressionThresholdOptions = computed(() => [
           :disabled="!settingsStore.settings.autoCompressionEnabled"
         />
       </div>
-    </div>
+    </SettingsSectionCard>
 
-    <div class="settings-card">
-      <h4 class="settings-card__title">
-        {{ t('settings.general.editorSettings') }}
-      </h4>
-
+    <SettingsSectionCard :title="t('settings.general.editorSettings')">
       <div class="settings-item">
         <div class="settings-item__info">
           <span class="settings-item__label">{{ t('settings.general.editorFontSize') }}</span>
@@ -227,7 +211,7 @@ const compressionThresholdOptions = computed(() => [
           <span class="settings-toggle__slider" />
         </label>
       </div>
-    </div>
+    </SettingsSectionCard>
   </div>
 </template>
 
@@ -243,24 +227,6 @@ const compressionThresholdOptions = computed(() => [
   font-size: var(--font-size-xl);
   font-weight: var(--font-weight-semibold);
   color: var(--color-text-primary);
-}
-
-.settings-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-4);
-  padding: var(--spacing-5);
-  background-color: var(--color-bg-secondary);
-  border-radius: var(--radius-lg);
-}
-
-.settings-card__title {
-  margin: 0;
-  font-size: var(--font-size-base);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-  padding-bottom: var(--spacing-3);
-  border-bottom: 1px solid var(--color-border);
 }
 
 .settings-item {

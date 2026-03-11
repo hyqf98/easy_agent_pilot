@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useTaskStore } from '@/stores/task'
 import { useAgentStore } from '@/stores/agent'
 import { useAgentConfigStore } from '@/stores/agentConfig'
+import { usePlanStore } from '@/stores/plan'
 import { useNotificationStore } from '@/stores/notification'
 import { getErrorMessage } from '@/utils/api'
 import { checkCircularDependency, getAvailableDependencies } from '@/composables'
@@ -23,6 +24,7 @@ const emit = defineEmits<{
 const taskStore = useTaskStore()
 const agentStore = useAgentStore()
 const agentConfigStore = useAgentConfigStore()
+const planStore = usePlanStore()
 const notificationStore = useNotificationStore()
 const { t } = useI18n()
 
@@ -38,6 +40,7 @@ const form = ref({
   acceptanceCriteria: [...(props.task.acceptanceCriteria || [])],
   dependencies: [...(props.task.dependencies || [])]
 })
+const inheritPlanAgent = ref(!props.task.agentId)
 
 const isSaving = ref(false)
 
@@ -61,10 +64,31 @@ const agentOptions = computed(() => {
   return agentStore.agents
 })
 
+const currentPlan = computed(() =>
+  planStore.plans.find(plan => plan.id === props.task.planId) || null
+)
+
+const defaultPlanAgentLabel = computed(() => {
+  const planAgentId = currentPlan.value?.splitAgentId
+  if (!planAgentId) {
+    return '当前计划未配置默认智能体'
+  }
+
+  const agent = agentStore.agents.find(item => item.id === planAgentId)
+  const modelLabel = currentPlan.value?.splitModelId ? ` / ${currentPlan.value.splitModelId}` : ''
+  return `${agent?.name || planAgentId}${modelLabel}`
+})
+
 // 模型选项 - 根据选择的智能体动态获取
 const modelOptions = computed(() => {
-  if (!form.value.agentId) return []
-  const configs = agentConfigStore.getModelsConfigs(form.value.agentId)
+  const effectiveAgentId = inheritPlanAgent.value
+    ? currentPlan.value?.splitAgentId
+    : form.value.agentId
+
+  if (!effectiveAgentId) return []
+  const configs = agentConfigStore
+    .getModelsConfigs(effectiveAgentId)
+    .filter(config => config.enabled)
   return configs.map(c => ({
     value: c.modelId,
     label: c.displayName || c.modelId
@@ -79,7 +103,15 @@ function toggleAgentDropdown() {
 // 选择智能体
 function selectAgent(agentId: string) {
   form.value.agentId = agentId
+  inheritPlanAgent.value = false
   // 切换智能体时，清空模型选择
+  form.value.modelId = undefined
+  isAgentDropdownOpen.value = false
+}
+
+function usePlanDefaultAgent() {
+  inheritPlanAgent.value = true
+  form.value.agentId = undefined
   form.value.modelId = undefined
   isAgentDropdownOpen.value = false
 }
@@ -103,7 +135,40 @@ watch(() => props.task, (newTask) => {
     acceptanceCriteria: [...(newTask.acceptanceCriteria || [])],
     dependencies: [...(newTask.dependencies || [])]
   }
+  inheritPlanAgent.value = !newTask.agentId
 }, { immediate: true })
+
+watch(
+  () => inheritPlanAgent.value ? currentPlan.value?.splitAgentId : form.value.agentId,
+  async (agentId) => {
+    if (!agentId) {
+      form.value.modelId = undefined
+      return
+    }
+
+    await agentConfigStore.loadModelsConfigs(agentId)
+
+    const availableModels = agentConfigStore.getModelsConfigs(agentId)
+      .filter(config => config.enabled)
+
+    if (availableModels.length === 0) {
+      form.value.modelId = undefined
+      return
+    }
+
+    const preferredModelId = inheritPlanAgent.value
+      ? currentPlan.value?.splitModelId
+      : form.value.modelId
+
+    if (preferredModelId && availableModels.some(model => model.modelId === preferredModelId)) {
+      form.value.modelId = preferredModelId
+      return
+    }
+
+    form.value.modelId = availableModels.find(model => model.isDefault)?.modelId || availableModels[0]?.modelId
+  },
+  { immediate: true }
+)
 
 // 可选的依赖任务列表
 const availableTasks = computed(() =>
@@ -168,9 +233,15 @@ function handleClickOutside(event: MouseEvent) {
   if (depDropdownRef.value && !depDropdownRef.value.contains(event.target as Node)) {
     isDepDropdownOpen.value = false
   }
+  if (agentDropdownRef.value && !agentDropdownRef.value.contains(event.target as Node)) {
+    isAgentDropdownOpen.value = false
+  }
 }
 
 onMounted(() => {
+  if (agentStore.agents.length === 0) {
+    void agentStore.loadAgents()
+  }
   document.addEventListener('click', handleClickOutside)
 })
 
@@ -201,8 +272,8 @@ async function handleSave() {
       title: form.value.title,
       description: form.value.description,
       priority: form.value.priority,
-      agentId: form.value.agentId,
-      modelId: form.value.modelId,
+      agentId: inheritPlanAgent.value ? undefined : form.value.agentId,
+      modelId: inheritPlanAgent.value ? undefined : form.value.modelId,
       implementationSteps: form.value.implementationSteps.filter(s => s.trim()),
       testSteps: form.value.testSteps.filter(s => s.trim()),
       acceptanceCriteria: form.value.acceptanceCriteria.filter(s => s.trim()),
@@ -305,18 +376,29 @@ function close() {
           class="form-field"
         >
           <label>{{ t('task.selectAgent') }}</label>
+          <div class="agent-inherit-panel">
+            <button
+              type="button"
+              class="agent-inherit-button"
+              :class="{ active: inheritPlanAgent }"
+              @click="usePlanDefaultAgent"
+            >
+              继承计划默认智能体
+            </button>
+            <span class="agent-inherit-hint">{{ defaultPlanAgentLabel }}</span>
+          </div>
           <div class="agent-dropdown">
             <button
               type="button"
               class="agent-trigger"
-              :class="{ open: isAgentDropdownOpen }"
+              :class="{ open: isAgentDropdownOpen, muted: inheritPlanAgent }"
               @click.stop="toggleAgentDropdown"
             >
               <span
                 class="agent-display"
-                :class="{ placeholder: !form.agentId }"
+                :class="{ placeholder: inheritPlanAgent || !form.agentId }"
               >
-                {{ form.agentId ? getAgentName(form.agentId) : t('task.selectAgentPlaceholder') }}
+                {{ inheritPlanAgent ? '继承计划默认智能体' : (form.agentId ? getAgentName(form.agentId) : t('task.selectAgentPlaceholder')) }}
               </span>
               <svg
                 class="agent-arrow"
@@ -336,6 +418,14 @@ function close() {
               class="agent-dropdown-menu"
             >
               <div
+                class="agent-option"
+                :class="{ selected: inheritPlanAgent }"
+                @click="usePlanDefaultAgent"
+              >
+                <span class="agent-option-name">继承计划默认智能体</span>
+                <span class="agent-option-type">默认</span>
+              </div>
+              <div
                 v-for="agent in agentOptions"
                 :key="agent.id"
                 class="agent-option"
@@ -351,13 +441,14 @@ function close() {
 
         <!-- 模型选择 -->
         <div
-          v-if="form.agentId && modelOptions.length > 0"
+          v-if="modelOptions.length > 0"
           class="form-field"
         >
           <label>{{ t('task.selectModel') }}</label>
           <select
             v-model="form.modelId"
             class="model-select"
+            :disabled="inheritPlanAgent"
           >
             <option
               value=""
@@ -370,7 +461,7 @@ function close() {
               :key="opt.value"
               :value="opt.value"
             >
-              {{ opt.label }}
+              {{ opt.label }}{{ inheritPlanAgent && currentPlan?.splitModelId === opt.value ? '（计划默认）' : '' }}
             </option>
           </select>
         </div>
@@ -677,6 +768,185 @@ function close() {
   transform: translateY(-50%) rotate(180deg);
 }
 
+.agent-inherit-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2, 0.5rem);
+  padding: 0.625rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--color-border, #e2e8f0) 82%, transparent);
+  border-radius: var(--radius-md, 8px);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--color-primary, #3b82f6) 8%, var(--color-surface, #fff)) 0%, var(--color-surface, #fff) 100%);
+}
+
+.agent-inherit-button {
+  flex-shrink: 0;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--color-border, #e2e8f0) 85%, transparent);
+  border-radius: var(--radius-full, 9999px);
+  background: var(--color-surface, #fff);
+  color: var(--color-text-secondary, #64748b);
+  font-size: var(--font-size-xs, 12px);
+  font-weight: var(--font-weight-semibold, 600);
+  cursor: pointer;
+  transition:
+    border-color var(--transition-fast, 150ms),
+    background-color var(--transition-fast, 150ms),
+    color var(--transition-fast, 150ms),
+    box-shadow var(--transition-fast, 150ms);
+}
+
+.agent-inherit-button:hover {
+  border-color: color-mix(in srgb, var(--color-primary, #3b82f6) 28%, var(--color-border, #e2e8f0));
+  color: var(--color-primary, #2563eb);
+}
+
+.agent-inherit-button.active {
+  border-color: color-mix(in srgb, var(--color-primary, #3b82f6) 70%, transparent);
+  background: color-mix(in srgb, var(--color-primary, #3b82f6) 14%, var(--color-surface, #fff));
+  color: var(--color-primary, #2563eb);
+  box-shadow: 0 0 0 3px rgb(59 130 246 / 10%);
+}
+
+.agent-inherit-hint {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-xs, 12px);
+  color: var(--color-text-secondary, #64748b);
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-dropdown {
+  position: relative;
+}
+
+.agent-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 40px;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-md, 8px);
+  background: var(--color-surface, #fff);
+  color: var(--color-text-primary, #1e293b);
+  cursor: pointer;
+  transition:
+    border-color var(--transition-fast, 150ms),
+    box-shadow var(--transition-fast, 150ms),
+    background-color var(--transition-fast, 150ms);
+}
+
+.agent-trigger:hover {
+  border-color: #cbd5e1;
+}
+
+.agent-trigger.open {
+  border-color: var(--color-primary, #3b82f6);
+  box-shadow: 0 0 0 3px rgb(59 130 246 / 12%);
+}
+
+.agent-trigger.muted {
+  background: color-mix(in srgb, var(--color-surface, #fff) 92%, var(--color-bg-secondary, #f8fafc));
+}
+
+.agent-display {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  font-size: var(--font-size-sm, 13px);
+  color: var(--color-text-primary, #1e293b);
+}
+
+.agent-display.placeholder {
+  color: var(--color-text-tertiary, #94a3b8);
+}
+
+.agent-arrow {
+  flex-shrink: 0;
+  margin-left: 0.5rem;
+  color: var(--color-text-tertiary, #94a3b8);
+  transition: transform var(--transition-fast, 150ms), color var(--transition-fast, 150ms);
+}
+
+.agent-trigger.open .agent-arrow,
+.agent-arrow.rotated {
+  color: var(--color-primary, #3b82f6);
+  transform: rotate(180deg);
+}
+
+.agent-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 0.375rem);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  overflow: hidden;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-lg, 12px);
+  background: var(--color-surface, #fff);
+  box-shadow: var(--shadow-lg, 0 18px 40px -16px rgba(15, 23, 42, 0.28));
+}
+
+.agent-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  cursor: pointer;
+  transition: background-color var(--transition-fast, 150ms), color var(--transition-fast, 150ms);
+}
+
+.agent-option + .agent-option {
+  border-top: 1px solid color-mix(in srgb, var(--color-border, #e2e8f0) 72%, transparent);
+}
+
+.agent-option:hover {
+  background: color-mix(in srgb, var(--color-primary, #3b82f6) 8%, var(--color-surface, #fff));
+}
+
+.agent-option.selected {
+  background: color-mix(in srgb, var(--color-primary, #3b82f6) 12%, var(--color-surface, #fff));
+}
+
+.agent-option-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-sm, 13px);
+  color: var(--color-text-primary, #1e293b);
+}
+
+.agent-option-type {
+  flex-shrink: 0;
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--color-bg-secondary, #f1f5f9);
+  color: var(--color-text-secondary, #64748b);
+  font-size: 11px;
+  font-weight: var(--font-weight-medium, 500);
+}
+
+.model-select {
+  cursor: pointer;
+}
+
+.model-select:disabled {
+  cursor: not-allowed;
+  color: var(--color-text-tertiary, #94a3b8);
+  background: var(--color-bg-secondary, #f8fafc);
+}
+
 .modal-footer {
   display: flex;
   justify-content: flex-end;
@@ -769,7 +1039,7 @@ function close() {
   position: relative;
 }
 
-.dep-trigger {
+.dep-dropdown-trigger {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -782,11 +1052,11 @@ function close() {
   transition: all var(--transition-fast, 150ms);
 }
 
-.dep-trigger:hover {
+.dep-dropdown-trigger:hover {
   border-color: var(--color-primary, #60a5fa);
 }
 
-.dep-trigger.open {
+.dep-dropdown.open .dep-dropdown-trigger {
   border-color: var(--color-primary, #3b82f6);
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
 }
@@ -811,7 +1081,7 @@ function close() {
   transition: transform var(--transition-fast, 150ms);
 }
 
-.dep-trigger.open .dep-arrow {
+.dep-dropdown.open .dep-arrow {
   transform: rotate(180deg);
 }
 
@@ -852,7 +1122,7 @@ function close() {
   color: white;
 }
 
-.dep-menu {
+.dep-dropdown-menu {
   position: absolute;
   top: 100%;
   left: 0;
@@ -923,5 +1193,16 @@ function close() {
   font-size: var(--font-size-xs, 12px);
   color: var(--color-text-tertiary, #94a3b8);
   font-style: italic;
+}
+
+@media (max-width: 640px) {
+  .agent-inherit-panel {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .agent-inherit-hint {
+    text-align: left;
+  }
 }
 </style>

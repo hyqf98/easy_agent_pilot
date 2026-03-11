@@ -613,6 +613,7 @@ pub fn init_database() -> Result<()> {
         "ALTER TABLE messages ADD COLUMN error_message TEXT",
         "ALTER TABLE messages ADD COLUMN tool_calls TEXT", // JSON string for tool calls
         "ALTER TABLE messages ADD COLUMN thinking TEXT",   // 鎬濊€冨唴瀹癸紙鎵╁睍鎬濈淮妯″瀷锛?
+        "ALTER TABLE messages ADD COLUMN compression_metadata TEXT",
     ];
 
     for migration in message_migrations {

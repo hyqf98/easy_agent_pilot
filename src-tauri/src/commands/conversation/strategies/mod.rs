@@ -1,3 +1,4 @@
+mod cli_common;
 mod claude_cli;
 mod claude_sdk;
 mod codex_cli;

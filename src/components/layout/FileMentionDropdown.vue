@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { useI18n } from 'vue-i18n'
 import { useSessionStore } from '@/stores/session'
 import { useProjectStore } from '@/stores/project'
 import { resolveFileIcon } from '@/utils/fileIcon'
@@ -18,6 +19,7 @@ const emit = defineEmits<{
   close: []
 }>()
 
+const { t } = useI18n()
 const sessionStore = useSessionStore()
 const projectStore = useProjectStore()
 
@@ -225,7 +227,7 @@ onUnmounted(() => {
       <div v-if="searchText" class="file-mention__search-hint">
         <EaIcon name="search" :size="12" />
         <span>搜索: "{{ searchText }}"</span>
-        <span class="file-mention__count">{{ filteredFiles.length }} 个结果</span>
+          <span class="file-mention__count">{{ t('fileMention.resultCount', { count: filteredFiles.length }) }}</span>
       </div>
 
       <!-- 搜索结果为空 -->
@@ -261,18 +263,18 @@ onUnmounted(() => {
         <!-- 加载中 -->
         <div v-if="isLoading" class="file-mention__loading">
           <EaIcon name="loading" :size="16" class="file-mention__loading-icon" />
-          <span>加载文件列表...</span>
+          <span>{{ t('fileMention.loading') }}</span>
         </div>
       </div>
 
       <!-- 底部提示 -->
       <div class="file-mention__footer">
         <kbd>↑↓</kbd>
-        <span>导航</span>
+        <span>{{ t('fileMention.navigate') }}</span>
         <kbd>Enter</kbd>
-        <span>选择</span>
+        <span>{{ t('fileMention.select') }}</span>
         <kbd>Esc</kbd>
-        <span>关闭</span>
+        <span>{{ t('fileMention.close') }}</span>
       </div>
     </div>
   </Teleport>

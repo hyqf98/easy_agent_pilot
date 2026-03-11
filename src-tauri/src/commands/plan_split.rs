@@ -1,4 +1,5 @@
 use anyhow::Result;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
@@ -6,11 +7,7 @@ use tauri::{AppHandle, Emitter};
 use super::conversation::executor::get_registry;
 use super::conversation::set_abort_flag;
 use super::conversation::types::{ExecutionRequest, MessageInput};
-
-fn get_db_path() -> Result<std::path::PathBuf> {
-    let persistence_dir = super::get_persistence_dir_path()?;
-    Ok(persistence_dir.join("data").join("easy-agent.db"))
-}
+use super::support::{now_rfc3339, open_db_connection};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -111,6 +108,35 @@ enum ParsedSplitOutput {
     TaskSplit { tasks: Vec<Value> },
 }
 
+fn map_plan_split_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<PlanSplitSession> {
+    Ok(PlanSplitSession {
+        id: row.get(0)?,
+        plan_id: row.get(1)?,
+        status: row.get(2)?,
+        execution_session_id: row.get(3)?,
+        raw_content: row.get(4)?,
+        result_json: row.get(5)?,
+        parse_error: row.get(6)?,
+        error_message: row.get(7)?,
+        granularity: row.get(8)?,
+        llm_messages_json: row.get(9)?,
+        messages_json: row.get(10)?,
+        execution_request_json: row.get(11)?,
+        form_queue_json: row.get(12)?,
+        current_form_index: row.get(13)?,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
+        started_at: row.get(16)?,
+        completed_at: row.get(17)?,
+        stopped_at: row.get(18)?,
+    })
+}
+
+fn parse_json_vec<T: DeserializeOwned>(raw: Option<&String>) -> Vec<T> {
+    raw.and_then(|value| serde_json::from_str::<Vec<T>>(value).ok())
+        .unwrap_or_default()
+}
+
 fn read_session(conn: &rusqlite::Connection, plan_id: &str) -> Result<Option<PlanSplitSession>, String> {
     let result = conn.query_row(
         "SELECT id, plan_id, status, execution_session_id, raw_content, parsed_output,
@@ -119,29 +145,7 @@ fn read_session(conn: &rusqlite::Connection, plan_id: &str) -> Result<Option<Pla
                 created_at, updated_at, started_at, completed_at, stopped_at
          FROM task_split_sessions WHERE plan_id = ?1",
         [&plan_id],
-        |row| {
-            Ok(PlanSplitSession {
-                id: row.get(0)?,
-                plan_id: row.get(1)?,
-                status: row.get(2)?,
-                execution_session_id: row.get(3)?,
-                raw_content: row.get(4)?,
-                result_json: row.get(5)?,
-                parse_error: row.get(6)?,
-                error_message: row.get(7)?,
-                granularity: row.get(8)?,
-                llm_messages_json: row.get(9)?,
-                messages_json: row.get(10)?,
-                execution_request_json: row.get(11)?,
-                form_queue_json: row.get(12)?,
-                current_form_index: row.get(13)?,
-                created_at: row.get(14)?,
-                updated_at: row.get(15)?,
-                started_at: row.get(16)?,
-                completed_at: row.get(17)?,
-                stopped_at: row.get(18)?,
-            })
-        },
+        map_plan_split_session,
     );
 
     match result {
@@ -237,18 +241,15 @@ fn insert_or_update_session(conn: &rusqlite::Connection, session: &PlanSplitSess
 }
 
 fn load_messages_json(raw: Option<&String>) -> Vec<PlanSplitMessage> {
-    raw.and_then(|value| serde_json::from_str::<Vec<PlanSplitMessage>>(value).ok())
-        .unwrap_or_default()
+    parse_json_vec(raw)
 }
 
 fn load_llm_messages_json(raw: Option<&String>) -> Vec<MessageInput> {
-    raw.and_then(|value| serde_json::from_str::<Vec<MessageInput>>(value).ok())
-        .unwrap_or_default()
+    parse_json_vec(raw)
 }
 
 fn load_form_queue(raw: Option<&String>) -> Vec<Value> {
-    raw.and_then(|value| serde_json::from_str::<Vec<Value>>(value).ok())
-        .unwrap_or_default()
+    parse_json_vec(raw)
 }
 
 fn emit_session_updated(app: &AppHandle, session: &PlanSplitSession) {
@@ -266,7 +267,7 @@ fn append_ui_message(messages: &mut Vec<PlanSplitMessage>, role: &str, content: 
         id: uuid::Uuid::new_v4().to_string(),
         role: role.to_string(),
         content,
-        timestamp: chrono::Utc::now().to_rfc3339(),
+        timestamp: now_rfc3339(),
     });
 }
 
@@ -562,8 +563,7 @@ fn serialize_json<T: Serialize>(value: &T) -> Result<String, String> {
 }
 
 fn refresh_session_after_turn(app: &AppHandle, plan_id: &str, session_id: &str) -> Result<(), String> {
-    let db_path = get_db_path().map_err(|error| error.to_string())?;
-    let conn = rusqlite::Connection::open(&db_path).map_err(|error| error.to_string())?;
+    let conn = open_db_connection().map_err(|error| error.to_string())?;
     let mut session = read_session(&conn, plan_id)?.ok_or_else(|| "计划拆分会话不存在".to_string())?;
     if session.status == "stopped" {
         emit_session_updated(app, &session);
@@ -587,7 +587,7 @@ fn refresh_session_after_turn(app: &AppHandle, plan_id: &str, session_id: &str) 
             parsed_from_tool.ok_or(content_error)
         }
     };
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = now_rfc3339();
     session.raw_content = Some(raw_content.clone());
     session.updated_at = now.clone();
     session.completed_at = Some(now);
@@ -660,9 +660,8 @@ pub fn record_plan_split_event(
     session_id: &str,
     event: SplitStreamRecord,
 ) -> Result<(), String> {
-    let db_path = get_db_path().map_err(|error| error.to_string())?;
-    let conn = rusqlite::Connection::open(&db_path).map_err(|error| error.to_string())?;
-    let now = chrono::Utc::now().to_rfc3339();
+    let conn = open_db_connection().map_err(|error| error.to_string())?;
+    let now = now_rfc3339();
     let metadata = serde_json::to_string(&serde_json::json!({
         "toolName": event.tool_name,
         "toolCallId": event.tool_call_id,
@@ -725,15 +724,14 @@ pub fn mark_plan_split_failed(
     session_id: &str,
     error_message: &str,
 ) -> Result<(), String> {
-    let db_path = get_db_path().map_err(|error| error.to_string())?;
-    let conn = rusqlite::Connection::open(&db_path).map_err(|error| error.to_string())?;
+    let conn = open_db_connection().map_err(|error| error.to_string())?;
     let mut session = read_session(&conn, plan_id)?.ok_or_else(|| "计划拆分会话不存在".to_string())?;
     if session.status == "stopped" {
         emit_session_updated(app, &session);
         return Ok(());
     }
 
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = now_rfc3339();
     session.status = "failed".to_string();
     session.execution_session_id = Some(session_id.to_string());
     session.error_message = Some(error_message.to_string());
@@ -766,7 +764,7 @@ fn run_split_turn(app: AppHandle, request: ExecutionRequest) {
 }
 
 fn build_running_session(input: &StartPlanSplitInput) -> Result<PlanSplitSession, String> {
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = now_rfc3339();
     Ok(PlanSplitSession {
         id: uuid::Uuid::new_v4().to_string(),
         plan_id: input.plan_id.clone(),
@@ -792,15 +790,13 @@ fn build_running_session(input: &StartPlanSplitInput) -> Result<PlanSplitSession
 
 #[tauri::command]
 pub fn get_plan_split_session(plan_id: String) -> Result<Option<PlanSplitSession>, String> {
-    let db_path = get_db_path().map_err(|error| error.to_string())?;
-    let conn = rusqlite::Connection::open(&db_path).map_err(|error| error.to_string())?;
+    let conn = open_db_connection().map_err(|error| error.to_string())?;
     read_session(&conn, &plan_id)
 }
 
 #[tauri::command]
 pub fn list_plan_split_logs(plan_id: String) -> Result<Vec<PlanSplitLog>, String> {
-    let db_path = get_db_path().map_err(|error| error.to_string())?;
-    let conn = rusqlite::Connection::open(&db_path).map_err(|error| error.to_string())?;
+    let conn = open_db_connection().map_err(|error| error.to_string())?;
     let mut stmt = conn
         .prepare(
             "SELECT id, plan_id, session_id, log_type, content, metadata, created_at
@@ -830,8 +826,7 @@ pub fn list_plan_split_logs(plan_id: String) -> Result<Vec<PlanSplitLog>, String
 
 #[tauri::command]
 pub fn start_plan_split(app: AppHandle, input: StartPlanSplitInput) -> Result<PlanSplitSession, String> {
-    let db_path = get_db_path().map_err(|error| error.to_string())?;
-    let conn = rusqlite::Connection::open(&db_path).map_err(|error| error.to_string())?;
+    let conn = open_db_connection().map_err(|error| error.to_string())?;
     conn.execute("DELETE FROM plan_split_logs WHERE plan_id = ?1", [&input.plan_id])
         .map_err(|error| error.to_string())?;
 
@@ -859,8 +854,7 @@ pub fn submit_plan_split_form(
     app: AppHandle,
     input: SubmitPlanSplitFormInput,
 ) -> Result<PlanSplitSession, String> {
-    let db_path = get_db_path().map_err(|error| error.to_string())?;
-    let conn = rusqlite::Connection::open(&db_path).map_err(|error| error.to_string())?;
+    let conn = open_db_connection().map_err(|error| error.to_string())?;
     let mut session = read_session(&conn, &input.plan_id)?.ok_or_else(|| "计划拆分会话不存在".to_string())?;
 
     let forms = load_form_queue(session.form_queue_json.as_ref());
@@ -878,7 +872,7 @@ pub fn submit_plan_split_form(
         return Err("提交的表单不是当前活动表单。".to_string());
     }
 
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = now_rfc3339();
     let mut llm_messages = load_llm_messages_json(session.llm_messages_json.as_ref());
     let mut messages = load_messages_json(session.messages_json.as_ref());
     llm_messages.push(MessageInput {
@@ -925,8 +919,7 @@ pub fn submit_plan_split_form(
 
 #[tauri::command]
 pub async fn stop_plan_split(app: AppHandle, plan_id: String) -> Result<Option<PlanSplitSession>, String> {
-    let db_path = get_db_path().map_err(|error| error.to_string())?;
-    let conn = rusqlite::Connection::open(&db_path).map_err(|error| error.to_string())?;
+    let conn = open_db_connection().map_err(|error| error.to_string())?;
     let Some(mut session) = read_session(&conn, &plan_id)? else {
         return Ok(None);
     };
@@ -935,7 +928,7 @@ pub async fn stop_plan_split(app: AppHandle, plan_id: String) -> Result<Option<P
         set_abort_flag(&execution_session_id, true).await;
     }
 
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = now_rfc3339();
     session.status = "stopped".to_string();
     session.stopped_at = Some(now.clone());
     session.completed_at = Some(now.clone());
@@ -951,7 +944,7 @@ pub async fn stop_plan_split(app: AppHandle, plan_id: String) -> Result<Option<P
             &plan_id,
             session.execution_session_id.clone().unwrap_or_default(),
             "用户已停止后台拆分任务",
-            chrono::Utc::now().to_rfc3339()
+            now_rfc3339()
         ],
     )
     .map_err(|error| error.to_string())?;
@@ -962,8 +955,7 @@ pub async fn stop_plan_split(app: AppHandle, plan_id: String) -> Result<Option<P
 
 #[tauri::command]
 pub async fn clear_plan_split_session(plan_id: String) -> Result<(), String> {
-    let db_path = get_db_path().map_err(|error| error.to_string())?;
-    let conn = rusqlite::Connection::open(&db_path).map_err(|error| error.to_string())?;
+    let conn = open_db_connection().map_err(|error| error.to_string())?;
     if let Some(session) = read_session(&conn, &plan_id)? {
         if let Some(execution_session_id) = session.execution_session_id {
             set_abort_flag(&execution_session_id, true).await;

@@ -1,4 +1,4 @@
-import { ref, readonly } from 'vue'
+import { ref, readonly, type Ref } from 'vue'
 import type { ConfirmDialogType } from '@/components/common/EaConfirmDialog.vue'
 
 export interface ConfirmDialogOptions {
@@ -15,6 +15,10 @@ interface ConfirmDialogState extends ConfirmDialogOptions {
   resolve: ((value: boolean) => void) | null
 }
 
+declare global {
+  var __easyAgentConfirmDialogState__: Ref<ConfirmDialogState> | undefined
+}
+
 const defaultState = (): ConfirmDialogState => ({
   visible: false,
   type: 'warning',
@@ -26,7 +30,12 @@ const defaultState = (): ConfirmDialogState => ({
   resolve: null
 })
 
-const state = ref<ConfirmDialogState>(defaultState())
+const state = globalThis.__easyAgentConfirmDialogState__
+  ?? (globalThis.__easyAgentConfirmDialogState__ = ref<ConfirmDialogState>(defaultState()))
+
+function resetState() {
+  state.value = defaultState()
+}
 
 /**
  * useConfirmDialog - 确认对话框 composable
@@ -92,27 +101,23 @@ export function useConfirmDialog() {
    * 处理用户确认
    */
   function handleConfirm() {
-    const { resolve, ...rest } = state.value
-    resolve?.(true)
-    state.value = {
-      ...defaultState(),
-      ...rest,
-      visible: false,
-      resolve: null
-    }
+    const resolve = state.value.resolve
+    resetState()
+    queueMicrotask(() => resolve?.(true))
   }
 
   /**
    * 处理用户取消
    */
   function handleCancel() {
-    const { resolve, ...rest } = state.value
-    resolve?.(false)
-    state.value = {
-      ...defaultState(),
-      ...rest,
-      visible: false,
-      resolve: null
+    const resolve = state.value.resolve
+    resetState()
+    queueMicrotask(() => resolve?.(false))
+  }
+
+  function handleVisibleChange(visible: boolean) {
+    if (!visible && state.value.visible) {
+      handleCancel()
     }
   }
 
@@ -123,6 +128,7 @@ export function useConfirmDialog() {
     danger,
     info,
     handleConfirm,
-    handleCancel
+    handleCancel,
+    handleVisibleChange
   }
 }

@@ -1,6 +1,9 @@
 import type { Task } from '@/types/plan'
-import type { TaskExecutionResultRecord } from '@/types/taskExecution'
+import type { PlanExecutionProgress, TaskExecutionResultRecord } from '@/types/taskExecution'
 import { extractExecutionResult } from '@/utils/structuredContent'
+import { buildPlanExecutionSnapshot } from '@/utils/planExecutionProgress'
+
+const MAX_RESULT_SUMMARY_LENGTH = 180
 
 export function parseExecutionResult(content: string): { summary: string; files: string[] } {
   const trimmed = content.trim()
@@ -14,7 +17,7 @@ export function parseExecutionResult(content: string): { summary: string; files:
   const parsedResult = extractExecutionResult(trimmed)
   if (parsedResult) {
     return {
-      summary: parsedResult.summary || fallbackSummary(trimmed),
+      summary: compactExecutionSummary(parsedResult.summary || fallbackSummary(trimmed)),
       files: uniqueStrings([
         ...parsedResult.generatedFiles.map(file => `added:${file}`),
         ...parsedResult.modifiedFiles.map(file => `modified:${file}`),
@@ -25,14 +28,15 @@ export function parseExecutionResult(content: string): { summary: string; files:
   }
 
   return {
-    summary: fallbackSummary(trimmed),
+    summary: compactExecutionSummary(fallbackSummary(trimmed)),
     files: uniqueStrings(extractFileLinks(trimmed).map(file => `changed:${file}`))
   }
 }
 
 export function buildExecutionPrompt(
   task: Task,
-  recentResults: TaskExecutionResultRecord[] = []
+  recentResults: TaskExecutionResultRecord[] = [],
+  planProgress: PlanExecutionProgress | null = null
 ): string {
   const parts: string[] = []
 
@@ -42,6 +46,12 @@ export function buildExecutionPrompt(
   const recentContext = buildRecentResultsContext(recentResults)
   if (recentContext) {
     parts.push(recentContext)
+    parts.push('')
+  }
+
+  const planProgressContext = buildPlanProgressContext(planProgress, task.id)
+  if (planProgressContext) {
+    parts.push(planProgressContext)
     parts.push('')
   }
 
@@ -99,8 +109,10 @@ export function buildExecutionPrompt(
   parts.push('')
   parts.push('**任务完成时**，输出 JSON：')
   parts.push('```json')
-  parts.push('{"result_summary":"完成摘要","generated_files":[],"modified_files":[]}')
+  parts.push('{"result_summary":"1到3句简洁摘要，不重复日志","generated_files":[],"modified_files":[],"deleted_files":[]}')
   parts.push('```')
+  parts.push('')
+  parts.push('result_summary 会被写入计划整体进度，请只保留对后续任务有帮助的关键信息。')
 
   return parts.join('\n')
 }
@@ -126,10 +138,90 @@ function buildRecentResultsContext(results: TaskExecutionResultRecord[]): string
 
 function fallbackSummary(content: string): string {
   const normalized = content.replace(/\s+/g, ' ').trim()
-  if (normalized.length <= 280) {
+  if (normalized.length <= MAX_RESULT_SUMMARY_LENGTH) {
     return normalized
   }
-  return `${normalized.slice(0, 280)}...`
+  return `${normalized.slice(0, MAX_RESULT_SUMMARY_LENGTH)}...`
+}
+
+export function compactExecutionSummary(summary: string): string {
+  const normalized = summary
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!normalized) {
+    return '任务已执行完成（无详细输出）'
+  }
+
+  if (normalized.length <= MAX_RESULT_SUMMARY_LENGTH) {
+    return normalized
+  }
+
+  return `${normalized.slice(0, MAX_RESULT_SUMMARY_LENGTH)}...`
+}
+
+function buildPlanProgressContext(
+  planProgress: PlanExecutionProgress | null,
+  taskId: string
+): string {
+  if (!planProgress || planProgress.tasks.length === 0) {
+    return ''
+  }
+
+  const snapshot = buildPlanExecutionSnapshot(planProgress, taskId)
+  const lines: string[] = ['## 当前计划整体进度', '']
+  const failedCount = snapshot.failedTasks.length
+
+  lines.push(
+    `- 任务总数: ${snapshot.totalTasks}，已完成 ${snapshot.completedTasks.length}，进行中 ${planProgress.in_progress_count}，阻塞 ${planProgress.blocked_count}，失败 ${failedCount}，待办 ${planProgress.pending_count}`
+  )
+
+  if (snapshot.currentTaskIndex) {
+    lines.push(`- 当前任务位置: 第 ${snapshot.currentTaskIndex}/${snapshot.totalTasks} 个`)
+  }
+
+  if (snapshot.completedTasks.length > 0) {
+    lines.push('', '### 已完成任务摘要')
+    snapshot.completedTasks.slice(-5).forEach((item) => {
+      lines.push(`- ${item.title}: ${compactExecutionSummary(item.last_result_summary || '已完成')}`)
+    })
+  }
+
+  if (snapshot.failedTasks.length > 0) {
+    lines.push('', '### 已失败任务')
+    snapshot.failedTasks.slice(-3).forEach((item) => {
+      const reason = item.last_fail_reason || item.last_result_summary || '失败原因未记录'
+      lines.push(`- ${item.title}: ${compactExecutionSummary(reason)}`)
+    })
+  }
+
+  const fileLines = formatPlanFileChanges(snapshot.fileGroups)
+  if (fileLines.length > 0) {
+    lines.push('', '### 已知文件变更', ...fileLines)
+  }
+
+  return lines.join('\n')
+}
+
+function formatPlanFileChanges(fileGroups: ReturnType<typeof buildPlanExecutionSnapshot>['fileGroups']): string[] {
+  return [
+    formatFileGroupLine('新增', fileGroups.generatedFiles),
+    formatFileGroupLine('修改', fileGroups.modifiedFiles),
+    formatFileGroupLine('变更', fileGroups.changedFiles),
+    formatFileGroupLine('删除', fileGroups.deletedFiles)
+  ].filter(Boolean) as string[]
+}
+
+function formatFileGroupLine(label: string, files: string[]): string | null {
+  if (files.length === 0) {
+    return null
+  }
+
+  const visible = files.slice(0, 5)
+  const overflow = files.length - visible.length
+  const suffix = overflow > 0 ? ` 等 ${files.length} 个文件` : ''
+  return `- ${label}: ${visible.join('、')}${suffix}`
 }
 
 function extractFileLinks(content: string): string[] {

@@ -12,3 +12,6 @@ export type { ConfirmDialogOptions } from './useConfirmDialog'
 export { useWindowEvents } from './useWindowEvents'
 
 export { useDependencySelector, checkCircularDependency, getAvailableDependencies } from './useDependencySelector'
+
+export { useSessionView } from './useSessionView'
+export { useMessageComposer } from './useMessageComposer'

@@ -73,6 +73,8 @@ interface RustMessage {
   toolCalls?: RustToolCall[] | null
   tool_calls?: RustToolCall[] | null
   thinking?: string | null
+  compressionMetadata?: string | null
+  compression_metadata?: string | null
   createdAt?: string
   created_at?: string
 }
@@ -92,6 +94,7 @@ interface CreateMessageInput {
   error_message?: string
   tool_calls?: string // JSON string
   thinking?: string
+  compression_metadata?: string
 }
 
 interface UpdateMessageInput {
@@ -101,6 +104,7 @@ interface UpdateMessageInput {
   error_message?: string
   tool_calls?: string // JSON string
   thinking?: string
+  compression_metadata?: string
 }
 
 // 分页状态
@@ -132,6 +136,15 @@ function transformMessage(rustMsg: RustMessage): Message {
   const sessionId = rustMsg.sessionId ?? rustMsg.session_id
   const createdAt = rustMsg.createdAt ?? rustMsg.created_at
   const errorMessage = rustMsg.errorMessage ?? rustMsg.error_message
+  const rawCompressionMetadata = rustMsg.compressionMetadata ?? rustMsg.compression_metadata
+  const compressionMetadata = (() => {
+    if (!rawCompressionMetadata) return undefined
+    try {
+      return JSON.parse(rawCompressionMetadata) as CompressionMetadata
+    } catch {
+      return undefined
+    }
+  })()
 
   return {
     id: rustMsg.id,
@@ -143,6 +156,7 @@ function transformMessage(rustMsg: RustMessage): Message {
     errorMessage: errorMessage ?? undefined,
     toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined,
     thinking: rustMsg.thinking ?? undefined,
+    compressionMetadata,
     createdAt: createdAt || new Date().toISOString()
   }
 }
@@ -279,7 +293,10 @@ export const useMessageStore = defineStore('message', () => {
       tokens: message.tokens,
       error_message: message.errorMessage,
       tool_calls: message.toolCalls ? JSON.stringify(message.toolCalls) : undefined,
-      thinking: message.thinking
+      thinking: message.thinking,
+      compression_metadata: message.compressionMetadata
+        ? JSON.stringify(message.compressionMetadata)
+        : undefined
     }
 
     try {
@@ -314,6 +331,9 @@ export const useMessageStore = defineStore('message', () => {
       })
     }
     if (updates.thinking !== undefined) input.thinking = updates.thinking
+    if (updates.compressionMetadata !== undefined) {
+      input.compression_metadata = JSON.stringify(updates.compressionMetadata)
+    }
 
     try {
       const rustMsg = await invoke<RustMessage>('update_message', { id, input })

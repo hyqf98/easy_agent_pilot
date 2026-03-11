@@ -1,9 +1,13 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUIStore, useProjectStore, useWindowManagerStore, type Project } from '@/stores'
-import { EaIcon, EaModal } from '@/components/common'
+import { EaModal } from '@/components/common'
 import { ProjectCreateModal } from '@/components/project'
+import WelcomeBackground from '@/components/layout/welcome/WelcomeBackground.vue'
+import WelcomeEmptyState from '@/components/layout/welcome/WelcomeEmptyState.vue'
+import WelcomeProjectBrowser from '@/components/layout/welcome/WelcomeProjectBrowser.vue'
+import type { WelcomeAction, WelcomeFeature } from '@/components/layout/welcome/welcomeShared'
 
 import { useMessage } from 'naive-ui'
 
@@ -21,9 +25,14 @@ onMounted(async () => {
   await projectStore.loadProjects()
   // 加载最近访问的项目
   await projectStore.getRecentProjectIds()
+  window.addEventListener('pointerdown', hideContextMenu)
   setTimeout(() => {
     isLoaded.value = true
   }, 100)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('pointerdown', hideContextMenu)
 })
 
 // 是否有项目
@@ -89,7 +98,7 @@ async function handleContextMenuSelect(key: string) {
 }
 
 // 快捷操作
-const quickActions = computed(() => {
+const quickActions = computed<WelcomeAction[]>(() => {
   if (hasProjects.value) {
     return [
       {
@@ -134,7 +143,7 @@ const quickActions = computed(() => {
 })
 
 // 特性列表（仅在无项目时显示）
-const features = [
+const features: WelcomeFeature[] = [
   {
     icon: 'sparkles',
     title: '智能对话',
@@ -195,248 +204,28 @@ async function handleProjectSubmit(data: { name: string; path: string; descripti
 
 <template>
   <div class="welcome-page">
-    <!-- 动态背景 -->
-    <div class="welcome-bg">
-      <div class="welcome-bg__gradient" />
-      <div class="welcome-bg__shapes">
-        <div
-          v-for="i in 6"
-          :key="i"
-          class="welcome-bg__shape"
-          :style="{
-            '--delay': `${i * 0.5}s`,
-            '--size': `${60 + Math.random() * 80}px`,
-            '--x': `${10 + Math.random() * 80}%`,
-            '--y': `${10 + Math.random() * 80}%`,
-            '--duration': `${15 + Math.random() * 10}s`
-          }"
-        />
-      </div>
-      <div class="welcome-bg__grid" />
-    </div>
+    <WelcomeBackground />
 
-    <!-- 主内容 -->
     <div
       class="welcome-content"
       :class="{ 'welcome-content--loaded': isLoaded }"
     >
-      <!-- 有项目时显示项目选择 -->
       <template v-if="hasProjects">
-        <!-- 头部 -->
-        <div class="welcome-header">
-          <div class="welcome-logo">
-            <div class="welcome-logo__icon">
-              <EaIcon
-                name="bot"
-                :size="40"
-              />
-            </div>
-          </div>
-          <h1 class="welcome-title">
-            选择项目
-          </h1>
-          <p class="welcome-subtitle">
-            选择一个项目开始工作，或导入新项目
-          </p>
-        </div>
-
-        <!-- 最近使用 -->
-        <div
-          v-if="recentProjects.length > 0"
-          class="recent-section"
-        >
-          <h3 class="section-title">
-            最近使用
-          </h3>
-          <div class="project-grid">
-            <div
-              v-for="(project, index) in recentProjects"
-              :key="project.id"
-              class="project-card project-card--recent"
-              :style="{ '--delay': `${0.1 + index * 0.05}s` }"
-              @click="selectProject(project.id)"
-              @contextmenu.prevent="showProjectContextMenu($event, project)"
-            >
-              <div class="project-card__icon">
-                <EaIcon
-                  name="folder"
-                  :size="24"
-                />
-              </div>
-              <div class="project-card__content">
-                <div class="project-card__name">
-                  {{ project.name }}
-                </div>
-                <div class="project-card__meta">
-                  <span class="project-card__path">{{ project.path }}</span>
-                </div>
-              </div>
-              <div class="project-card__arrow">
-                <EaIcon
-                  name="arrow-right"
-                  :size="16"
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 所有项目 -->
-        <div class="all-projects-section">
-          <h3 class="section-title">
-            所有项目
-          </h3>
-          <!-- 项目列表 -->
-          <div class="project-list">
-            <div
-              v-for="(project, index) in sortedProjects"
-              :key="project.id"
-              class="project-card"
-              :style="{ '--delay': `${0.1 + index * 0.05}s` }"
-              @click="selectProject(project.id)"
-              @contextmenu.prevent="showProjectContextMenu($event, project)"
-            >
-              <div class="project-card__icon">
-                <EaIcon
-                  name="folder"
-                  :size="24"
-                />
-              </div>
-              <div class="project-card__content">
-                <div class="project-card__name">
-                  {{ project.name }}
-                </div>
-                <div class="project-card__meta">
-                  <span class="project-card__path">{{ project.path }}</span>
-                  <span class="project-card__time">{{ formatTime(project.updatedAt) }}</span>
-                </div>
-              </div>
-              <div class="project-card__arrow">
-                <EaIcon
-                  name="arrow-right"
-                  :size="16"
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 快捷操作 -->
-        <div class="quick-actions">
-          <button
-            v-for="(action, index) in quickActions"
-            :key="index"
-            class="quick-action-btn"
-            :style="{ '--delay': `${0.3 + index * 0.05}s` }"
-            @click="action.action"
-          >
-            <EaIcon
-              :name="action.icon"
-              :size="16"
-            />
-            <span>{{ action.title }}</span>
-            <kbd v-if="action.shortcut">{{ action.shortcut }}</kbd>
-          </button>
-        </div>
+        <WelcomeProjectBrowser
+          :recent-projects="recentProjects"
+          :sorted-projects="sortedProjects"
+          :quick-actions="quickActions"
+          :format-time="formatTime"
+          @select-project="selectProject"
+          @project-context-menu="showProjectContextMenu"
+        />
       </template>
 
-      <!-- 无项目时显示欢迎内容 -->
       <template v-else>
-        <!-- Logo 和标题 -->
-        <div class="welcome-header">
-          <div class="welcome-logo">
-            <div class="welcome-logo__icon">
-              <EaIcon
-                name="bot"
-                :size="48"
-              />
-            </div>
-            <div class="welcome-logo__pulse" />
-          </div>
-          <h1 class="welcome-title">
-            <span class="welcome-title__brand">Easy Agent Pilot</span>
-          </h1>
-          <p class="welcome-subtitle">
-            您的 AI 编程助手，让开发更高效
-          </p>
-        </div>
-
-        <!-- 快捷操作 -->
-        <div class="welcome-actions">
-          <div
-            v-for="(action, index) in quickActions"
-            :key="index"
-            class="action-card"
-            :style="{ '--delay': `${0.2 + index * 0.1}s` }"
-            @click="action.action"
-          >
-            <div class="action-card__icon">
-              <EaIcon
-                :name="action.icon"
-                :size="24"
-              />
-            </div>
-            <div class="action-card__content">
-              <div class="action-card__title">
-                {{ action.title }}
-                <span
-                  v-if="action.shortcut"
-                  class="action-card__shortcut"
-                >
-                  {{ action.shortcut }}
-                </span>
-              </div>
-              <div class="action-card__description">
-                {{ action.description }}
-              </div>
-            </div>
-            <div class="action-card__arrow">
-              <EaIcon
-                name="arrow-right"
-                :size="16"
-              />
-            </div>
-          </div>
-        </div>
-
-        <!-- 特性展示 -->
-        <div class="welcome-features">
-          <div
-            v-for="(feature, index) in features"
-            :key="index"
-            class="feature-item"
-            :style="{ '--delay': `${0.5 + index * 0.1}s` }"
-          >
-            <div class="feature-item__icon">
-              <EaIcon
-                :name="feature.icon"
-                :size="20"
-              />
-            </div>
-            <div class="feature-item__text">
-              <div class="feature-item__title">
-                {{ feature.title }}
-              </div>
-              <div class="feature-item__desc">
-                {{ feature.description }}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 底部提示 -->
-        <div
-          class="welcome-footer"
-          :style="{ '--delay': '0.9s' }"
-        >
-          <div class="welcome-footer__hint">
-            <EaIcon
-              name="keyboard"
-              :size="14"
-            />
-            <span>按 <kbd>⌘</kbd> + <kbd>N</kbd> 快速创建项目</span>
-          </div>
-        </div>
+        <WelcomeEmptyState
+          :quick-actions="quickActions"
+          :features="features"
+        />
       </template>
     </div>
 
@@ -485,86 +274,6 @@ async function handleProjectSubmit(data: { name: string; path: string; descripti
   background-color: var(--color-bg-primary);
 }
 
-/* ========== 动态背景 ========== */
-.welcome-bg {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  overflow: hidden;
-}
-
-.welcome-bg__gradient {
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(
-    ellipse 80% 50% at 50% -20%,
-    var(--color-primary-light) 0%,
-    transparent 50%
-  );
-  opacity: 0.6;
-}
-
-[data-theme='dark'] .welcome-bg__gradient {
-  opacity: 0.3;
-}
-
-.welcome-bg__shapes {
-  position: absolute;
-  inset: 0;
-}
-
-.welcome-bg__shape {
-  position: absolute;
-  width: var(--size);
-  height: var(--size);
-  left: var(--x);
-  top: var(--y);
-  border-radius: 50%;
-  background: linear-gradient(
-    135deg,
-    var(--color-primary) 0%,
-    var(--color-accent) 100%
-  );
-  opacity: 0.08;
-  filter: blur(40px);
-  animation: float-shape var(--duration) ease-in-out infinite;
-  animation-delay: var(--delay);
-}
-
-[data-theme='dark'] .welcome-bg__shape {
-  opacity: 0.05;
-}
-
-@keyframes float-shape {
-  0%, 100% {
-    transform: translate(0, 0) scale(1);
-  }
-  25% {
-    transform: translate(20px, -30px) scale(1.1);
-  }
-  50% {
-    transform: translate(-10px, 20px) scale(0.9);
-  }
-  75% {
-    transform: translate(30px, 10px) scale(1.05);
-  }
-}
-
-.welcome-bg__grid {
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(var(--color-border) 1px, transparent 1px),
-    linear-gradient(90deg, var(--color-border) 1px, transparent 1px);
-  background-size: 60px 60px;
-  opacity: 0.3;
-  mask-image: radial-gradient(ellipse 70% 70% at 50% 50%, black 20%, transparent 70%);
-}
-
-[data-theme='dark'] .welcome-bg__grid {
-  opacity: 0.15;
-}
-
 /* ========== 主内容 ========== */
 .welcome-content {
   position: relative;
@@ -590,475 +299,6 @@ async function handleProjectSubmit(data: { name: string; path: string; descripti
   opacity: 1;
   transform: translateY(0);
 }
-
-/* ========== 头部 ========== */
-.welcome-header {
-  text-align: center;
-  margin-bottom: var(--spacing-8);
-  --delay: 0s;
-}
-
-.welcome-logo {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: var(--spacing-4);
-}
-
-.welcome-logo__icon {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 80px;
-  height: 80px;
-  background: linear-gradient(
-    135deg,
-    var(--color-primary) 0%,
-    var(--color-accent) 100%
-  );
-  border-radius: var(--radius-2xl);
-  color: white;
-  box-shadow:
-    0 8px 32px -8px rgba(59, 130, 246, 0.4),
-    inset 0 1px 0 rgba(255, 255, 255, 0.2);
-}
-
-.welcome-logo__pulse {
-  position: absolute;
-  inset: -8px;
-  border-radius: var(--radius-2xl);
-  border: 2px solid var(--color-primary);
-  opacity: 0;
-  animation: logo-pulse 2s ease-out infinite;
-}
-
-@keyframes logo-pulse {
-  0% {
-    opacity: 0.6;
-    transform: scale(1);
-  }
-  100% {
-    opacity: 0;
-    transform: scale(1.2);
-  }
-}
-
-.welcome-title {
-  margin: 0 0 var(--spacing-2);
-  font-size: 28px;
-  font-weight: 700;
-  line-height: 1.2;
-  letter-spacing: -0.02em;
-  color: var(--color-text-primary);
-}
-
-.welcome-title__brand {
-  background: linear-gradient(
-    135deg,
-    var(--color-text-primary) 0%,
-    var(--color-primary) 50%,
-    var(--color-accent) 100%
-  );
-  background-size: 200% 200%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: gradient-shift 4s ease infinite;
-}
-
-@keyframes gradient-shift {
-  0%, 100% {
-    background-position: 0% 50%;
-  }
-  50% {
-    background-position: 100% 50%;
-  }
-}
-
-.welcome-subtitle {
-  margin: 0;
-  font-size: var(--font-size-base);
-  color: var(--color-text-secondary);
-  font-weight: 400;
-}
-
-/* ========== 项目列表 ========== */
-.project-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  width: 100%;
-  max-width: 500px;
-  margin-bottom: var(--spacing-6);
-}
-
-.project-card {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-3);
-  padding: var(--spacing-3) var(--spacing-4);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  cursor: pointer;
-  transition:
-    background-color var(--transition-fast) var(--easing-default),
-    border-color var(--transition-fast) var(--easing-default),
-    transform var(--transition-fast) var(--easing-default),
-    box-shadow var(--transition-fast) var(--easing-default);
-}
-
-.project-card:hover {
-  background: var(--color-surface-hover);
-  border-color: var(--color-primary);
-  transform: translateX(4px);
-  box-shadow: var(--shadow-md);
-}
-
-.project-card__icon {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  background: var(--color-primary-light);
-  border-radius: var(--radius-md);
-  color: var(--color-primary);
-  transition:
-    background-color var(--transition-fast) var(--easing-default),
-    transform var(--transition-fast) var(--easing-default);
-}
-
-.project-card:hover .project-card__icon {
-  background: var(--color-primary);
-  color: white;
-  transform: scale(1.05);
-}
-
-[data-theme='dark'] .project-card__icon {
-  background: rgba(96, 165, 250, 0.15);
-}
-
-[data-theme='dark'] .project-card:hover .project-card__icon {
-  background: var(--color-primary);
-}
-
-.project-card__content {
-  flex: 1;
-  min-width: 0;
-}
-
-.project-card__name {
-  font-size: var(--font-size-base);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-primary);
-  margin-bottom: 2px;
-}
-
-.project-card__meta {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-3);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
-.project-card__path {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-family-mono);
-}
-
-.project-card__time {
-  flex-shrink: 0;
-}
-
-.project-card__arrow {
-  flex-shrink: 0;
-  color: var(--color-text-tertiary);
-  opacity: 0;
-  transform: translateX(-8px);
-  transition:
-    opacity var(--transition-fast) var(--easing-default),
-    transform var(--transition-fast) var(--easing-default);
-}
-
-.project-card:hover .project-card__arrow {
-  opacity: 1;
-  transform: translateX(0);
-  color: var(--color-primary);
-}
-
-/* ========== 快捷操作按钮 ========== */
-.quick-actions {
-  display: flex;
-  gap: var(--spacing-3);
-  --delay: 0.3s;
-}
-
-.quick-action-btn {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  padding: var(--spacing-2) var(--spacing-4);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-full);
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  transition:
-    background-color var(--transition-fast) var(--easing-default),
-    border-color var(--transition-fast) var(--easing-default),
-    color var(--transition-fast) var(--easing-default);
-}
-
-.quick-action-btn:hover {
-  background: var(--color-primary-light);
-  border-color: var(--color-primary);
-  color: var(--color-primary);
-}
-
-[data-theme='dark'] .quick-action-btn:hover {
-  background: rgba(96, 165, 250, 0.15);
-}
-
-.quick-action-btn kbd {
-  padding: 2px 6px;
-  background: var(--color-bg-tertiary);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-}
-
-/* ========== 欢迎操作卡片 ========== */
-.welcome-actions {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  width: 100%;
-  max-width: 480px;
-  margin-bottom: var(--spacing-10);
-}
-
-.action-card {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-4);
-  padding: var(--spacing-4) var(--spacing-5);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-xl);
-  cursor: pointer;
-  transition:
-    background-color var(--transition-fast) var(--easing-default),
-    border-color var(--transition-fast) var(--easing-default),
-    transform var(--transition-fast) var(--easing-default),
-    box-shadow var(--transition-fast) var(--easing-default);
-}
-
-.action-card:hover {
-  background: var(--color-surface-hover);
-  border-color: var(--color-primary);
-  transform: translateX(4px);
-  box-shadow: var(--shadow-md);
-}
-
-.action-card__icon {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 48px;
-  height: 48px;
-  background: var(--color-primary-light);
-  border-radius: var(--radius-lg);
-  color: var(--color-primary);
-  transition:
-    background-color var(--transition-fast) var(--easing-default),
-    transform var(--transition-fast) var(--easing-default);
-}
-
-.action-card:hover .action-card__icon {
-  background: var(--color-primary);
-  color: white;
-  transform: scale(1.05);
-}
-
-[data-theme='dark'] .action-card__icon {
-  background: rgba(96, 165, 250, 0.15);
-}
-
-[data-theme='dark'] .action-card:hover .action-card__icon {
-  background: var(--color-primary);
-}
-
-.action-card__content {
-  flex: 1;
-  min-width: 0;
-}
-
-.action-card__title {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  font-size: var(--font-size-base);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-primary);
-}
-
-.action-card__shortcut {
-  font-size: var(--font-size-xs);
-  padding: 2px 6px;
-  background: var(--color-bg-tertiary);
-  border-radius: var(--radius-sm);
-  color: var(--color-text-tertiary);
-  font-family: var(--font-family-mono);
-}
-
-.action-card__description {
-  margin-top: 2px;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-tertiary);
-}
-
-.action-card__arrow {
-  flex-shrink: 0;
-  color: var(--color-text-tertiary);
-  opacity: 0;
-  transform: translateX(-8px);
-  transition:
-    opacity var(--transition-fast) var(--easing-default),
-    transform var(--transition-fast) var(--easing-default);
-}
-
-.action-card:hover .action-card__arrow {
-  opacity: 1;
-  transform: translateX(0);
-}
-
-/* ========== 特性展示 ========== */
-.welcome-features {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: var(--spacing-4);
-  width: 100%;
-  max-width: 600px;
-  margin-bottom: var(--spacing-8);
-}
-
-.feature-item {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--spacing-3);
-  padding: var(--spacing-3) var(--spacing-4);
-  background: var(--color-bg-secondary);
-  border-radius: var(--radius-lg);
-  transition:
-    background-color var(--transition-fast) var(--easing-default),
-    transform var(--transition-fast) var(--easing-default);
-}
-
-.feature-item:hover {
-  background: var(--color-surface-hover);
-  transform: translateY(-2px);
-}
-
-.feature-item__icon {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  background: var(--color-surface);
-  border-radius: var(--radius-md);
-  color: var(--color-primary);
-}
-
-.feature-item__text {
-  flex: 1;
-  min-width: 0;
-}
-
-.feature-item__title {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-primary);
-  margin-bottom: 2px;
-}
-
-.feature-item__desc {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  line-height: 1.4;
-}
-
-/* ========== 底部提示 ========== */
-.welcome-footer {
-  --delay: 0.9s;
-}
-
-.welcome-footer__hint {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  font-size: var(--font-size-sm);
-  color: var(--color-text-tertiary);
-}
-
-.welcome-footer__hint kbd {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  box-shadow: 0 1px 0 var(--color-border);
-}
-
-/* ========== 响应式 ========== */
-@media (max-width: 640px) {
-  .welcome-content {
-    padding: var(--spacing-4);
-  }
-
-  .welcome-title {
-    font-size: 24px;
-  }
-
-  .welcome-features {
-    grid-template-columns: 1fr;
-  }
-
-  .welcome-logo__icon {
-    width: 64px;
-    height: 64px;
-  }
-
-  .project-card__meta {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--spacing-1);
-  }
-
-  .quick-actions {
-    flex-direction: column;
-  }
-}
-</style>
-
-<style scoped>
 /* 右键菜单样式 */
 .context-menu {
   position: fixed;
@@ -1090,42 +330,9 @@ async function handleProjectSubmit(data: { name: string; path: string; descripti
   margin: var(--spacing-1) 0;
 }
 
-/* 最近项目区域样式 */
-.recent-section {
-  width: 100%;
-  max-width: 500px;
-  margin-bottom: var(--spacing-8);
-}
-
-/* 所有项目区域样式 */
-.all-projects-section {
-  width: 100%;
-  max-width: 500px;
-  margin-top: var(--spacing-2);
-}
-
-.section-title {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-secondary);
-  margin-bottom: var(--spacing-3);
-}
-
-.project-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: var(--spacing-2);
-}
-
-.project-card--recent {
-  padding: var(--spacing-2) var(--spacing-3);
-}
-
-.project-card--recent .project-card__name {
-  font-size: var(--font-size-sm);
-}
-
-.project-card--recent .project-card__meta {
-  font-size: var(--font-size-xs);
+@media (max-width: 640px) {
+  .welcome-content {
+    padding: var(--spacing-4);
+  }
 }
 </style>

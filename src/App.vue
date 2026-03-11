@@ -22,6 +22,7 @@ const projectStore = useProjectStore()
 const windowManagerStore = useWindowManagerStore()
 const appStateStore = useAppStateStore()
 const confirmDialog = useConfirmDialog()
+const confirmDialogState = confirmDialog.state
 
 // 初始化窗口事件监听
 useWindowEvents()
@@ -105,15 +106,16 @@ onUnmounted(() => {
       <EaToast />
       <EaLoadingOverlay />
       <EaConfirmDialog
-        :visible="confirmDialog.state.value.visible"
-        :type="confirmDialog.state.value.type"
-        :title="confirmDialog.state.value.title"
-        :message="confirmDialog.state.value.message"
-        :confirm-label="confirmDialog.state.value.confirmLabel"
-        :cancel-label="confirmDialog.state.value.cancelLabel"
-        :confirm-button-type="confirmDialog.state.value.confirmButtonType"
+        :visible="confirmDialogState.visible"
+        :type="confirmDialogState.type"
+        :title="confirmDialogState.title"
+        :message="confirmDialogState.message"
+        :confirm-label="confirmDialogState.confirmLabel"
+        :cancel-label="confirmDialogState.cancelLabel"
+        :confirm-button-type="confirmDialogState.confirmButtonType"
         @confirm="confirmDialog.handleConfirm"
         @cancel="confirmDialog.handleCancel"
+        @update:visible="confirmDialog.handleVisibleChange"
       />
     </div>
   </n-message-provider>

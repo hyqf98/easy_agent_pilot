@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { EaButton, EaIcon } from '@/components/common'
+import { EaButton, EaIcon, EaStateBlock } from '@/components/common'
 import { useNotificationStore } from '@/stores/notification'
 import { getErrorMessage } from '@/utils/api'
 import { useFileEditorStore } from '@/modules/file-editor'
+import SettingsSectionCard from '@/components/settings/common/SettingsSectionCard.vue'
 import {
   downloadLspServer,
   getLspStorageDir,
@@ -86,21 +87,15 @@ onMounted(() => {
       {{ t('settings.lsp.title') }}
     </h3>
 
-    <div class="settings-card">
-      <h4 class="settings-card__title">
-        {{ t('settings.lsp.storageTitle') }}
-      </h4>
-      <p class="settings-card__desc">
-        {{ t('settings.lsp.storageDesc') }}
-      </p>
+    <SettingsSectionCard
+      :title="t('settings.lsp.storageTitle')"
+      :description="t('settings.lsp.storageDesc')"
+    >
       <code class="storage-path">{{ storagePath || '~/.easy-agent/tools/lsp' }}</code>
-    </div>
+    </SettingsSectionCard>
 
-    <div class="settings-card">
-      <div class="settings-card__header">
-        <h4 class="settings-card__title">
-          {{ t('settings.lsp.serverListTitle') }}
-        </h4>
+    <SettingsSectionCard :title="t('settings.lsp.serverListTitle')">
+      <template #actions>
         <EaButton
           type="secondary"
           size="small"
@@ -113,21 +108,23 @@ onMounted(() => {
           />
           {{ t('common.refresh') }}
         </EaButton>
-      </div>
-
-      <p class="settings-card__desc">
+      </template>
+      <template #description>
         {{ t('settings.lsp.manualOnly') }}
-      </p>
+      </template>
 
       <div
         v-if="isLoading"
-        class="lsp-loading"
+        class="lsp-state"
       >
-        {{ t('common.loading') }}
+        <EaStateBlock
+          variant="loading"
+          :description="t('common.loading')"
+        />
       </div>
 
       <div
-        v-else
+        v-else-if="servers.length > 0"
         class="lsp-list"
       >
         <div
@@ -191,7 +188,16 @@ onMounted(() => {
           </div>
         </div>
       </div>
-    </div>
+      <div
+        v-else
+        class="lsp-state"
+      >
+        <EaStateBlock
+          variant="empty"
+          :description="t('settings.lsp.manualOnly')"
+        />
+      </div>
+    </SettingsSectionCard>
   </div>
 </template>
 
@@ -209,35 +215,6 @@ onMounted(() => {
   color: var(--color-text-primary);
 }
 
-.settings-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-4);
-  padding: var(--spacing-5);
-  background-color: var(--color-bg-secondary);
-  border-radius: var(--radius-lg);
-}
-
-.settings-card__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-3);
-}
-
-.settings-card__title {
-  margin: 0;
-  font-size: var(--font-size-base);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-}
-
-.settings-card__desc {
-  margin: 0;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
 .storage-path {
   display: block;
   padding: var(--spacing-2) var(--spacing-3);
@@ -248,10 +225,8 @@ onMounted(() => {
   word-break: break-all;
 }
 
-.lsp-loading {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-  padding: var(--spacing-4) 0;
+.lsp-state {
+  display: flex;
 }
 
 .lsp-list {

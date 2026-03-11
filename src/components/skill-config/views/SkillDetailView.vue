@@ -2,9 +2,9 @@
 import { ref, onMounted, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
-import MarkdownIt from 'markdown-it'
 import type { UnifiedSkillConfig } from '@/stores/skillConfig'
 import { EaButton, EaIcon } from '@/components/common'
+import ConfigFileWorkspace from '@/components/skill-config/common/ConfigFileWorkspace.vue'
 
 // Reference 文件类型
 interface ReferenceFile {
@@ -39,17 +39,6 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-
-// Markdown 解析器
-const md = ref<MarkdownIt | null>(null)
-
-onMounted(async () => {
-  md.value = new MarkdownIt({
-    html: true,
-    linkify: true,
-    typographer: true,
-  })
-})
 
 // 状态
 const isLoading = ref(true)
@@ -196,24 +185,6 @@ function getFileIcon(fileType: string): string {
     default:
       return 'lucide:file'
   }
-}
-
-// 渲染 Markdown
-const renderedMarkdown = computed(() => {
-  if (!currentFile.value || !md.value) return ''
-  if (currentFile.value.file_type !== 'markdown') return ''
-  try {
-    return md.value.render(currentFile.value.content)
-  } catch {
-    return `<pre>${escapeHtml(currentFile.value.content)}</pre>`
-  }
-})
-
-// 转义 HTML
-function escapeHtml(text: string): string {
-  const div = document.createElement('div')
-  div.textContent = text
-  return div.innerHTML
 }
 
 // 监听 skill 变化
@@ -405,56 +376,26 @@ onMounted(() => {
 
       <!-- 主面板 -->
       <div class="skill-detail__main">
-        <!-- 编辑模式 -->
-        <div
-          v-if="isEditMode && currentFile"
-          class="skill-detail__editor"
+        <ConfigFileWorkspace
+          :loading="isLoadingFile"
+          :editing="isEditMode"
+          :file="currentFile ? {
+            name: currentFile.name,
+            path: currentFile.path,
+            content: currentFile.content,
+            fileType: currentFile.file_type
+          } : null"
+          :edit-content="editContent"
+          :edit-placeholder="t('settings.skills.editPlaceholder')"
+          :empty-text="t('settings.skills.noContent')"
+          max-width="900px"
+          padding="var(--spacing-6)"
+          @update:edit-content="editContent = $event"
         >
-          <textarea
-            v-model="editContent"
-            class="skill-detail__textarea"
-            :placeholder="t('settings.skills.editPlaceholder')"
-          />
-        </div>
-
-        <!-- 加载文件中 -->
-        <div
-          v-else-if="isLoadingFile"
-          class="skill-detail__loading-content"
-        >
-          <EaIcon
-            name="lucide:loader-2"
-            class="skill-detail__spinner"
-          />
-          {{ t('common.loading') }}
-        </div>
-
-        <!-- Markdown 预览 -->
-        <div
-          v-else-if="currentFile?.file_type === 'markdown'"
-          class="skill-detail__markdown markdown-body"
-          v-html="renderedMarkdown"
-        />
-
-        <!-- 代码预览 -->
-        <div
-          v-else-if="currentFile"
-          class="skill-detail__code"
-        >
-          <pre class="skill-detail__code-content"><code>{{ currentFile.content }}</code></pre>
-        </div>
-
-        <!-- 空状态 -->
-        <div
-          v-else
-          class="skill-detail__empty"
-        >
-          <EaIcon
-            name="lucide:file-x"
-            class="skill-detail__empty-icon"
-          />
-          <p>{{ t('settings.skills.noContent') }}</p>
-        </div>
+          <template #loading>
+            {{ t('common.loading') }}
+          </template>
+        </ConfigFileWorkspace>
       </div>
     </div>
   </div>
@@ -663,58 +604,6 @@ onMounted(() => {
   flex-direction: column;
 }
 
-/* 编辑器 */
-.skill-detail__editor {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.skill-detail__textarea {
-  flex: 1;
-  width: 100%;
-  min-height: 100%;
-  padding: var(--spacing-4);
-  border: none;
-  background: var(--color-surface);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-sm);
-  line-height: 1.7;
-  resize: none;
-  outline: none;
-}
-
-.skill-detail__textarea:focus {
-  box-shadow: inset 0 0 0 2px var(--color-primary);
-}
-
-/* Markdown 预览 */
-.skill-detail__markdown {
-  padding: var(--spacing-6);
-  max-width: 900px;
-  margin: 0 auto;
-  flex: 1;
-  overflow: auto;
-}
-
-/* 代码预览 */
-.skill-detail__code {
-  padding: var(--spacing-4);
-  background: var(--color-background-secondary);
-  flex: 1;
-  overflow: auto;
-}
-
-.skill-detail__code-content {
-  margin: 0;
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-sm);
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
 /* 加载状态 */
 .skill-detail__loading {
   display: flex;
@@ -722,15 +611,6 @@ onMounted(() => {
   justify-content: center;
   gap: var(--spacing-2);
   padding: var(--spacing-8);
-  color: var(--color-text-tertiary);
-}
-
-.skill-detail__loading-content {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--spacing-2);
-  height: 100%;
   color: var(--color-text-tertiary);
 }
 
@@ -743,129 +623,6 @@ onMounted(() => {
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
-}
-
-/* 空状态 */
-.skill-detail__empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--spacing-3);
-  height: 100%;
-  color: var(--color-text-tertiary);
-}
-
-.skill-detail__empty-icon {
-  width: 48px;
-  height: 48px;
-  opacity: 0.5;
-}
-
-/* Markdown 样式 */
-.markdown-body :deep(h1),
-.markdown-body :deep(h2),
-.markdown-body :deep(h3),
-.markdown-body :deep(h4),
-.markdown-body :deep(h5),
-.markdown-body :deep(h6) {
-  margin-top: var(--spacing-6);
-  margin-bottom: var(--spacing-3);
-  font-weight: var(--font-weight-semibold);
-  line-height: 1.3;
-}
-
-.markdown-body :deep(h1:first-child),
-.markdown-body :deep(h2:first-child),
-.markdown-body :deep(h3:first-child) {
-  margin-top: 0;
-}
-
-.markdown-body :deep(h1) { font-size: var(--font-size-2xl); }
-.markdown-body :deep(h2) { font-size: var(--font-size-xl); }
-.markdown-body :deep(h3) { font-size: var(--font-size-lg); }
-.markdown-body :deep(h4) { font-size: var(--font-size-base); }
-
-.markdown-body :deep(p) {
-  margin-bottom: var(--spacing-4);
-  line-height: 1.7;
-  font-size: var(--font-size-base);
-}
-
-.markdown-body :deep(ul),
-.markdown-body :deep(ol) {
-  margin-bottom: var(--spacing-4);
-  padding-left: var(--spacing-6);
-}
-
-.markdown-body :deep(li) {
-  margin-bottom: var(--spacing-2);
-  line-height: 1.6;
-}
-
-.markdown-body :deep(code) {
-  padding: 2px 6px;
-  background: var(--color-background-secondary);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-family-mono);
-  font-size: 0.9em;
-}
-
-.markdown-body :deep(pre) {
-  margin: var(--spacing-4) 0;
-  padding: var(--spacing-4);
-  background: var(--color-background-secondary);
-  border-radius: var(--radius-lg);
-  overflow-x: auto;
-}
-
-.markdown-body :deep(pre code) {
-  padding: 0;
-  background: transparent;
-  font-size: var(--font-size-sm);
-  line-height: 1.6;
-}
-
-.markdown-body :deep(blockquote) {
-  margin: var(--spacing-4) 0;
-  padding: var(--spacing-3) var(--spacing-4);
-  border-left: 4px solid var(--color-primary);
-  background: var(--color-background-secondary);
-  border-radius: 0 var(--radius-md) var(--radius-md) 0;
-  color: var(--color-text-secondary);
-}
-
-.markdown-body :deep(a) {
-  color: var(--color-primary);
-  text-decoration: none;
-}
-
-.markdown-body :deep(a:hover) {
-  text-decoration: underline;
-}
-
-.markdown-body :deep(table) {
-  width: 100%;
-  margin: var(--spacing-4) 0;
-  border-collapse: collapse;
-}
-
-.markdown-body :deep(th),
-.markdown-body :deep(td) {
-  padding: var(--spacing-2) var(--spacing-4);
-  border: 1px solid var(--color-border);
-  text-align: left;
-}
-
-.markdown-body :deep(th) {
-  background: var(--color-background-secondary);
-  font-weight: var(--font-weight-medium);
-}
-
-.markdown-body :deep(hr) {
-  margin: var(--spacing-6) 0;
-  border: none;
-  border-top: 1px solid var(--color-border);
 }
 
 /* 侧边栏动画 */

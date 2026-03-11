@@ -12,11 +12,14 @@ use rmcp::{
     transport::{StreamableHttpClientTransport, TokioChildProcess},
     ServiceExt,
 };
-use tokio::process::Command as TokioCommand;
 
 // 导入内置 MCP 服务器
 use super::builtin_mcp::{
     call_builtin_tool, get_builtin_tools, BUILTIN_SERVER_ID, BUILTIN_SERVER_NAME,
+};
+use super::mcp_shared::{
+    build_stdio_command, ensure_mcp_servers_object, format_call_tool_result,
+    read_json_config_or_default, write_json_config_pretty,
 };
 
 /// MCP 服务器配置
@@ -47,32 +50,15 @@ pub struct McpTestResult {
     pub tool_count: Option<i32>,
 }
 
-/// 在 Windows 上构建兼容的命令
-/// 对于 npx、npm 等 Node.js 脚本命令，在 Windows 上需要使用 cmd.exe /C 来执行
-fn build_platform_command(command: &str, args: &[String]) -> TokioCommand {
-    #[cfg(target_os = "windows")]
-    {
-        // Windows 上需要特殊处理的命令
-        let script_commands = ["npx", "npm", "yarn", "pnpm", "bun"];
-
-        if script_commands.contains(&command) {
-            // 使用 cmd.exe /C 来执行脚本命令
-            let full_command = if args.is_empty() {
-                command.to_string()
-            } else {
-                format!("{} {}", command, args.join(" "))
-            };
-            let mut cmd = TokioCommand::new("cmd");
-            cmd.arg("/C").arg(&full_command);
-            return cmd;
-        }
-    }
-
-    // 默认情况：直接执行命令
-    let mut cmd = TokioCommand::new(command);
-    cmd.args(args);
-    cmd
-}
+type StoredServerRuntime = (
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
 
 /// 创建 MCP 服务器的输入参数
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,19 +116,7 @@ fn get_mcp_config_path(server_type: &str) -> Result<PathBuf, String> {
 fn write_mcp_to_config_file(server: &McpServer) -> Result<(), String> {
     let config_path = get_mcp_config_path(&server.server_type)?;
 
-    // 读取现有配置或创建新配置
-    let mut config: Value = if config_path.exists() {
-        let content =
-            fs::read_to_string(&config_path).map_err(|e| format!("读取配置文件失败: {}", e))?;
-        serde_json::from_str(&content).unwrap_or_else(|_| json!({"mcpServers": {}}))
-    } else {
-        json!({"mcpServers": {}})
-    };
-
-    // 确保 mcpServers 字段存在
-    if config.get("mcpServers").is_none() {
-        config["mcpServers"] = json!({});
-    }
+    let mut config = read_json_config_or_default(&config_path, json!({"mcpServers": {}}))?;
 
     // 根据服务器类型构建配置
     let mcp_config = match server.server_type.as_str() {
@@ -183,20 +157,10 @@ fn write_mcp_to_config_file(server: &McpServer) -> Result<(), String> {
         _ => json!({}),
     };
 
-    // 写入配置
-    config["mcpServers"][&server.name] = mcp_config;
+    let mcp_servers = ensure_mcp_servers_object(&mut config)?;
+    mcp_servers.insert(server.name.clone(), mcp_config);
 
-    // 确保父目录存在
-    if let Some(parent) = config_path.parent() {
-        if !parent.exists() {
-            fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {}", e))?;
-        }
-    }
-
-    // 写入文件
-    let content =
-        serde_json::to_string_pretty(&config).map_err(|e| format!("序列化配置失败: {}", e))?;
-    fs::write(&config_path, content).map_err(|e| format!("写入配置文件失败: {}", e))?;
+    write_json_config_pretty(&config_path, &config)?;
 
     Ok(())
 }
@@ -209,24 +173,10 @@ fn remove_mcp_from_config_file(server_type: &str, server_name: &str) -> Result<(
         return Ok(());
     }
 
-    // 读取现有配置
-    let mut config: Value = {
-        let content =
-            fs::read_to_string(&config_path).map_err(|e| format!("读取配置文件失败: {}", e))?;
-        serde_json::from_str(&content).unwrap_or_else(|_| json!({"mcpServers": {}}))
-    };
-
-    // 从 mcpServers 中删除指定服务器
-    if let Some(mcp_servers) = config.get_mut("mcpServers") {
-        if let Some(obj) = mcp_servers.as_object_mut() {
-            obj.remove(server_name);
-        }
-    }
-
-    // 写入文件
-    let content =
-        serde_json::to_string_pretty(&config).map_err(|e| format!("序列化配置失败: {}", e))?;
-    fs::write(&config_path, content).map_err(|e| format!("写入配置文件失败: {}", e))?;
+    let mut config = read_json_config_or_default(&config_path, json!({"mcpServers": {}}))?;
+    let mcp_servers = ensure_mcp_servers_object(&mut config)?;
+    mcp_servers.remove(server_name);
+    write_json_config_pretty(&config_path, &config)?;
 
     Ok(())
 }
@@ -316,37 +266,97 @@ fn check_name_duplicate(
     Ok(count > 0)
 }
 
+fn validate_server_input(
+    name: &str,
+    server_type: &str,
+    command: &str,
+    url: Option<&str>,
+) -> Result<String, String> {
+    if name.trim().is_empty() {
+        return Err("名称不能为空".to_string());
+    }
+
+    let normalized_type = server_type.trim().to_string();
+    if normalized_type.is_empty() {
+        return Err("服务器类型不能为空".to_string());
+    }
+
+    if normalized_type == "stdio" && command.trim().is_empty() {
+        return Err("命令不能为空".to_string());
+    }
+
+    if normalized_type == "http" && url.unwrap_or("").trim().is_empty() {
+        return Err("URL不能为空".to_string());
+    }
+
+    Ok(normalized_type)
+}
+
+fn load_runtime_server_config(id: &str) -> Result<StoredServerRuntime, String> {
+    let conn = get_db_connection()?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT name, server_type, command, args, env, url, headers FROM mcp_servers WHERE id = ?1",
+        )
+        .map_err(|e| e.to_string())?;
+
+    stmt.query_row(params![id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, Option<String>>(5)?,
+            row.get::<_, Option<String>>(6)?,
+        ))
+    })
+    .map_err(|e| format!("Server not found: {}", e))
+}
+
+fn serialize_optional_map(
+    map: Option<&std::collections::HashMap<String, String>>,
+) -> Option<String> {
+    map.map(|value| serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()))
+}
+
+fn normalize_runtime_config(config: McpConfigInput) -> StoredServerRuntime {
+    (
+        config.name,
+        config.transport_type,
+        config.command.unwrap_or_default(),
+        config.args.map(|args| args.join(" ")),
+        serialize_optional_map(config.env.as_ref()),
+        config.url,
+        serialize_optional_map(config.headers.as_ref()),
+    )
+}
+
+fn map_rmcp_tools(tools: Vec<rmcp::model::Tool>) -> Vec<McpTool> {
+    tools
+        .into_iter()
+        .map(|tool| {
+            let input_schema =
+                serde_json::to_value(&tool.input_schema).unwrap_or_else(|_| json!({}));
+            McpTool {
+                name: tool.name.to_string(),
+                description: tool.description.unwrap_or_default().to_string(),
+                input_schema,
+            }
+        })
+        .collect()
+}
+
 /// 添加 MCP 服务器配置 (Tauri 命令)
 #[tauri::command]
 pub fn add_mcp_server(input: CreateMcpServerInput) -> Result<McpServer, String> {
     let conn = get_db_connection()?;
-
-    // 验证名称不能为空
-    if input.name.trim().is_empty() {
-        return Err("名称不能为空".to_string());
-    }
-
-    // 根据类型验证必填字段
-    let server_type = input.server_type.trim().to_string();
-    if server_type.is_empty() {
-        return Err("服务器类型不能为空".to_string());
-    }
-
-    // stdio 类型需要命令
-    if server_type == "stdio" && input.command.trim().is_empty() {
-        return Err("命令不能为空".to_string());
-    }
-
-    // http 类型需要 URL
-    if server_type == "http"
-        && input
-            .url
-            .as_ref()
-            .map(|u| u.trim().is_empty())
-            .unwrap_or(true)
-    {
-        return Err("URL不能为空".to_string());
-    }
+    let server_type = validate_server_input(
+        &input.name,
+        &input.server_type,
+        &input.command,
+        input.url.as_deref(),
+    )?;
 
     // 检查名称是否重复
     if check_name_duplicate(&conn, &input.name, None)? {
@@ -393,32 +403,12 @@ pub fn add_mcp_server(input: CreateMcpServerInput) -> Result<McpServer, String> 
 #[tauri::command]
 pub fn update_mcp_server(input: UpdateMcpServerInput) -> Result<McpServer, String> {
     let conn = get_db_connection()?;
-
-    // 验证名称不能为空
-    if input.name.trim().is_empty() {
-        return Err("名称不能为空".to_string());
-    }
-
-    // 根据类型验证必填字段
-    let server_type = input.server_type.trim();
-    if server_type.is_empty() {
-        return Err("服务器类型不能为空".to_string());
-    }
-
-    if server_type == "stdio" && input.command.trim().is_empty() {
-        return Err("命令不能为空".to_string());
-    }
-
-    if server_type == "http"
-        && input
-            .url
-            .as_ref()
-            .map(|u| u.trim())
-            .unwrap_or("")
-            .is_empty()
-    {
-        return Err("URL不能为空".to_string());
-    }
+    let server_type = validate_server_input(
+        &input.name,
+        &input.server_type,
+        &input.command,
+        input.url.as_deref(),
+    )?;
 
     // 检查名称是否重复
     if check_name_duplicate(&conn, &input.name, Some(&input.id))? {
@@ -447,7 +437,7 @@ pub fn update_mcp_server(input: UpdateMcpServerInput) -> Result<McpServer, Strin
     let updated_server = McpServer {
         id: input.id.clone(),
         name: input.name.clone(),
-        server_type: server_type.to_string(),
+        server_type: server_type.clone(),
         command: input.command,
         args: input.args,
         env: input.env,
@@ -520,27 +510,7 @@ pub fn toggle_mcp_server(id: String, enabled: bool) -> Result<(), String> {
 /// 测试 MCP 服务器连接 (Tauri 命令)
 #[tauri::command]
 pub async fn test_mcp_connection(id: String) -> Result<McpTestResult, String> {
-    // 获取服务器配置
-    let (name, server_type, command, args, env, url, headers) = {
-        let conn = get_db_connection()?;
-
-        let mut stmt = conn
-            .prepare("SELECT name, server_type, command, args, env, url, headers FROM mcp_servers WHERE id = ?1")
-            .map_err(|e| e.to_string())?;
-
-        stmt.query_row(params![id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, Option<String>>(6)?,
-            ))
-        })
-        .map_err(|e| format!("Server not found: {}", e))?
-    }; // conn 和 stmt 在这里被丢弃
+    let (name, server_type, command, args, env, url, headers) = load_runtime_server_config(&id)?;
 
     // 根据服务器类型执行不同的测试逻辑
     let test_result = match server_type.as_str() {
@@ -633,31 +603,7 @@ async fn test_stdio_mcp(
     env: Option<String>,
 ) -> McpTestResult {
     eprintln!("[MCP] Using rmcp SDK to test stdio MCP server: {}", name);
-
-    // 解析参数
-    let args_vec: Vec<String> = args
-        .map(|a| a.split_whitespace().map(|s| s.to_string()).collect())
-        .unwrap_or_default();
-
-    // 解析环境变量
-    let env_map: std::collections::HashMap<String, String> = env
-        .and_then(|e| serde_json::from_str::<serde_json::Value>(&e).ok())
-        .and_then(|v| {
-            v.as_object().map(|obj| {
-                obj.iter()
-                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                    .collect()
-            })
-        })
-        .unwrap_or_default();
-
-    // 构建命令（Windows 上处理 npx/npm 等脚本命令）
-    let mut cmd = build_platform_command(command, &args_vec);
-
-    // 设置环境变量
-    for (key, value) in env_map {
-        cmd.env(key, value);
-    }
+    let cmd = build_stdio_command(command, args.as_deref(), env.as_deref());
 
     // 使用 rmcp 的 TokioChildProcess 启动 MCP 服务器
     let transport = match TokioChildProcess::new(cmd) {
@@ -734,75 +680,6 @@ pub struct McpToolCallResult {
     pub error: Option<String>,
 }
 
-/// 格式化 MCP 工具调用结果，使其更易读
-fn format_call_tool_result(call_result: &rmcp::model::CallToolResult) -> Value {
-    use rmcp::model::RawContent;
-
-    // 提取内容
-    let content: Vec<Value> = call_result
-        .content
-        .iter()
-        .map(|c| {
-            match &c.raw {
-                RawContent::Text(text_content) => {
-                    // 尝试解析为 JSON，如果成功则返回解析后的值
-                    if let Ok(parsed) = serde_json::from_str::<Value>(&text_content.text) {
-                        parsed
-                    } else {
-                        json!({
-                            "type": "text",
-                            "text": text_content.text
-                        })
-                    }
-                }
-                RawContent::Image(image_content) => {
-                    json!({
-                        "type": "image",
-                        "mime_type": image_content.mime_type,
-                        "data": image_content.data
-                    })
-                }
-                RawContent::Resource(resource_content) => {
-                    json!({
-                        "type": "resource",
-                        "resource": resource_content.resource
-                    })
-                }
-                RawContent::Audio(audio_content) => {
-                    json!({
-                        "type": "audio",
-                        "mime_type": audio_content.mime_type,
-                        "data": audio_content.data
-                    })
-                }
-                RawContent::ResourceLink(resource_link) => {
-                    json!({
-                        "type": "resource_link",
-                        "uri": resource_link.uri,
-                        "name": resource_link.name
-                    })
-                }
-            }
-        })
-        .collect();
-
-    // 构建格式化的结果
-    let mut result = json!({
-        "content": content,
-    });
-
-    // 添加可选字段
-    if let Some(is_error) = call_result.is_error {
-        result["is_error"] = json!(is_error);
-    }
-
-    if let Some(ref structured) = call_result.structured_content {
-        result["structured_content"] = structured.clone();
-    }
-
-    result
-}
-
 /// 列出 MCP 服务器的工具列表
 #[tauri::command]
 pub async fn list_mcp_tools(server_id: String) -> Result<McpToolsListResult, String> {
@@ -823,27 +700,8 @@ pub async fn list_mcp_tools(server_id: String) -> Result<McpToolsListResult, Str
         });
     }
 
-    // 获取服务器配置(在独立作用域中以避免跨 await 持有非 Send 类型)
-    let (name, server_type, command, args, env, url, headers) = {
-        let conn = get_db_connection()?;
-
-        let mut stmt = conn
-            .prepare("SELECT name, server_type, command, args, env, url, headers FROM mcp_servers WHERE id = ?1")
-            .map_err(|e| e.to_string())?;
-
-        stmt.query_row(params![server_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, Option<String>>(6)?,
-            ))
-        })
-        .map_err(|e| format!("Server not found: {}", e))?
-    }; // conn 和 stmt 在这里被丢弃
+    let (name, server_type, command, args, env, url, headers) =
+        load_runtime_server_config(&server_id)?;
 
     // 根据服务器类型执行不同的获取工具列表逻辑
     match server_type.as_str() {
@@ -905,20 +763,7 @@ async fn list_http_mcp_tools(
         }
     };
 
-    // 转换工具列表格式
-    let tools: Vec<McpTool> = tools_result
-        .tools
-        .into_iter()
-        .map(|tool| {
-            let input_schema =
-                serde_json::to_value(&tool.input_schema).unwrap_or_else(|_| json!({}));
-            McpTool {
-                name: tool.name.to_string(),
-                description: tool.description.unwrap_or_default().to_string(),
-                input_schema,
-            }
-        })
-        .collect();
+    let tools = map_rmcp_tools(tools_result.tools);
 
     eprintln!("[MCP] Found {} tools", tools.len());
 
@@ -941,30 +786,7 @@ async fn list_stdio_mcp_tools(
 ) -> Result<McpToolsListResult, String> {
     eprintln!("[MCP] Using rmcp SDK to connect to stdio MCP server");
 
-    // 解析参数
-    let args_vec: Vec<String> = args
-        .map(|a| a.split_whitespace().map(|s| s.to_string()).collect())
-        .unwrap_or_default();
-
-    // 解析环境变量
-    let env_map: std::collections::HashMap<String, String> = env
-        .and_then(|e| serde_json::from_str::<Value>(&e).ok())
-        .and_then(|v| {
-            v.as_object().map(|obj| {
-                obj.iter()
-                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                    .collect()
-            })
-        })
-        .unwrap_or_default();
-
-    // 构建命令（Windows 上处理 npx/npm 等脚本命令）
-    let mut cmd = build_platform_command(command, &args_vec);
-
-    // 设置环境变量
-    for (key, value) in env_map {
-        cmd.env(key, value);
-    }
+    let cmd = build_stdio_command(command, args.as_deref(), env.as_deref());
 
     // 使用 rmcp 的 TokioChildProcess 启动 MCP 服务器
     let transport = match TokioChildProcess::new(cmd) {
@@ -1006,20 +828,7 @@ async fn list_stdio_mcp_tools(
         }
     };
 
-    // 转换工具列表格式
-    let tools: Vec<McpTool> = tools_result
-        .tools
-        .into_iter()
-        .map(|tool| {
-            let input_schema =
-                serde_json::to_value(&tool.input_schema).unwrap_or_else(|_| json!({}));
-            McpTool {
-                name: tool.name.to_string(),
-                description: tool.description.unwrap_or_default().to_string(),
-                input_schema,
-            }
-        })
-        .collect();
+    let tools = map_rmcp_tools(tools_result.tools);
 
     eprintln!("[MCP] Found {} tools", tools.len());
 
@@ -1051,27 +860,8 @@ pub async fn call_mcp_tool(
         });
     }
 
-    // 获取服务器配置(在独立作用域中以避免跨 await 持有非 Send 类型)
-    let (name, server_type, command, args, env, url, headers) = {
-        let conn = get_db_connection()?;
-
-        let mut stmt = conn
-            .prepare("SELECT name, server_type, command, args, env, url, headers FROM mcp_servers WHERE id = ?1")
-            .map_err(|e| e.to_string())?;
-
-        stmt.query_row(params![server_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, Option<String>>(6)?,
-            ))
-        })
-        .map_err(|e| format!("Server not found: {}", e))?
-    }; // conn 和 stmt 在这里被丢弃
+    let (name, server_type, command, args, env, url, headers) =
+        load_runtime_server_config(&server_id)?;
 
     // 根据服务器类型执行不同的调用逻辑
     match server_type.as_str() {
@@ -1170,30 +960,7 @@ async fn call_stdio_mcp_tool(
 ) -> Result<McpToolCallResult, String> {
     eprintln!("[MCP] Using rmcp SDK to call tool: {}", tool_name);
 
-    // 解析参数
-    let args_vec: Vec<String> = args
-        .map(|a| a.split_whitespace().map(|s| s.to_string()).collect())
-        .unwrap_or_default();
-
-    // 解析环境变量
-    let env_map: std::collections::HashMap<String, String> = env
-        .and_then(|e| serde_json::from_str::<Value>(&e).ok())
-        .and_then(|v| {
-            v.as_object().map(|obj| {
-                obj.iter()
-                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                    .collect()
-            })
-        })
-        .unwrap_or_default();
-
-    // 构建命令（Windows 上处理 npx/npm 等脚本命令）
-    let mut cmd = build_platform_command(command, &args_vec);
-
-    // 设置环境变量
-    for (key, value) in env_map {
-        cmd.env(key, value);
-    }
+    let cmd = build_stdio_command(command, args.as_deref(), env.as_deref());
 
     // 使用 rmcp 的 TokioChildProcess 启动 MCP 服务器
     let transport = match TokioChildProcess::new(cmd) {
@@ -1281,36 +1048,12 @@ pub struct McpConfigInput {
 pub async fn list_mcp_tools_by_config(
     config: McpConfigInput,
 ) -> Result<McpToolsListResult, String> {
-    let name = config.name;
-    let server_type = config.transport_type;
-
-    // 将 args 数组转换为空格分隔的字符串
-    let args_str = config.args.map(|a| a.join(" "));
-
-    // 将 env HashMap 转换为 JSON 字符串
-    let env_str = config
-        .env
-        .as_ref()
-        .map(|e| serde_json::to_string(e).unwrap_or_else(|_| "{}".to_string()));
-
-    // 将 headers HashMap 转换为 JSON 字符串
-    let headers_str = config
-        .headers
-        .as_ref()
-        .map(|h| serde_json::to_string(h).unwrap_or_else(|_| "{}".to_string()));
+    let (name, server_type, command, args, env, url, headers) = normalize_runtime_config(config);
 
     // 根据服务器类型执行不同的获取工具列表逻辑
     match server_type.as_str() {
-        "http" | "sse" => list_http_mcp_tools(&name, config.url, headers_str).await,
-        _ => {
-            list_stdio_mcp_tools(
-                &name,
-                &config.command.unwrap_or_default(),
-                args_str,
-                env_str,
-            )
-            .await
-        }
+        "http" | "sse" => list_http_mcp_tools(&name, url, headers).await,
+        _ => list_stdio_mcp_tools(&name, &command, args, env).await,
     }
 }
 
@@ -1321,39 +1064,11 @@ pub async fn call_mcp_tool_by_config(
     tool_name: String,
     params: Value,
 ) -> Result<McpToolCallResult, String> {
-    let name = config.name;
-    let server_type = config.transport_type;
-
-    // 将 args 数组转换为空格分隔的字符串
-    let args_str = config.args.map(|a| a.join(" "));
-
-    // 将 env HashMap 转换为 JSON 字符串
-    let env_str = config
-        .env
-        .as_ref()
-        .map(|e| serde_json::to_string(e).unwrap_or_else(|_| "{}".to_string()));
-
-    // 将 headers HashMap 转换为 JSON 字符串
-    let headers_str = config
-        .headers
-        .as_ref()
-        .map(|h| serde_json::to_string(h).unwrap_or_else(|_| "{}".to_string()));
+    let (name, server_type, command, args, env, url, headers) = normalize_runtime_config(config);
 
     // 根据服务器类型执行不同的调用逻辑
     match server_type.as_str() {
-        "http" | "sse" => {
-            call_http_mcp_tool(&name, config.url, headers_str, &tool_name, params).await
-        }
-        _ => {
-            call_stdio_mcp_tool(
-                &name,
-                &config.command.unwrap_or_default(),
-                args_str,
-                env_str,
-                &tool_name,
-                params,
-            )
-            .await
-        }
+        "http" | "sse" => call_http_mcp_tool(&name, url, headers, &tool_name, params).await,
+        _ => call_stdio_mcp_tool(&name, &command, args, env, &tool_name, params).await,
     }
 }

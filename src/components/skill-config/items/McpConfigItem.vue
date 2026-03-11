@@ -216,7 +216,7 @@ function getCommandDisplay() {
   border: 1px solid rgba(34, 197, 94, 0.2) !important;
 }
 
- ..btn-test:hover {
+.btn-test:hover {
   background: rgba(34, 197, 94, 0.2) !important;
   border-color: rgba(34, 197, 94, 0.4) !important;
 }

@@ -1,18 +1,20 @@
 <script setup lang="ts">
 import { ref, h, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { NTree, TreeOption } from 'naive-ui'
-import { watch as watchFs, type UnwatchFn } from '@tauri-apps/plugin-fs'
+import type { TreeOption } from 'naive-ui'
+import type { UnwatchFn } from '@tauri-apps/plugin-fs'
 import { useProjectStore, type Project, type FileTreeNode } from '@/stores/project'
-import { useSessionStore, type Session, type SessionStatus } from '@/stores/session'
+import { useSessionStore, type Session } from '@/stores/session'
 import { useLayoutStore, type ProjectTabType } from '@/stores/layout'
 import { useUIStore } from '@/stores/ui'
-import { useTaskStore } from '@/stores/task'
-import { usePlanStore } from '@/stores/plan'
+import { useSessionView } from '@/composables'
 import { useFileEditorStore } from '@/modules/file-editor'
 import { resolveFileIcon } from '@/utils/fileIcon'
+import { startFsWatcher } from '@/utils/fsWatcher'
 import { EaIcon, EaButton, EaSkeleton } from '@/components/common'
 import { ProjectCreateModal } from '@/components/project'
+import UnifiedPanelConfirmDialog from './UnifiedPanelConfirmDialog.vue'
+import UnifiedPanelProjectEntry from './UnifiedPanelProjectEntry.vue'
 
 // 定义 TreeRenderProps 类型
 interface TreeRenderProps {
@@ -38,9 +40,10 @@ const projectStore = useProjectStore()
 const sessionStore = useSessionStore()
 const layoutStore = useLayoutStore()
 const uiStore = useUIStore()
-const taskStore = useTaskStore()
-const planStore = usePlanStore()
 const fileEditorStore = useFileEditorStore()
+const {
+  openSessionTarget,
+} = useSessionView()
 
 // 项目相关状态
 const editingProject = ref<Project | null>(null)
@@ -150,9 +153,9 @@ onUnmounted(() => {
 const handleModalKeydown = (e: KeyboardEvent) => {
   if (e.key === 'Escape') {
     if (showDeleteSessionConfirm.value) {
-      showDeleteSessionConfirm.value = false
+      closeDeleteSessionConfirm()
     } else if (showDeleteConfirm.value) {
-      showDeleteConfirm.value = false
+      closeDeleteProjectConfirm()
     } else if (uiStore.projectCreateModalVisible) {
       uiStore.closeProjectCreateModal()
     } else if (uiStore.sessionCreateModalVisible) {
@@ -211,12 +214,16 @@ const handleDeleteProject = (project: Project) => {
   showDeleteConfirm.value = true
 }
 
+const closeDeleteProjectConfirm = () => {
+  showDeleteConfirm.value = false
+  deletingProject.value = null
+}
+
 const confirmDeleteProject = () => {
   if (deletingProject.value) {
     projectStore.deleteProject(deletingProject.value.id)
   }
-  showDeleteConfirm.value = false
-  deletingProject.value = null
+  closeDeleteProjectConfirm()
 }
 
 // ========== 会话操作 ==========
@@ -238,45 +245,11 @@ const handleAddSession = async (projectId: string) => {
 }
 
 const handleSelectSession = async (id: string) => {
-  uiStore.setMainContentMode('chat')
-
-  // 获取会话信息
-  const session = sessionStore.sessions.find(s => s.id === id)
-  if (session?.projectId) {
-    // 确保会话所属的项目被选中
-    projectStore.setCurrentProject(session.projectId)
-  }
-
-  // 检查会话是否是计划类型（agentType 为 'planner'）
-  if (session?.agentType === 'planner') {
-    // 计划类型的会话，跳转到计划页面
-    // 先加载计划列表
-    if (session?.projectId) {
-      await planStore.loadPlans(session.projectId)
+  await openSessionTarget(id, {
+    onBeforeOpen: () => {
+      uiStore.setMainContentMode('chat')
     }
-    // 切换到计划模式
-    uiStore.setAppMode('plan')
-    return
-  }
-
-  // 检查会话是否关联了计划任务
-  const task = await taskStore.getTaskBySessionId(id)
-  if (task?.planId) {
-    // 会话关联了计划任务，跳转到计划页面
-    // 先加载计划列表（如果还没有加载）
-    if (session?.projectId && planStore.plansByProject(session.projectId).length === 0) {
-      await planStore.loadPlans(session.projectId)
-    }
-    // 设置当前计划
-    planStore.setCurrentPlan(task.planId)
-    // 加载该计划的任务
-    await taskStore.loadTasks(task.planId)
-    // 切换到计划模式
-    uiStore.setAppMode('plan')
-    return
-  }
-
-  sessionStore.openSession(id)
+  })
 }
 
 const handleTogglePin = (id: string) => {
@@ -288,6 +261,11 @@ const handleDeleteSession = (session: Session) => {
   showDeleteSessionConfirm.value = true
 }
 
+const closeDeleteSessionConfirm = () => {
+  showDeleteSessionConfirm.value = false
+  deletingSession.value = null
+}
+
 const confirmDeleteSession = () => {
   if (deletingSession.value) {
     sessionStore.deleteSession(deletingSession.value.id)
@@ -295,27 +273,7 @@ const confirmDeleteSession = () => {
       projectStore.decrementSessionCount(projectStore.currentProjectId)
     }
   }
-  showDeleteSessionConfirm.value = false
-  deletingSession.value = null
-}
-
-// 会话状态相关
-const getStatusIcon = (status: SessionStatus) => {
-  switch (status) {
-    case 'running': return 'loader'
-    case 'completed': return 'check-circle'
-    case 'error': return 'alert-circle'
-    case 'paused': return 'pause-circle'
-    default: return 'circle'
-  }
-}
-
-const getStatusClass = (status: SessionStatus) => {
-  return `session-item__status--${status}`
-}
-
-const isRunningStatus = (status: SessionStatus) => {
-  return status === 'running'
+  closeDeleteSessionConfirm()
 }
 
 // 编辑会话名称
@@ -335,46 +293,6 @@ const saveSessionName = async (session: Session) => {
     await sessionStore.updateSession(session.id, { name: editingSessionName.value.trim() })
   }
   cancelEditSessionName()
-}
-
-// 时间格式化
-const getRelativeTime = (dateStr: string) => {
-  const date = new Date(dateStr)
-  const now = new Date()
-  const diff = now.getTime() - date.getTime()
-  const minutes = Math.floor(diff / 60000)
-  const hours = Math.floor(diff / 3600000)
-  const days = Math.floor(diff / 86400000)
-
-  if (minutes < 1) return t('common.justNow')
-  if (minutes < 60) return t('common.minutesAgo', { n: minutes })
-  if (hours < 24) return t('common.hoursAgo', { n: hours })
-  return t('common.daysAgo', { n: days })
-}
-
-// 日期格式化（显示创建时间）
-const formatDate = (dateStr: string) => {
-  const date = new Date(dateStr)
-  const now = new Date()
-  const isToday = date.toDateString() === now.toDateString()
-  const yesterday = new Date(now)
-  yesterday.setDate(yesterday.getDate() - 1)
-  const isYesterday = date.toDateString() === yesterday.toDateString()
-
-  const timeStr = date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-
-  if (isToday) {
-    return t('unified.today') + ' ' + timeStr
-  }
-  if (isYesterday) {
-    return t('unified.yesterday') + ' ' + timeStr
-  }
-  // 同一年只显示月-日
-  if (date.getFullYear() === now.getFullYear()) {
-    return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
-  }
-  // 不同年显示完整日期
-  return date.toLocaleDateString('zh-CN')
 }
 
 // ========== 文件树操作 ==========
@@ -589,7 +507,7 @@ const startProjectWatcher = async (project: Project) => {
   stopProjectWatcher(project.id)
 
   try {
-    const unwatch = await watchFs(
+    const unwatch = await startFsWatcher(
       project.path,
       () => {
         scheduleProjectTreeRefresh(project)
@@ -599,7 +517,9 @@ const startProjectWatcher = async (project: Project) => {
         delayMs: 300
       }
     )
-    projectWatcherMap.value.set(project.id, unwatch)
+    if (unwatch) {
+      projectWatcherMap.value.set(project.id, unwatch)
+    }
   } catch (error) {
     console.error('[UnifiedPanel] 启动目录监听失败:', error)
   }
@@ -751,326 +671,39 @@ const startProjectWatcher = async (project: Project) => {
         class="project-list"
         role="list"
       >
-        <template
+        <UnifiedPanelProjectEntry
           v-for="project in projectStore.projects"
           :key="project.id"
-        >
-          <!-- 项目项 -->
-          <div
-            :class="[
-              'project-item',
-              {
-                'project-item--active': project.id === projectStore.currentProjectId,
-                'project-item--expanded': projectStore.isProjectExpanded(project.id)
-              }
-            ]"
-            tabindex="0"
-            role="listitem"
-            :aria-selected="project.id === projectStore.currentProjectId"
-            :aria-expanded="projectStore.isProjectExpanded(project.id)"
-            @click="handleProjectCardClick(project)"
-            @keydown.enter="handleProjectCardClick(project)"
-            @keydown.space.prevent="handleProjectCardClick(project)"
-          >
-            <!-- 展开/折叠箭头 -->
-            <div class="project-item__arrow">
-              <EaIcon
-                :name="projectStore.isFileTreeLoading(project.id) ? 'loader' : 'chevron-right'"
-                :size="14"
-                :class="{
-                  'project-item__arrow--expanded': projectStore.isProjectExpanded(project.id),
-                  'animate-spin': projectStore.isFileTreeLoading(project.id)
-                }"
-              />
-            </div>
-            <!-- 项目图标 -->
-            <div class="project-item__icon">
-              <EaIcon name="folder" :size="18" />
-            </div>
-            <!-- 项目信息 -->
-            <div class="project-item__info">
-              <div class="project-item__header">
-                <span class="project-item__name">{{ project.name }}</span>
-              </div>
-              <div class="project-item__meta">
-                <span class="project-item__time">{{ formatImportTime(project.createdAt) }} {{ t('unified.imported') }}</span>
-                <span
-                  class="project-item__session-count"
-                  :class="{ 'project-item__session-count--has': project.sessionCount && project.sessionCount > 0 }"
-                >
-                  <EaIcon name="message-square" :size="10" />
-                  {{ t('unified.sessionCount', { count: project.sessionCount || 0 }) }}
-                </span>
-              </div>
-            </div>
-            <!-- 操作按钮 -->
-            <div class="project-item__actions">
-              <button
-                class="project-item__action-btn"
-                :title="t('common.edit')"
-                @click.stop="handleEditProject(project)"
-              >
-                <EaIcon name="edit-2" :size="12" />
-              </button>
-              <button
-                class="project-item__action-btn project-item__action-btn--danger"
-                :title="t('common.delete')"
-                @click.stop="handleDeleteProject(project)"
-              >
-                <EaIcon name="x" :size="12" />
-              </button>
-            </div>
-          </div>
-
-          <!-- 展开内容 -->
-          <div
-            v-if="projectStore.isProjectExpanded(project.id)"
-            class="project-content"
-          >
-            <!-- Tab 切换器 -->
-            <div class="project-tabs">
-              <button
-                :class="['tab-btn', { 'tab-btn--active': getProjectTab(project.id) === 'sessions' }]"
-                @click="setProjectTab(project.id, 'sessions')"
-              >
-                <EaIcon
-                  name="message-square"
-                  :size="12"
-                />
-                {{ t('unified.sessions') }}
-              </button>
-              <button
-                :class="['tab-btn', { 'tab-btn--active': getProjectTab(project.id) === 'files' }]"
-                @click="setProjectTab(project.id, 'files')"
-              >
-                <EaIcon
-                  name="folder-open"
-                  :size="12"
-                />
-                {{ t('unified.files') }}
-              </button>
-              <!-- 排序按钮（仅在会话tab显示） -->
-              <button
-                v-if="getProjectTab(project.id) === 'sessions'"
-                class="tab-action-btn"
-                :title="layoutStore.sessionSortBy === 'updatedAt' ? t('unified.sortByUpdated') : t('unified.sortByCreated')"
-                @click="toggleSessionSort"
-              >
-                <EaIcon
-                  :name="layoutStore.sessionSortBy === 'updatedAt' ? 'clock' : 'calendar'"
-                  :size="12"
-                />
-              </button>
-              <button
-                v-if="getProjectTab(project.id) === 'sessions'"
-                class="tab-action-btn"
-                :title="t('session.createSession')"
-                @click.stop="handleAddSession(project.id)"
-              >
-                <EaIcon
-                  name="plus"
-                  :size="12"
-                />
-              </button>
-            </div>
-
-            <!-- 会话 Tab 内容 -->
-            <div
-              v-if="getProjectTab(project.id) === 'sessions'"
-              class="tab-content"
-            >
-              <!-- 会话列表 -->
-              <div class="session-list">
-                <div
-                  v-for="session in getSessionsByProject(project.id)"
-                  :key="session.id"
-                  :class="[
-                    'session-item',
-                    {
-                      'session-item--active': session.id === sessionStore.currentSessionId,
-                      'session-item--pinned': session.pinned
-                    }
-                  ]"
-                  @click="handleSelectSession(session.id)"
-                >
-                  <!-- 会话内容 -->
-                  <div class="session-item__content">
-                    <!-- 第一行：状态图标 + 名称 + 时间 -->
-                    <div class="session-item__main">
-                      <EaIcon
-                        :name="getStatusIcon(session.status)"
-                        :size="14"
-                        :class="['session-item__status', getStatusClass(session.status), { 'animate-spin': isRunningStatus(session.status) }]"
-                      />
-                      <div
-                        v-if="editingSessionId === session.id"
-                        class="session-item__name-edit"
-                      >
-                        <input
-                          v-model="editingSessionName"
-                          type="text"
-                          class="session-name-input"
-                          @click.stop
-                          @keydown.enter="saveSessionName(session)"
-                          @keydown.escape="cancelEditSessionName"
-                        >
-                        <button
-                          class="edit-action-btn"
-                          @click.stop="saveSessionName(session)"
-                        >
-                          <EaIcon
-                            name="check"
-                            :size="12"
-                          />
-                        </button>
-                        <button
-                          class="edit-action-btn"
-                          @click.stop="cancelEditSessionName"
-                        >
-                          <EaIcon
-                            name="x"
-                            :size="12"
-                          />
-                        </button>
-                      </div>
-                      <template v-else>
-                        <span
-                          class="session-item__name"
-                          :title="session.name"
-                        >
-                          {{ session.name }}
-                        </span>
-                        <span class="session-item__time">{{ getRelativeTime(session.updatedAt) }}</span>
-                      </template>
-                    </div>
-                    <!-- 第二行：元信息 -->
-                    <div
-                      v-if="!editingSessionId || editingSessionId !== session.id"
-                      class="session-item__meta"
-                    >
-                      <span
-                        v-if="session.agentType"
-                        class="session-item__meta-item"
-                      >
-                        <EaIcon
-                          name="bot"
-                          :size="10"
-                        />
-                        {{ session.agentType }}
-                      </span>
-                      <span
-                        v-if="session.messageCount"
-                        class="session-item__meta-item"
-                      >
-                        <EaIcon
-                          name="message-square"
-                          :size="10"
-                        />
-                        {{ t('unified.messages', { count: session.messageCount }) }}
-                      </span>
-                      <span class="session-item__meta-item session-item__meta-item--created">
-                        <EaIcon
-                          name="calendar"
-                          :size="10"
-                        />
-                        {{ formatDate(session.createdAt) }}
-                      </span>
-                    </div>
-                    <!-- 第三行：最后消息预览 -->
-                    <div
-                      v-if="session.lastMessage && (!editingSessionId || editingSessionId !== session.id)"
-                      class="session-item__preview"
-                      :title="session.lastMessage"
-                    >
-                      {{ session.lastMessage }}
-                    </div>
-                  </div>
-
-                  <!-- 会话操作按钮 -->
-                  <div class="session-item__actions">
-                    <button
-                      v-if="!editingSessionId"
-                      class="session-action-btn"
-                      :title="session.pinned ? t('session.unpin') : t('session.pin')"
-                      @click.stop="handleTogglePin(session.id)"
-                    >
-                      <EaIcon
-                        :name="session.pinned ? 'pin-off' : 'pin'"
-                        :size="12"
-                      />
-                    </button>
-                    <button
-                      v-if="!editingSessionId"
-                      class="session-action-btn"
-                      :title="t('common.edit')"
-                      @click.stop="startEditSessionName(session, $event)"
-                    >
-                      <EaIcon
-                        name="edit-2"
-                        :size="12"
-                      />
-                    </button>
-                    <button
-                      v-if="!editingSessionId"
-                      class="session-action-btn session-action-btn--danger"
-                      :title="t('common.delete')"
-                      @click.stop="handleDeleteSession(session)"
-                    >
-                      <EaIcon
-                        name="x"
-                        :size="12"
-                      />
-                    </button>
-                  </div>
-                </div>
-
-                <!-- 无会话 -->
-                <div
-                  v-if="getSessionsByProject(project.id).length === 0"
-                  class="session-empty"
-                >
-                  <p>{{ t('session.noSessions') }}</p>
-                </div>
-              </div>
-            </div>
-
-            <!-- 文件 Tab 内容 -->
-            <div
-              v-else-if="getProjectTab(project.id) === 'files'"
-              class="tab-content tab-content--files"
-            >
-              <div
-                v-if="projectStore.isFileTreeLoading(project.id)"
-                class="file-tree__loading"
-              >
-                <EaSkeleton
-                  variant="text"
-                  height="14px"
-                  width="80%"
-                  animation="wave"
-                />
-                <EaSkeleton
-                  variant="text"
-                  height="14px"
-                  width="60%"
-                  animation="wave"
-                />
-              </div>
-              <n-tree
-                v-else
-                :data="getProjectTreeData(project.id)"
-                :expanded-keys="getProjectExpandedKeys(project.id)"
-                :render-label="renderTreeLabel"
-                block-line
-                expand-on-click
-                selectable
-                class="file-tree__n-tree"
-                @update:expanded-keys="(keys: string[]) => handleTreeExpand(keys, project.id)"
-                @update:selected-keys="(keys: string[], options: Array<TreeOption | null>) => handleFileSelect(keys, options, project)"
-              />
-            </div>
-          </div>
-        </template>
+          :project="project"
+          :is-active="project.id === projectStore.currentProjectId"
+          :is-expanded="projectStore.isProjectExpanded(project.id)"
+          :current-tab="getProjectTab(project.id)"
+          :session-sort-by="layoutStore.sessionSortBy"
+          :sessions="getSessionsByProject(project.id)"
+          :current-session-id="sessionStore.currentSessionId"
+          :editing-session-id="editingSessionId"
+          :editing-session-name="editingSessionName"
+          :is-file-tree-loading="projectStore.isFileTreeLoading(project.id)"
+          :tree-data="getProjectTreeData(project.id)"
+          :expanded-keys="getProjectExpandedKeys(project.id)"
+          :imported-time-label="formatImportTime(project.createdAt)"
+          :render-tree-label="renderTreeLabel"
+          @toggle-project="handleProjectCardClick"
+          @edit-project="handleEditProject"
+          @delete-project="handleDeleteProject"
+          @set-tab="setProjectTab"
+          @toggle-sort="toggleSessionSort"
+          @add-session="handleAddSession"
+          @select-session="handleSelectSession"
+          @toggle-pin="handleTogglePin"
+          @start-edit-session="startEditSessionName"
+          @save-edit-session="saveSessionName"
+          @cancel-edit-session="cancelEditSessionName"
+          @delete-session="handleDeleteSession"
+          @update-editing-name="editingSessionName = $event"
+          @expand-tree="handleTreeExpand"
+          @select-file="handleFileSelect"
+        />
       </div>
     </div>
 
@@ -1096,93 +729,21 @@ const startProjectWatcher = async (project: Project) => {
       </Transition>
     </Teleport>
 
-    <!-- 删除项目确认弹框 -->
-    <Teleport to="body">
-      <Transition name="modal">
-        <div
-          v-if="showDeleteConfirm"
-          class="modal-overlay"
-          @click="showDeleteConfirm = false"
-        >
-          <div
-            class="confirm-dialog"
-            @click.stop
-          >
-            <div class="confirm-dialog__content">
-              <EaIcon
-                name="alert-triangle"
-                :size="24"
-                class="confirm-dialog__icon"
-              />
-              <h4 class="confirm-dialog__title">
-                {{ t('project.confirmDeleteTitle') }}
-              </h4>
-              <p class="confirm-dialog__message">
-                {{ t('project.confirmDeleteMessage', { name: deletingProject?.name }) }}
-              </p>
-            </div>
-            <div class="confirm-dialog__actions">
-              <EaButton
-                type="secondary"
-                @click="showDeleteConfirm = false"
-              >
-                {{ t('common.cancel') }}
-              </EaButton>
-              <EaButton
-                type="primary"
-                @click="confirmDeleteProject"
-              >
-                {{ t('common.confirmDelete') }}
-              </EaButton>
-            </div>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
+    <UnifiedPanelConfirmDialog
+      :visible="showDeleteConfirm"
+      :title="t('project.confirmDeleteTitle')"
+      :message="t('project.confirmDeleteMessage', { name: deletingProject?.name })"
+      @cancel="closeDeleteProjectConfirm"
+      @confirm="confirmDeleteProject"
+    />
 
-    <!-- 删除会话确认弹框 -->
-    <Teleport to="body">
-      <Transition name="modal">
-        <div
-          v-if="showDeleteSessionConfirm"
-          class="modal-overlay"
-          @click="showDeleteSessionConfirm = false"
-        >
-          <div
-            class="confirm-dialog"
-            @click.stop
-          >
-            <div class="confirm-dialog__content">
-              <EaIcon
-                name="alert-triangle"
-                :size="24"
-                class="confirm-dialog__icon"
-              />
-              <h4 class="confirm-dialog__title">
-                {{ t('session.confirmDeleteTitle') }}
-              </h4>
-              <p class="confirm-dialog__message">
-                {{ t('session.confirmDeleteMessage', { name: deletingSession?.name }) }}
-              </p>
-            </div>
-            <div class="confirm-dialog__actions">
-              <EaButton
-                type="secondary"
-                @click="showDeleteSessionConfirm = false"
-              >
-                {{ t('common.cancel') }}
-              </EaButton>
-              <EaButton
-                type="primary"
-                @click="confirmDeleteSession"
-              >
-                {{ t('common.confirmDelete') }}
-              </EaButton>
-            </div>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
+    <UnifiedPanelConfirmDialog
+      :visible="showDeleteSessionConfirm"
+      :title="t('session.confirmDeleteTitle')"
+      :message="t('session.confirmDeleteMessage', { name: deletingSession?.name })"
+      @cancel="closeDeleteSessionConfirm"
+      @confirm="confirmDeleteSession"
+    />
   </div>
 </template>
 
@@ -1252,7 +813,6 @@ const startProjectWatcher = async (project: Project) => {
   padding: var(--spacing-2);
 }
 
-/* 项目列表 */
 .project-list {
   display: flex;
   flex-direction: column;
@@ -1260,527 +820,6 @@ const startProjectWatcher = async (project: Project) => {
   min-height: 0;
   overflow-y: auto;
   gap: var(--spacing-1);
-}
-
-.project-item {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  padding: var(--spacing-3);
-  border-radius: var(--radius-lg);
-  cursor: pointer;
-  transition: all var(--transition-fast) var(--easing-default);
-  position: relative;
-  outline: none;
-  background-color: var(--color-surface);
-  border: 1px solid transparent;
-}
-
-.project-item:hover {
-  background-color: var(--color-surface-hover);
-  border-color: var(--color-border);
-}
-
-.project-item:focus-visible {
-  outline: 2px solid var(--color-primary);
-  outline-offset: -2px;
-}
-
-.project-item--active {
-  background-color: var(--color-primary-light);
-  border-color: var(--color-primary);
-}
-
-[data-theme='dark'] .project-item--active {
-  background-color: var(--color-active-bg);
-  border-color: var(--color-active-border);
-}
-
-.project-item--expanded {
-  background-color: var(--color-surface-hover);
-  border-color: var(--color-primary);
-}
-
-[data-theme='dark'] .project-item--expanded {
-  background-color: var(--color-surface-hover);
-  border-color: var(--color-active-border);
-}
-
-.project-item__arrow {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  color: var(--color-text-tertiary);
-  transition: transform var(--transition-fast) var(--easing-default);
-}
-
-.project-item__arrow--expanded {
-  transform: rotate(90deg);
-}
-
-.project-item__icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: var(--radius-md);
-  background-color: var(--color-primary-light);
-  color: var(--color-primary);
-  flex-shrink: 0;
-}
-
-.project-item--active .project-item__icon,
-.project-item--expanded .project-item__icon {
-  background-color: var(--color-primary);
-  color: white;
-}
-
-.project-item__info {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.project-item__header {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-}
-
-.project-item__name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-}
-
-.project-item__meta {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-3);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
-.project-item__time {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.project-item__session-count {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  padding: 1px 6px;
-  background-color: var(--color-bg-tertiary);
-  border-radius: var(--radius-full);
-}
-
-.project-item__session-count--has {
-  background-color: var(--color-primary-light);
-  color: var(--color-primary);
-}
-
-.project-item__actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  opacity: 0;
-  transition: opacity var(--transition-fast) var(--easing-default);
-}
-
-.project-item:hover .project-item__actions {
-  opacity: 1;
-}
-
-.project-item__action-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--radius-sm);
-  color: var(--color-text-tertiary);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  transition: all var(--transition-fast) var(--easing-default);
-}
-
-.project-item__action-btn:hover {
-  background-color: var(--color-primary-light);
-  color: var(--color-primary);
-}
-
-.project-item__action-btn--danger:hover {
-  background-color: var(--color-error-light);
-  color: var(--color-error);
-}
-
-/* 项目展开内容 */
-.project-content {
-  margin-left: var(--spacing-4);
-  background-color: var(--color-surface);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--color-border);
-  margin-bottom: var(--spacing-1);
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  min-width: 0;
-  max-width: calc(100% - var(--spacing-4));
-  box-sizing: border-box;
-  flex: 1 1 auto;
-  min-height: 220px;
-}
-
-/* Tab 切换 */
-.project-tabs {
-  display: flex;
-  align-items: center;
-  padding: var(--spacing-1);
-  border-bottom: 1px solid var(--color-border);
-  gap: var(--spacing-1);
-  width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-}
-
-.tab-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 1;
-  min-width: 0;
-  gap: var(--spacing-1);
-  padding: var(--spacing-1) var(--spacing-2);
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  transition: all var(--transition-fast) var(--easing-default);
-}
-
-.tab-btn:hover {
-  background-color: var(--color-surface-hover);
-  color: var(--color-text-primary);
-}
-
-.tab-btn--active {
-  background-color: var(--color-primary-light);
-  color: var(--color-primary);
-}
-
-.tab-btn--active:hover {
-  background-color: var(--color-primary-light);
-  color: var(--color-primary);
-}
-
-[data-theme='dark'] .tab-btn--active {
-  background-color: var(--color-active-bg);
-  color: var(--color-active-text);
-}
-
-[data-theme='dark'] .tab-btn--active:hover {
-  background-color: var(--color-active-bg-hover);
-  color: var(--color-active-text);
-}
-
-.tab-action-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  margin-left: auto;
-  border-radius: var(--radius-sm);
-  color: var(--color-text-tertiary);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  transition: all var(--transition-fast) var(--easing-default);
-}
-
-.tab-action-btn:hover {
-  background-color: var(--color-primary-light);
-  color: var(--color-primary);
-}
-
-/* Tab 内容 */
-.tab-content {
-  flex: 1 1 auto;
-  height: 0;
-  width: 100%;
-  min-height: 0;
-  min-width: 0;
-  max-height: none;
-  overflow-x: hidden;
-  overflow-y: auto;
-  box-sizing: border-box;
-  scrollbar-width: thin;
-  scrollbar-color: var(--color-border) transparent;
-}
-
-.tab-content::-webkit-scrollbar {
-  width: 6px;
-}
-
-.tab-content::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.tab-content::-webkit-scrollbar-thumb {
-  background-color: var(--color-border);
-  border-radius: 3px;
-}
-
-.tab-content::-webkit-scrollbar-thumb:hover {
-  background-color: var(--color-text-tertiary);
-}
-
-.tab-content--files {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  min-width: 0;
-  padding: var(--spacing-1);
-}
-
-/* 会话列表 */
-.session-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  padding: var(--spacing-2);
-  height: 100%;
-  width: 100%;
-  min-width: 0;
-  overflow-y: auto;
-  box-sizing: border-box;
-}
-
-.session-item {
-  display: flex;
-  align-items: flex-start;
-  padding: var(--spacing-3);
-  cursor: pointer;
-  transition: all var(--transition-fast) var(--easing-default);
-  border-radius: var(--radius-md);
-  background-color: var(--color-surface);
-  border: 1px solid transparent;
-}
-
-.session-item:hover {
-  background-color: var(--color-primary-light);
-  border-color: var(--color-primary-light);
-}
-
-.session-item--active {
-  background-color: var(--color-primary-light);
-  border-color: var(--color-primary);
-}
-
-.session-item--active:hover {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 1px var(--color-primary);
-}
-
-[data-theme='dark'] .session-item--active {
-  background-color: var(--color-active-bg);
-  border-color: var(--color-active-border);
-}
-
-[data-theme='dark'] .session-item--active:hover {
-  background-color: var(--color-active-bg-hover);
-  border-color: var(--color-active-border);
-  box-shadow: 0 0 0 1px var(--color-active-border);
-}
-
-.session-item__content {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-}
-
-.session-item__main {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  flex: 1;
-  min-width: 0;
-}
-
-.session-item__status {
-  flex-shrink: 0;
-}
-
-.session-item__status--running {
-  color: var(--color-primary);
-}
-
-.session-item__status--completed {
-  color: var(--color-success);
-}
-
-.session-item__status--error {
-  color: var(--color-error);
-}
-
-.session-item__status--paused {
-  color: var(--color-warning);
-}
-
-.session-item__name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-}
-
-.session-item--active .session-item__name {
-  color: var(--color-primary);
-}
-
-.session-item:hover .session-item__name {
-  color: var(--color-primary);
-}
-
-.session-item__time {
-  flex-shrink: 0;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  margin-left: var(--spacing-2);
-}
-
-.session-item__meta {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-3);
-  padding-left: calc(14px + var(--spacing-2));
-  flex-wrap: wrap;
-}
-
-.session-item__meta-item {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
-.session-item__meta-item:first-child {
-  color: var(--color-primary);
-}
-
-.session-item__meta-item--created {
-  color: var(--color-text-quaternary);
-}
-
-.session-item__preview {
-  padding-left: calc(14px + var(--spacing-2));
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  line-height: 1.4;
-}
-
-.session-item__name-edit {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  flex: 1;
-}
-
-.session-name-input {
-  flex: 1;
-  padding: 2px var(--spacing-1);
-  border: 1px solid var(--color-primary);
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-sm);
-  background: var(--color-surface);
-  color: var(--color-text-primary);
-  outline: none;
-}
-
-.edit-action-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border-radius: var(--radius-sm);
-  color: var(--color-text-secondary);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-}
-
-.edit-action-btn:hover {
-  background-color: var(--color-surface-hover);
-  color: var(--color-primary);
-}
-
-.session-item__actions {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  margin-left: var(--spacing-2);
-  flex-shrink: 0;
-  visibility: hidden;
-  opacity: 0;
-  transition: opacity var(--transition-fast) var(--easing-default);
-}
-
-.session-item:hover .session-item__actions {
-  visibility: visible;
-  opacity: 1;
-}
-
-.session-action-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: var(--radius-sm);
-  color: var(--color-text-tertiary);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-}
-
-.session-action-btn:hover {
-  background-color: var(--color-surface-hover);
-  color: var(--color-text-secondary);
-}
-
-.session-action-btn--danger:hover {
-  background-color: var(--color-error-light);
-  color: var(--color-error);
-}
-
-.session-empty {
-  padding: var(--spacing-4);
-  text-align: center;
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-xs);
 }
 
 /* 加载状态 */
@@ -1874,85 +913,6 @@ const startProjectWatcher = async (project: Project) => {
   gap: var(--spacing-2);
 }
 
-/* 文件树样式 */
-.file-tree__loading {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  padding: var(--spacing-2);
-}
-
-.file-tree__n-tree {
-  --n-font-size: var(--font-size-xs) !important;
-  --n-text-color: var(--color-text-secondary) !important;
-  --n-node-text-color: var(--color-text-secondary) !important;
-  --n-node-text-color-hover: var(--color-text-primary) !important;
-  --n-node-text-color-active: var(--color-primary) !important;
-  --n-node-text-color-selected: var(--color-primary) !important;
-  --n-node-color-hover: var(--color-surface-hover) !important;
-  --n-node-color-active: var(--color-primary-light) !important;
-  --n-node-color-selected: var(--color-primary-light) !important;
-  --n-arrow-color: var(--color-text-tertiary) !important;
-  --n-line-color: var(--color-border) !important;
-  padding: var(--spacing-1) 0;
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  overflow: auto;
-  box-sizing: border-box;
-}
-
-.file-tree__n-tree :deep(.n-tree-node) {
-  padding: 2px 0;
-}
-
-.file-tree__n-tree :deep(.n-tree-node-content) {
-  padding: 5px 10px !important;
-  border-radius: var(--radius-sm);
-}
-
-.file-tree__n-tree :deep(.n-tree-node-wrapper) {
-  padding: 0 4px;
-}
-
-.file-tree__n-tree :deep(.n-tree-switcher) {
-  width: 16px !important;
-  height: 16px !important;
-}
-
-.file-tree__n-tree :deep(.n-tree-node-wrapper--pending) {
-  opacity: 0.6;
-}
-
-.file-tree__n-tree :deep(.file-tree-node__content) {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  width: 100%;
-  min-width: 0;
-}
-
-.file-tree__n-tree :deep(.file-tree-node__icon) {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-}
-
-.file-tree__n-tree :deep(.file-tree-node__name) {
-  display: flex;
-  align-items: center;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  line-height: 1.35;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
-}
-
 /* 弹框样式 */
 .modal-overlay {
   position: fixed;
@@ -1973,50 +933,6 @@ const startProjectWatcher = async (project: Project) => {
   box-shadow: var(--shadow-2xl);
 }
 
-.confirm-dialog {
-  width: 400px;
-  max-width: 90vw;
-  background-color: var(--color-surface);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-2xl);
-}
-
-.confirm-dialog__content {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: var(--spacing-6);
-  text-align: center;
-}
-
-.confirm-dialog__icon {
-  color: var(--color-warning);
-  margin-bottom: var(--spacing-4);
-}
-
-.confirm-dialog__title {
-  margin: 0 0 var(--spacing-2);
-  font-size: var(--font-size-lg);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-primary);
-}
-
-.confirm-dialog__message {
-  margin: 0;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-  line-height: 1.5;
-  white-space: pre-line;
-}
-
-.confirm-dialog__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--spacing-3);
-  padding: var(--spacing-4) var(--spacing-6);
-  border-top: 1px solid var(--color-border);
-}
-
 /* 动画 */
 .modal-enter-active,
 .modal-leave-active {
@@ -2024,9 +940,7 @@ const startProjectWatcher = async (project: Project) => {
 }
 
 .modal-enter-active .modal-container,
-.modal-enter-active .confirm-dialog,
-.modal-leave-active .modal-container,
-.modal-leave-active .confirm-dialog {
+.modal-leave-active .modal-container {
   transition: transform var(--transition-normal) var(--easing-default),
               opacity var(--transition-normal) var(--easing-default);
 }
@@ -2037,9 +951,7 @@ const startProjectWatcher = async (project: Project) => {
 }
 
 .modal-enter-from .modal-container,
-.modal-enter-from .confirm-dialog,
-.modal-leave-to .modal-container,
-.modal-leave-to .confirm-dialog {
+.modal-leave-to .modal-container {
   transform: scale(0.95);
   opacity: 0;
 }

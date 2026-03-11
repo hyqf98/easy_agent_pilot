@@ -134,6 +134,7 @@ export default {
     used: 'Used',
     limit: 'Limit',
     percentage: 'Usage',
+    usageTooltip: '{used} / {limit} tokens',
     level: {
       safe: 'Normal',
       warning: 'Moderate',
@@ -264,6 +265,8 @@ export default {
     noSessionSelected: 'Select or create a session to start chatting',
     startConversation: 'Start a new conversation',
     inputPlaceholder: 'Type a message... ({shortcut} to send)',
+    shortcutEnter: 'Enter',
+    shortcutModifierEnter: 'Ctrl/Cmd+Enter',
     sending: 'Sending...',
     sent: 'Sent',
     failed: 'Failed',
@@ -624,9 +627,14 @@ export default {
         command: 'Command',
         commandPlaceholder: 'e.g., npx or /path/to/mcp-server',
         args: 'Arguments',
-        argsPlaceholder: 'e.g., -y @modelscope/server-name',
+        argsPlaceholder: 'e.g., -y modelscope-server-name',
         env: 'Environment Variables',
-        envPlaceholder: 'KEY=value\nKEY2=value2'
+        envPlaceholder: 'KEY=value\nKEY2=value2',
+        addEnvVar: 'Add Environment Variable',
+        url: 'URL',
+        urlPlaceholder: 'https://example.com/mcp',
+        headers: 'Headers',
+        addHeader: 'Add Header'
       },
       skills: {
         title: 'Skills Configuration',
@@ -1033,7 +1041,7 @@ export default {
         commandHint: 'Executable command for the MCP server',
         commandRequired: 'Please enter command',
         args: 'Arguments',
-        argsPlaceholder: 'e.g., -y @modelscope/server-name',
+        argsPlaceholder: 'e.g., -y modelscope-server-name',
         argsHint: 'Command line arguments, separated by spaces',
         url: 'URL',
         urlPlaceholder: 'e.g., https://example.com/mcp',
@@ -1200,6 +1208,7 @@ export default {
     searchFiles: 'Search files...',
     noFiles: 'No files found',
     loading: 'Loading...',
+    resultCount: '{count} results',
     selectFile: 'Select file',
     back: 'Back',
     enterDir: 'Enter directory',
@@ -1380,6 +1389,14 @@ export default {
     implementationSteps: 'Implementation Steps',
     testSteps: 'Test Steps',
     acceptanceCriteria: 'Acceptance Criteria',
+    form: {
+      title: 'Title',
+      titlePlaceholder: 'Task title',
+      description: 'Description',
+      descriptionPlaceholder: 'Task description',
+      priority: 'Priority',
+      addItem: 'Add'
+    },
     // Resplit modal
     resplitModal: {
       title: 'Split Task',

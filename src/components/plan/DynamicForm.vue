@@ -164,7 +164,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="dynamic-form">
+  <div class="dynamic-form dynamic-form--compact">
     <div class="form-header">
       <h3 class="form-title">
         {{ schema.title }}
@@ -216,45 +216,45 @@ onMounted(() => {
 
 <style scoped>
 .dynamic-form {
-  --form-accent: #4f46e5;
-  --form-accent-alt: #06b6d4;
+  --form-accent: #2563eb;
+  --form-accent-alt: #0891b2;
   --form-accent-soft: color-mix(in srgb, var(--form-accent) 14%, #ffffff);
   --form-border: color-mix(in srgb, var(--form-accent) 22%, #dbe3ee);
   --form-surface: var(--color-surface, #ffffff);
   --form-muted: var(--color-text-secondary, #64748b);
   --form-input-bg: color-mix(in srgb, var(--form-accent) 4%, #ffffff);
   background:
-    radial-gradient(circle at 100% 0%, rgba(6, 182, 212, 0.1), transparent 40%),
-    radial-gradient(circle at 0% 100%, rgba(99, 102, 241, 0.08), transparent 36%),
-    linear-gradient(160deg, var(--form-surface), #f8faff 72%);
-  border-radius: 0.85rem;
+    radial-gradient(circle at 100% 0%, rgba(8, 145, 178, 0.08), transparent 40%),
+    radial-gradient(circle at 0% 100%, rgba(37, 99, 235, 0.06), transparent 36%),
+    linear-gradient(160deg, var(--form-surface), #f8fbff 72%);
+  border-radius: 0.95rem;
   border: 1px solid var(--form-border);
   overflow: hidden;
-  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.05);
 }
 
 .form-header {
-  padding: 0.7rem 1rem 0.65rem;
+  padding: 0.68rem 0.92rem 0.62rem;
   border-bottom: 1px solid color-mix(in srgb, var(--form-accent) 14%, #dbe3ee);
-  background: linear-gradient(120deg, rgba(238, 242, 255, 0.7), rgba(236, 254, 255, 0.6));
+  background: linear-gradient(120deg, rgba(239, 246, 255, 0.92), rgba(236, 254, 255, 0.72));
 }
 
 .form-title {
   margin: 0 0 0.2rem;
-  font-size: 0.88rem;
+  font-size: 0.84rem;
   font-weight: 600;
-  color: #312e81;
+  color: #0f172a;
   letter-spacing: 0.01em;
 }
 
 .form-description {
   margin: 0;
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   color: var(--form-muted);
 }
 
 .form-body {
-  padding: 0.75rem 1rem 0.9rem;
+  padding: 0.72rem 0.92rem 0.82rem;
   max-height: 48vh;
   overflow-y: auto;
   display: grid;
@@ -264,16 +264,16 @@ onMounted(() => {
 .form-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 0.5rem;
-  padding: 0.65rem 1rem;
+  gap: 0.45rem;
+  padding: 0.6rem 0.92rem;
   border-top: 1px solid color-mix(in srgb, var(--form-accent) 10%, #dbe3ee);
-  background: linear-gradient(180deg, #f8faff, #eef6ff);
+  background: linear-gradient(180deg, #fbfdff, #f3f8fd);
 }
 
 .btn {
-  padding: 0.38rem 0.8rem;
-  border-radius: 0.6rem;
-  font-size: 0.78rem;
+  padding: 0.34rem 0.76rem;
+  border-radius: 0.7rem;
+  font-size: 0.76rem;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.16s ease;
@@ -282,12 +282,12 @@ onMounted(() => {
 .btn-primary {
   background: linear-gradient(135deg, var(--form-accent), var(--form-accent-alt));
   color: white;
-  border: 1px solid color-mix(in srgb, var(--form-accent) 82%, #3730a3);
+  border: 1px solid color-mix(in srgb, var(--form-accent) 78%, #1d4ed8);
 }
 
 .btn-primary:hover {
   transform: translateY(-1px);
-  box-shadow: 0 8px 18px rgba(79, 70, 229, 0.24);
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.18);
 }
 
 .btn-secondary {
@@ -302,12 +302,12 @@ onMounted(() => {
 }
 
 .dynamic-form :deep(.form-field) {
-  margin-bottom: 0.6rem;
+  margin-bottom: 0.52rem;
 }
 
 .dynamic-form :deep(.field-label) {
-  margin-bottom: 0.3rem;
-  font-size: 0.74rem;
+  margin-bottom: 0.26rem;
+  font-size: 0.72rem;
   font-weight: 600;
   letter-spacing: 0.01em;
   color: var(--color-text-primary, #334155);
@@ -324,9 +324,9 @@ onMounted(() => {
   border: 1px solid color-mix(in srgb, var(--form-accent) 20%, #ccd7e5);
   background-color: var(--form-input-bg);
   color: var(--color-text-primary, #0f172a);
-  border-radius: 0.65rem;
-  padding: 0.45rem 0.65rem;
-  font-size: 0.8rem;
+  border-radius: 0.7rem;
+  padding: 0.42rem 0.62rem;
+  font-size: 0.78rem;
   line-height: 1.35;
   transition: border-color 0.16s ease, box-shadow 0.16s ease, background-color 0.16s ease;
 }
@@ -338,7 +338,7 @@ onMounted(() => {
 }
 
 .dynamic-form :deep(.textarea) {
-  min-height: 5rem;
+  min-height: 4.4rem;
 }
 
 .dynamic-form :deep(.select) {
@@ -361,7 +361,7 @@ onMounted(() => {
   border-color: color-mix(in srgb, var(--form-accent) 68%, #3730a3);
   box-shadow:
     0 0 0 3px color-mix(in srgb, var(--form-accent) 16%, transparent),
-    0 5px 12px rgba(79, 70, 229, 0.1);
+    0 5px 12px rgba(37, 99, 235, 0.08);
   background-color: var(--color-surface, #ffffff);
 }
 
@@ -375,14 +375,14 @@ onMounted(() => {
 .dynamic-form :deep(.options-grid) {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
+  gap: 0.32rem;
 }
 
 .dynamic-form :deep(.option-label) {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  padding: 0.32rem 0.6rem;
+  padding: 0.3rem 0.56rem;
   border: 1px solid color-mix(in srgb, var(--form-accent) 24%, #cdd7e5);
   border-radius: 999px;
   background: linear-gradient(180deg, var(--color-surface, #ffffff), var(--color-bg-secondary, #f8fbff));
@@ -408,10 +408,10 @@ onMounted(() => {
 
 .dynamic-form :deep(.option-label.selected) {
   border-color: color-mix(in srgb, var(--form-accent) 72%, #4338ca);
-  background: linear-gradient(135deg, rgba(224, 231, 255, 0.85), rgba(207, 250, 254, 0.7));
-  color: #3730a3;
+  background: linear-gradient(135deg, rgba(219, 234, 254, 0.9), rgba(207, 250, 254, 0.76));
+  color: #1d4ed8;
   font-weight: 500;
-  box-shadow: 0 4px 10px rgba(79, 70, 229, 0.1);
+  box-shadow: 0 4px 10px rgba(37, 99, 235, 0.08);
 }
 
 .dynamic-form :deep(.option-label.selected::before) {
@@ -428,10 +428,10 @@ onMounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.35rem 0.6rem;
-  border-radius: 0.65rem;
+  padding: 0.32rem 0.56rem;
+  border-radius: 0.7rem;
   border: 1px solid color-mix(in srgb, var(--form-accent) 18%, #d5deea);
-  background: linear-gradient(180deg, #ffffff, #f9fbff);
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
   transition: all 0.14s ease;
 }
 

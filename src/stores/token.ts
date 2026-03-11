@@ -5,6 +5,7 @@ import { useAgentConfigStore } from './agentConfig'
 import { useAgentStore } from './agent'
 import { useSessionStore } from './session'
 import { useSettingsStore } from './settings'
+import { resolveSessionAgent } from '@/utils/sessionAgent'
 
 // 默认上下文窗口大小 (128K)
 const DEFAULT_CONTEXT_WINDOW = 128000
@@ -86,22 +87,7 @@ export const useTokenStore = defineStore('token', () => {
       }
 
       // 获取会话的智能体
-      const agent = (() => {
-        if (session.agentType) {
-          const byId = agentStore.agents.find(a => a.id === session.agentType)
-          if (byId) return byId
-
-          const byProvider = agentStore.agents.find(a => a.provider === session.agentType)
-          if (byProvider) return byProvider
-        }
-
-        if (session.agentId) {
-          const byLegacyId = agentStore.agents.find(a => a.id === session.agentId)
-          if (byLegacyId) return byLegacyId
-        }
-
-        return null
-      })()
+      const agent = resolveSessionAgent(session, agentStore.agents)
 
       // 获取智能体的模型配置
       let contextWindow = DEFAULT_CONTEXT_WINDOW

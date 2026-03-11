@@ -48,7 +48,6 @@ const dialogId = `dialog-${Date.now()}-${Math.random().toString(36).substring(2,
 
 const handleConfirm = () => {
   emit('confirm')
-  emit('update:visible', false)
 }
 
 const handleCancel = () => {
@@ -99,64 +98,62 @@ onUnmounted(() => {
 
 <template>
   <Teleport to="body">
-    <Transition name="confirm-dialog">
+    <div
+      v-if="visible"
+      class="confirm-dialog-overlay"
+      @click="handleOverlayClick"
+    >
       <div
-        v-if="visible"
-        class="confirm-dialog-overlay"
-        @click="handleOverlayClick"
+        ref="dialogRef"
+        class="confirm-dialog"
+        :class="`confirm-dialog--${type}`"
+        role="dialog"
+        aria-modal="true"
+        :aria-labelledby="`${dialogId}-title`"
       >
-        <div
-          ref="dialogRef"
-          class="confirm-dialog"
-          :class="`confirm-dialog--${type}`"
-          role="dialog"
-          aria-modal="true"
-          :aria-labelledby="`${dialogId}-title`"
-        >
-          <div class="confirm-dialog__header">
-            <div class="confirm-dialog__icon-wrapper">
-              <EaIcon
-                :name="iconMap[type]"
-                :size="24"
-                class="confirm-dialog__icon"
-                :class="`confirm-dialog__icon--${type}`"
-              />
-            </div>
-            <h3
-              :id="`${dialogId}-title`"
-              class="confirm-dialog__title"
-            >
-              {{ title || t('common.confirm') }}
-            </h3>
+        <div class="confirm-dialog__header">
+          <div class="confirm-dialog__icon-wrapper">
+            <EaIcon
+              :name="iconMap[type]"
+              :size="24"
+              class="confirm-dialog__icon"
+              :class="`confirm-dialog__icon--${type}`"
+            />
           </div>
-
-          <div
-            v-if="message"
-            class="confirm-dialog__body"
+          <h3
+            :id="`${dialogId}-title`"
+            class="confirm-dialog__title"
           >
-            <p class="confirm-dialog__message">
-              {{ message }}
-            </p>
-          </div>
+            {{ title || t('common.confirm') }}
+          </h3>
+        </div>
 
-          <div class="confirm-dialog__actions">
-            <EaButton
-              ref="cancelButtonRef"
-              type="secondary"
-              @click="handleCancel"
-            >
-              {{ cancelLabel || t('common.cancel') }}
-            </EaButton>
-            <EaButton
-              :type="confirmButtonType"
-              @click="handleConfirm"
-            >
-              {{ confirmLabel || t('common.confirm') }}
-            </EaButton>
-          </div>
+        <div
+          v-if="message"
+          class="confirm-dialog__body"
+        >
+          <p class="confirm-dialog__message">
+            {{ message }}
+          </p>
+        </div>
+
+        <div class="confirm-dialog__actions">
+          <EaButton
+            ref="cancelButtonRef"
+            type="secondary"
+            @click="handleCancel"
+          >
+            {{ cancelLabel || t('common.cancel') }}
+          </EaButton>
+          <EaButton
+            :type="confirmButtonType"
+            @click="handleConfirm"
+          >
+            {{ confirmLabel || t('common.confirm') }}
+          </EaButton>
         </div>
       </div>
-    </Transition>
+    </div>
   </Teleport>
 </template>
 
@@ -254,25 +251,31 @@ onUnmounted(() => {
 }
 
 /* Animations */
-.confirm-dialog-enter-active,
-.confirm-dialog-leave-active {
-  transition: opacity var(--transition-normal) var(--easing-default);
+.confirm-dialog-overlay {
+  animation: confirm-dialog-fade-in 160ms ease-out;
 }
 
-.confirm-dialog-enter-active .confirm-dialog,
-.confirm-dialog-leave-active .confirm-dialog {
-  transition: transform var(--transition-normal) var(--easing-default),
-              opacity var(--transition-normal) var(--easing-default);
+.confirm-dialog {
+  animation: confirm-dialog-scale-in 180ms ease-out;
 }
 
-.confirm-dialog-enter-from,
-.confirm-dialog-leave-to {
-  opacity: 0;
+@keyframes confirm-dialog-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
-.confirm-dialog-enter-from .confirm-dialog,
-.confirm-dialog-leave-to .confirm-dialog {
-  transform: scale(0.95);
-  opacity: 0;
+@keyframes confirm-dialog-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 </style>

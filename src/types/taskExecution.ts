@@ -102,6 +102,8 @@ export interface PlanExecutionTaskProgress {
   title: string
   status: string
   task_order: number
+  agent_id?: string | null
+  model_id?: string | null
   last_result_status: TaskExecutionResultStatus | null
   last_result_summary: string | null
   last_result_files: string[]

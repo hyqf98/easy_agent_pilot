@@ -4,6 +4,7 @@
  * 显示当前会话 token 使用情况，支持压缩功能
  */
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useTokenStore, type TokenLevel, formatTokenCount } from '@/stores/token'
 import { useSessionStore } from '@/stores/session'
 import EaButton from './EaButton.vue'
@@ -24,6 +25,7 @@ const emit = defineEmits<{
 
 const tokenStore = useTokenStore()
 const sessionStore = useSessionStore()
+const { t } = useI18n()
 
 // 是否显示 tooltip
 const showTooltip = ref(false)
@@ -52,7 +54,10 @@ const levelClass = computed(() => `token-progress--${tokenUsage.value.level}`)
 // tooltip 文本
 const tooltipText = computed(() => {
   const { used, limit } = tokenUsage.value
-  return `${formatTokenCount(used)} / ${formatTokenCount(limit)} tokens`
+  return t('token.usageTooltip', {
+    used: formatTokenCount(used),
+    limit: formatTokenCount(limit)
+  })
 })
 
 // 处理压缩按钮点击
@@ -96,6 +101,7 @@ function handleCompress() {
       type="ghost"
       size="small"
       class="token-progress__compress"
+      :title="t('token.compressTooltip')"
       @click="handleCompress"
     >
       <EaIcon name="minimize-2" />

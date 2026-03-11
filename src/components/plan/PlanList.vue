@@ -9,24 +9,27 @@ import { useProjectStore } from '@/stores/project'
 import type { Plan, PlanStatus, TaskStatus, UpdatePlanInput } from '@/types/plan'
 import PlanCreateDialog from './PlanCreateDialog.vue'
 import PlanEditDialog from './PlanEditDialog.vue'
+import PlanListEmptyState from './PlanListEmptyState.vue'
+import PlanListHeader from './PlanListHeader.vue'
 import PlanListItem from './PlanListItem.vue'
+import PlanListStatusTabs from './PlanListStatusTabs.vue'
 import PlanSplitConfigDialog from './PlanSplitConfigDialog.vue'
 import TaskSplitDialog from './TaskSplitDialog.vue'
 import type {
   AgentOption,
   ModelOption,
+  PlanListItemViewModel,
   PlanCreateFormState,
   PlanEditFormState,
-  PlanListItemViewModel,
+  PlanTabKey,
   PlanSplitConfigFormState,
+  ProjectOption,
   PlanTaskStats
 } from './planListShared'
 
 interface TaskStatusItem {
   status: TaskStatus
 }
-
-type PlanTabKey = 'draft' | 'splitting' | 'executing' | 'completed'
 
 const EMPTY_PLAN_TASK_STATS: PlanTaskStats = {
   total: 0,
@@ -40,6 +43,9 @@ const projectStore = useProjectStore()
 const agentStore = useAgentStore()
 const agentConfigStore = useAgentConfigStore()
 const confirmDialog = useConfirmDialog()
+const emit = defineEmits<{
+  (e: 'plan-click', plan: Plan): void
+}>()
 
 const planTaskStats = ref<Record<string, PlanTaskStats>>({})
 const selectedProjectIdForList = ref<string | null>(null)
@@ -102,14 +108,14 @@ const statusLabels: Record<PlanStatus, string> = {
 
 const statusColors: Record<PlanStatus, string> = {
   draft: 'gray',
-  planning: 'purple',
+  planning: 'orange',
   ready: 'yellow',
   executing: 'blue',
   completed: 'green',
   paused: 'orange'
 }
 
-const projectOptions = computed(() =>
+const projectOptions = computed<ProjectOption[]>(() =>
   projectStore.projects.map(project => ({
     label: project.name,
     value: project.id,
@@ -144,6 +150,8 @@ const statusTabCounts = computed<Record<PlanTabKey, number>>(() => ({
 const filteredPlans = computed(() =>
   plans.value.filter(plan => tabStatusMap[activeStatusTab.value].includes(plan.status))
 )
+
+const visiblePlanCount = computed(() => filteredPlans.value.length)
 
 const planItems = computed<PlanListItemViewModel[]>(() =>
   filteredPlans.value.map(plan => ({
@@ -258,6 +266,7 @@ async function loadPlanTaskStats(planList: Plan[]) {
 
 function selectPlan(plan: Plan) {
   planStore.setCurrentPlan(plan.id)
+  emit('plan-click', plan)
 }
 
 function handleListProjectChange(projectId: string) {
@@ -587,98 +596,22 @@ watch(
 
 <template>
   <div class="plan-list">
-    <div class="list-header">
-      <div class="list-header-top">
-        <h3 class="title">
-          <span class="title-icon">📋</span>
-          计划列表
-          <span
-            v-if="projectOptions.length > 0"
-            class="title-count"
-          >
-            {{ projectOptions.length }} 项
-          </span>
-        </h3>
-        <button
-          class="btn-create"
-          title="新建计划"
-          @click="openCreateDialog"
-        >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <path d="M12 5v14M5 12h14" />
-          </svg>
-        </button>
-      </div>
-
-      <div class="project-switcher">
-        <div class="project-switcher-meta">
-          <span class="project-switcher-label">当前项目</span>
-          <span
-            v-if="selectedListProject?.path"
-            class="project-switcher-path"
-            :title="selectedListProject.path"
-          >
-            {{ selectedListProject.path }}
-          </span>
-        </div>
-        <div class="project-switcher-control">
-          <select
-            v-model="selectedProjectIdForList"
-            class="project-switcher-select"
-            :title="selectedListProject?.path || '请选择项目'"
-            :disabled="projectOptions.length === 0"
-            @change="handleListProjectChange(($event.target as HTMLSelectElement).value)"
-          >
-            <option
-              value=""
-              disabled
-            >
-              请选择项目
-            </option>
-            <option
-              v-for="option in projectOptions"
-              :key="option.value"
-              :value="option.value"
-            >
-              {{ option.label }}
-            </option>
-          </select>
-          <span class="project-switcher-chevron">
-            <svg
-              width="12"
-              height="12"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <path d="M6 9l6 6 6-6" />
-            </svg>
-          </span>
-        </div>
-      </div>
-    </div>
+    <PlanListHeader
+      :visible-plan-count="visiblePlanCount"
+      :selected-project-id="selectedProjectIdForList"
+      :selected-project-path="selectedListProject?.path || ''"
+      :project-options="projectOptions"
+      @create="openCreateDialog"
+      @update:selected-project-id="selectedProjectIdForList = $event; handleListProjectChange($event)"
+    />
 
     <div class="list-body">
-      <div class="status-tabs">
-        <button
-          v-for="tab in statusTabs"
-          :key="tab.key"
-          class="status-tab"
-          :class="{ active: activeStatusTab === tab.key }"
-          @click="activeStatusTab = tab.key"
-        >
-          <span class="status-tab-label">{{ tab.label }}</span>
-          <span class="status-tab-count">{{ statusTabCounts[tab.key] }}</span>
-        </button>
-      </div>
+      <PlanListStatusTabs
+        :tabs="statusTabs"
+        :active-tab="activeStatusTab"
+        :counts="statusTabCounts"
+        @update:active-tab="activeStatusTab = $event"
+      />
 
       <div
         v-if="planItems.length > 0"
@@ -695,20 +628,10 @@ watch(
         />
       </div>
 
-      <div
+      <PlanListEmptyState
         v-else
-        class="empty-state"
-      >
-        <div class="empty-icon">
-          📝
-        </div>
-        <p class="empty-title">
-          {{ plans.length === 0 ? '暂无计划' : `${activeStatusTabLabel}暂无计划` }}
-        </p>
-        <p class="hint">
-          点击上方"新建"按钮创建计划
-        </p>
-      </div>
+        :title="plans.length === 0 ? '暂无计划' : `${activeStatusTabLabel}暂无计划`"
+      />
     </div>
 
     <PlanCreateDialog
@@ -757,148 +680,6 @@ watch(
   background-color: var(--color-bg-secondary, #f8fafc);
 }
 
-.list-header {
-  display: flex;
-  flex-direction: column;
-  gap: 0.625rem;
-  padding: 0.75rem 0.875rem;
-  border-bottom: 1px solid var(--color-border, #e2e8f0);
-  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-}
-
-.list-header-top {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.title {
-  margin: 0;
-  font-size: var(--font-size-sm, 13px);
-  font-weight: var(--font-weight-semibold, 600);
-  color: var(--color-text-primary, #1e293b);
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2, 0.5rem);
-}
-
-.title-icon {
-  font-size: 1rem;
-}
-
-.title-count {
-  display: inline-flex;
-  align-items: center;
-  height: 1.125rem;
-  padding: 0 0.375rem;
-  border-radius: var(--radius-full, 9999px);
-  font-size: 0.625rem;
-  font-weight: var(--font-weight-medium, 500);
-  color: var(--color-text-secondary, #64748b);
-  background-color: #eef2ff;
-  border: 1px solid #e2e8f0;
-}
-
-.btn-create {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: 1px solid #bfdbfe;
-  border-radius: var(--radius-md, 8px);
-  background-color: #eff6ff;
-  color: #3b82f6;
-  cursor: pointer;
-  transition: all var(--transition-fast, 150ms) var(--easing-default);
-}
-
-.btn-create:hover {
-  background-color: #dbeafe;
-  border-color: #93c5fd;
-  color: #2563eb;
-  transform: translateY(-1px);
-}
-
-.project-switcher {
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 0.375rem;
-  padding: 0.625rem;
-  border-radius: var(--radius-md, 8px);
-  border: 1px solid #e2e8f0;
-  background-color: #ffffff;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
-}
-
-.project-switcher-meta {
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-}
-
-.project-switcher-label {
-  font-size: var(--font-size-xs, 12px);
-  color: var(--color-text-secondary, #64748b);
-  font-weight: var(--font-weight-medium, 500);
-}
-
-.project-switcher-path {
-  max-width: 100%;
-  font-size: 0.6875rem;
-  color: #94a3b8;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.project-switcher-control {
-  width: 100%;
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
-.project-switcher-select {
-  width: 100%;
-  min-width: 0;
-  height: 2rem;
-  padding: 0 2rem 0 0.625rem;
-  border: 1px solid var(--color-border, #e2e8f0);
-  border-radius: var(--radius-md, 8px);
-  background-color: var(--color-surface, #fff);
-  color: var(--color-text-primary, #1e293b);
-  font-size: var(--font-size-xs, 12px);
-  cursor: pointer;
-  transition: all var(--transition-fast, 150ms);
-  appearance: none;
-}
-
-.project-switcher-select:focus {
-  outline: none;
-  border-color: var(--color-primary, #60a5fa);
-  box-shadow: 0 0 0 3px var(--color-primary-light, #dbeafe);
-}
-
-.project-switcher-select:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-  background-color: #f8fafc;
-}
-
-.project-switcher-chevron {
-  position: absolute;
-  right: 0.625rem;
-  top: 50%;
-  transform: translateY(-50%);
-  color: #94a3b8;
-  pointer-events: none;
-}
-
 .list-body {
   flex: 1;
   overflow-y: auto;
@@ -924,88 +705,9 @@ watch(
   background-color: var(--color-border-dark, #cbd5e1);
 }
 
-.status-tabs {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.375rem;
-  margin-bottom: 0.625rem;
-}
-
-.status-tab {
-  border: 1px solid var(--color-border, #e2e8f0);
-  border-radius: var(--radius-md, 8px);
-  padding: 0.375rem 0.5rem;
-  background-color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  cursor: pointer;
-  transition: all var(--transition-fast, 150ms);
-}
-
-.status-tab:hover {
-  border-color: #bfdbfe;
-  background-color: #f8fbff;
-}
-
-.status-tab.active {
-  border-color: #60a5fa;
-  background-color: #eff6ff;
-  box-shadow: 0 0 0 2px #dbeafe;
-}
-
-.status-tab-label {
-  font-size: var(--font-size-xs, 12px);
-  color: var(--color-text-primary, #1e293b);
-  font-weight: var(--font-weight-medium, 500);
-}
-
-.status-tab-count {
-  min-width: 1.25rem;
-  height: 1.125rem;
-  border-radius: var(--radius-full, 9999px);
-  background-color: #f1f5f9;
-  color: #475569;
-  font-size: 0.6875rem;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 0.375rem;
-}
-
-.status-tab.active .status-tab-count {
-  background-color: #dbeafe;
-  color: #1d4ed8;
-}
-
 .plan-items {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1, 0.25rem);
-}
-
-.empty-state {
-  text-align: center;
-  padding: var(--spacing-8, 2rem) var(--spacing-4, 1rem);
-  color: var(--color-text-secondary, #64748b);
-}
-
-.empty-icon {
-  font-size: 2.5rem;
-  margin-bottom: var(--spacing-3, 0.75rem);
-  opacity: 0.6;
-}
-
-.empty-title {
-  margin: 0 0 var(--spacing-2, 0.5rem);
-  font-size: var(--font-size-sm, 13px);
-  font-weight: var(--font-weight-medium, 500);
-  color: var(--color-text-primary, #1e293b);
-}
-
-.hint {
-  font-size: var(--font-size-xs, 12px);
-  color: var(--color-text-tertiary, #94a3b8);
-  margin: 0;
 }
 </style>

@@ -13,6 +13,7 @@ export { default as EaModal } from './EaModal.vue'
 export { default as EaJsonViewer } from './EaJsonViewer.vue'
 export { default as EaInput } from './EaInput.vue'
 export { default as EaTag } from './EaTag.vue'
+export { default as EaStateBlock } from './EaStateBlock.vue'
 
 // 组件类型导出
 export type { EaButtonProps, ButtonType, ButtonSize } from './EaButton.vue'

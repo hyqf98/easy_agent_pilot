@@ -2,51 +2,20 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useI18n } from 'vue-i18n'
-import { EaButton, EaIcon, EaModal, EaSelect } from '@/components/common'
+import { EaButton, EaIcon, EaSelect } from '@/components/common'
 import { useAgentStore } from '@/stores/agent'
-
-interface ScannedCliSession {
-  session_id: string
-  session_path: string
-  project_path: string | null
-  first_message: string | null
-  message_count: number
-  created_at: string
-  updated_at: string
-}
-
-interface AgentCliSessionsResult {
-  agent_id: string
-  cli_name: string
-  session_root: string
-  sessions: ScannedCliSession[]
-  project_paths: string[]
-}
-
-interface CliSessionMessage {
-  line_no: number
-  message_type: string
-  role: string | null
-  timestamp: string | null
-  content: string | null
-  raw_json: string
-}
-
-interface CliSessionDetail {
-  session_id: string
-  session_path: string
-  project_path: string | null
-  first_message: string | null
-  message_count: number
-  created_at: string
-  updated_at: string
-  messages: CliSessionMessage[]
-}
-
-interface DeleteCliSessionsResult {
-  deleted_count: number
-  failed_paths: string[]
-}
+import CliSessionBrowser from '@/components/settings/session-manager/CliSessionBrowser.vue'
+import CliSessionDeleteModal from '@/components/settings/session-manager/CliSessionDeleteModal.vue'
+import CliSessionDetailModal from '@/components/settings/session-manager/CliSessionDetailModal.vue'
+import {
+  buildCliDeleteErrorMessage,
+} from '@/utils/sessionManager'
+import type {
+  AgentCliSessionsResult,
+  CliSessionDetail,
+  DeleteCliSessionsResult,
+  ScannedCliSession
+} from '@/types/cliSessionManager'
 
 const { t } = useI18n()
 const agentStore = useAgentStore()
@@ -83,8 +52,6 @@ const selectedCount = computed(() => selectedSessions.value.length)
 const allVisibleSelected = computed(() =>
   sessions.value.length > 0 && selectedCount.value === sessions.value.length
 )
-const isBulkDelete = computed(() => pendingDeleteSessions.value.length > 1)
-const deletePreviewSessions = computed(() => pendingDeleteSessions.value.slice(0, 5))
 
 const agentOptions = computed(() =>
   cliAgents.value.map(agent => {
@@ -125,53 +92,6 @@ const groupedSessions = computed(() => {
 
   return groups
 })
-
-const formatRelativeTime = (value: string) => {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return value
-  }
-
-  const now = new Date()
-  const diffMs = now.getTime() - date.getTime()
-  const diffMins = Math.floor(diffMs / 60000)
-  const diffHours = Math.floor(diffMs / 3600000)
-  const diffDays = Math.floor(diffMs / 86400000)
-
-  if (diffMins < 1) return t('settings.sessionManager.justNow')
-  if (diffMins < 60) return t('settings.sessionManager.minutesAgo', { n: diffMins })
-  if (diffHours < 24) return t('settings.sessionManager.hoursAgo', { n: diffHours })
-  if (diffDays < 7) return t('settings.sessionManager.daysAgo', { n: diffDays })
-
-  return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
-
-const formatTime = (value: string) => {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return value
-  }
-  return date.toLocaleString()
-}
-
-const displayMessage = (session: ScannedCliSession) => {
-  return session.first_message || t('settings.sessionManager.noPreview')
-}
-
-const formatMessageCount = (value: number) => {
-  return value >= 0 ? String(value) : '-'
-}
-
-const shortSessionId = (sessionId: string) => {
-  return sessionId.length > 8 ? `${sessionId.slice(0, 8)}...` : sessionId
-}
-
-const getProjectName = (path: string) => {
-  if (path === t('settings.sessionManager.noProject')) {
-    return path
-  }
-  return path.split('/').pop() || path.split('\\').pop() || path
-}
 
 const loadSessions = async () => {
   sessionsError.value = ''
@@ -270,10 +190,8 @@ const toggleSelectAllSessions = () => {
   selectedSessionPaths.value = sessions.value.map(session => session.session_path)
 }
 
-const buildDeleteErrorMessage = (failedPaths: string[]) => {
-  if (!failedPaths.length) return ''
-  return `${t('settings.sessionManager.partialDeleteFailed', { n: failedPaths.length })}\n${failedPaths.join('\n')}`
-}
+const buildDeleteErrorMessage = (failedPaths: string[]) =>
+  buildCliDeleteErrorMessage(failedPaths, n => t('settings.sessionManager.partialDeleteFailed', { n }))
 
 const confirmDelete = async () => {
   if (!pendingDeleteSessions.value.length) return
@@ -321,53 +239,6 @@ const confirmDelete = async () => {
   } finally {
     deleting.value = false
   }
-}
-
-// 获取消息类型图标
-const getMessageIcon = (type: string) => {
-  switch (type) {
-    case 'user': return 'user'
-    case 'assistant': return 'bot'
-    case 'summary': return 'file-text'
-    case 'tool_use': return 'wrench'
-    case 'tool_result': return 'terminal'
-    case 'reasoning': return 'brain'
-    case 'system': return 'settings'
-    case 'progress': return 'activity'
-    default: return 'message-square'
-  }
-}
-
-// 获取消息类型的颜色
-const getMessageColor = (type: string) => {
-  switch (type) {
-    case 'user': return 'var(--color-primary)'
-    case 'assistant': return 'var(--color-success)'
-    case 'summary': return 'var(--color-warning)'
-    case 'tool_use': return 'var(--color-primary)'
-    case 'tool_result': return 'var(--color-success)'
-    case 'reasoning': return 'var(--color-warning)'
-    case 'system': return 'var(--color-warning)'
-    case 'progress': return 'var(--color-primary)'
-    default: return 'var(--color-text-secondary)'
-  }
-}
-
-const getMessageDisplayContent = (message: CliSessionMessage) => {
-  const content = message.content?.trim()
-  if (content) {
-    return content
-  }
-
-  if (message.message_type === 'file-history-snapshot') {
-    return '[File Snapshot] 历史文件快照已更新'
-  }
-
-  if (message.message_type === 'progress') {
-    return '[Progress] 当前记录未包含可直接展示的文本内容'
-  }
-
-  return '[No parsed content] 请展开 Raw JSON 查看原始记录'
 }
 
 watch(cliAgents, (agents) => {
@@ -465,350 +336,40 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div
+    <CliSessionBrowser
       v-if="hasCliAgents"
-      class="settings-card"
-    >
-      <div class="settings-card__header">
-        <h4 class="settings-card__title settings-card__title--no-border">
-          {{ t('settings.sessionManager.sessionList') }}
-        </h4>
-        <div class="header-meta">
-          <span class="cli-badge">{{ cliName || '-' }}</span>
-          <span class="session-count">{{ sessions.length }} {{ t('settings.sessionManager.sessionCount') }}</span>
-          <span
-            v-if="selectedCount > 0"
-            class="selected-count"
-          >
-            {{ t('settings.sessionManager.selectedCount', { n: selectedCount }) }}
-          </span>
-          <EaButton
-            v-if="sessions.length > 0"
-            type="ghost"
-            size="small"
-            @click="toggleSelectAllSessions"
-          >
-            {{ allVisibleSelected ? t('settings.sessionManager.clearSelection') : t('settings.sessionManager.selectAll') }}
-          </EaButton>
-          <EaButton
-            v-if="sessions.length > 0"
-            type="danger"
-            size="small"
-            :disabled="selectedCount === 0"
-            @click="requestDeleteSelected"
-          >
-            {{ t('settings.sessionManager.batchDelete') }}
-          </EaButton>
-        </div>
-      </div>
+      :cli-name="cliName"
+      :session-root="sessionRoot"
+      :sessions="sessions"
+      :grouped-sessions="groupedSessions"
+      :is-loading-sessions="isLoadingSessions"
+      :sessions-error="sessionsError"
+      :selected-session-paths="selectedSessionPaths"
+      :selected-count="selectedCount"
+      :all-visible-selected="allVisibleSelected"
+      @refresh="loadSessions"
+      @toggle-select-all="toggleSelectAllSessions"
+      @request-delete-selected="requestDeleteSelected"
+      @selection-change="handleSessionSelectionChange"
+      @open-detail="openDetail"
+      @request-delete="requestDelete"
+    />
 
-      <div
-        v-if="sessionRoot"
-        class="root-path"
-      >
-        <EaIcon
-          name="folder"
-          :size="12"
-        />
-        <code class="root-path__value">{{ sessionRoot }}</code>
-      </div>
-
-      <div
-        v-if="isLoadingSessions"
-        class="loading"
-      >
-        <EaIcon
-          name="loader"
-          :size="20"
-          spin
-        />
-        <span>{{ t('common.loading') }}</span>
-      </div>
-
-      <div
-        v-else-if="sessionsError"
-        class="error"
-      >
-        <EaIcon
-          name="alert-circle"
-          :size="18"
-        />
-        <span>{{ sessionsError }}</span>
-      </div>
-
-      <div
-        v-else-if="sessions.length === 0"
-        class="empty-state"
-      >
-        <EaIcon
-          name="inbox"
-          :size="24"
-        />
-        <span>{{ t('settings.sessionManager.noSessions') }}</span>
-      </div>
-
-      <div
-        v-else
-        class="session-groups"
-      >
-        <div
-          v-for="(groupSessions, projectPath) in groupedSessions"
-          :key="projectPath"
-          class="session-group"
-        >
-          <div class="session-group__header">
-            <EaIcon
-              name="folder"
-              :size="14"
-            />
-            <span class="session-group__name">{{ getProjectName(projectPath) }}</span>
-            <span class="session-group__count">{{ groupSessions.length }}</span>
-          </div>
-
-          <div class="session-group__list">
-            <div
-              v-for="session in groupSessions"
-              :key="session.session_path"
-              :class="['session-card', { 'session-card--selected': selectedSessionPathSet.has(session.session_path) }]"
-            >
-              <div class="session-card__select">
-                <input
-                  :checked="selectedSessionPathSet.has(session.session_path)"
-                  class="session-card__checkbox"
-                  type="checkbox"
-                  @change="handleSessionSelectionChange(session.session_path, $event)"
-                >
-              </div>
-              <div class="session-card__main">
-                <div class="session-card__header">
-                  <span class="session-card__id">{{ shortSessionId(session.session_id) }}</span>
-                  <span class="session-card__time">{{ formatRelativeTime(session.updated_at) }}</span>
-                </div>
-                <p class="session-card__preview">
-                  {{ displayMessage(session) }}
-                </p>
-                <div class="session-card__footer">
-                  <span class="session-card__messages">
-                    <EaIcon
-                      name="message-square"
-                      :size="12"
-                    />
-                    {{ formatMessageCount(session.message_count) }}
-                  </span>
-                </div>
-              </div>
-
-              <div class="session-card__actions">
-                <button
-                  class="action-btn action-btn--view"
-                  :title="t('settings.sessionManager.view')"
-                  @click="openDetail(session)"
-                >
-                  <EaIcon
-                    name="eye"
-                    :size="14"
-                  />
-                </button>
-                <button
-                  class="action-btn action-btn--delete"
-                  :title="t('settings.sessionManager.delete')"
-                  @click="requestDelete(session)"
-                >
-                  <EaIcon
-                    name="trash-2"
-                    :size="14"
-                  />
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 详情弹窗 -->
-    <EaModal
+    <CliSessionDetailModal
       v-model:visible="showDetailModal"
-      size="large"
-    >
-      <template #header>
-        <div class="modal-title-wrap">
-          <h3 class="modal-title">{{ t('settings.sessionManager.detailTitle') }}</h3>
-          <span
-            v-if="currentDetail"
-            class="modal-subtitle"
-          >
-            {{ currentDetail.message_count }} {{ t('settings.sessionManager.messages') }}
-          </span>
-        </div>
-      </template>
+      :loading="detailLoading"
+      :error="detailError"
+      :detail="currentDetail"
+    />
 
-      <div
-        v-if="detailLoading"
-        class="loading"
-      >
-        <EaIcon
-          name="loader"
-          :size="20"
-          spin
-        />
-        <span>{{ t('common.loading') }}</span>
-      </div>
-
-      <div
-        v-else-if="detailError"
-        class="error"
-      >
-        <EaIcon
-          name="alert-circle"
-          :size="18"
-        />
-        <span>{{ detailError }}</span>
-      </div>
-
-      <div
-        v-else-if="currentDetail"
-        class="detail"
-      >
-        <div class="detail-summary">
-          <div class="detail-summary__item">
-            <EaIcon
-              name="hash"
-              :size="14"
-            />
-            <span class="detail-summary__label">ID:</span>
-            <code class="detail-summary__value">{{ currentDetail.session_id }}</code>
-          </div>
-          <div class="detail-summary__item">
-            <EaIcon
-              name="clock"
-              :size="14"
-            />
-            <span class="detail-summary__label">{{ t('settings.sessionManager.updatedAt') }}:</span>
-            <span>{{ formatTime(currentDetail.updated_at) }}</span>
-          </div>
-          <div
-            v-if="currentDetail.project_path"
-            class="detail-summary__item"
-          >
-            <EaIcon
-              name="folder"
-              :size="14"
-            />
-            <span class="detail-summary__label">{{ t('settings.sessionManager.projectPath') }}:</span>
-            <span class="detail-summary__value detail-summary__value--truncate">{{ currentDetail.project_path }}</span>
-          </div>
-        </div>
-
-        <div class="message-list">
-          <div
-            v-for="msg in currentDetail.messages"
-            :key="`${msg.line_no}-${msg.message_type}`"
-            class="message-item"
-            :class="`message-item--${msg.message_type}`"
-          >
-            <div class="message-item__header">
-              <div class="message-item__type">
-                <EaIcon
-                  :name="getMessageIcon(msg.message_type)"
-                  :size="14"
-                  :style="{ color: getMessageColor(msg.message_type) }"
-                />
-                <span>{{ msg.message_type }}</span>
-                <span
-                  v-if="msg.role"
-                  class="message-item__role"
-                >
-                  {{ msg.role }}
-                </span>
-              </div>
-              <span
-                v-if="msg.timestamp"
-                class="message-item__time"
-              >
-                {{ formatTime(msg.timestamp) }}
-              </span>
-            </div>
-
-            <div
-              v-if="getMessageDisplayContent(msg)"
-              class="message-item__content"
-            >
-              {{ getMessageDisplayContent(msg) }}
-            </div>
-
-            <details class="message-item__raw">
-              <summary>{{ t('settings.sessionManager.rawJson') }}</summary>
-              <pre>{{ msg.raw_json }}</pre>
-            </details>
-          </div>
-        </div>
-      </div>
-    </EaModal>
-
-    <!-- 删除确认弹窗 -->
-    <EaModal
+    <CliSessionDeleteModal
       v-model:visible="showDeleteModal"
-    >
-      <template #header>
-        <h3 class="modal-title">
-          {{ isBulkDelete ? t('settings.sessionManager.confirmBatchDeleteTitle') : t('settings.sessionManager.confirmDeleteTitle') }}
-        </h3>
-      </template>
-
-      <p class="confirm-text">
-        {{ isBulkDelete ? t('settings.sessionManager.confirmBatchDeleteDesc', { n: pendingDeleteSessions.length }) : t('settings.sessionManager.confirmDeleteDesc') }}
-      </p>
-      <div
-        v-if="pendingDeleteSessions.length > 0"
-        class="confirm-session-list"
-      >
-        <div
-          v-for="session in deletePreviewSessions"
-          :key="session.session_path"
-          class="confirm-session"
-        >
-          <div class="confirm-session__preview">
-            {{ displayMessage(session) }}
-          </div>
-          <code class="confirm-session__path">{{ session.session_path }}</code>
-        </div>
-        <div
-          v-if="pendingDeleteSessions.length > deletePreviewSessions.length"
-          class="confirm-session__more"
-        >
-          {{ t('settings.sessionManager.moreSelected', { n: pendingDeleteSessions.length - deletePreviewSessions.length }) }}
-        </div>
-      </div>
-
-      <div
-        v-if="deleteError"
-        class="error"
-      >
-        <EaIcon
-          name="alert-circle"
-          :size="16"
-        />
-        <span>{{ deleteError }}</span>
-      </div>
-
-      <template #footer>
-        <EaButton
-          type="secondary"
-          :disabled="deleting"
-          @click="closeDeleteModal"
-        >
-          {{ t('common.cancel') }}
-        </EaButton>
-        <EaButton
-          type="danger"
-          :loading="deleting"
-          @click="confirmDelete"
-        >
-          {{ t('settings.sessionManager.delete') }}
-        </EaButton>
-      </template>
-    </EaModal>
+      :deleting="deleting"
+      :sessions="pendingDeleteSessions"
+      :error="deleteError"
+      @confirm="confirmDelete"
+      @update:visible="value => !value && closeDeleteModal()"
+    />
   </div>
 </template>
 
@@ -835,13 +396,6 @@ onMounted(async () => {
   border-radius: var(--radius-lg);
 }
 
-.settings-card__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-3);
-}
-
 .settings-card__title {
   margin: 0;
   font-size: var(--font-size-base);
@@ -849,38 +403,6 @@ onMounted(async () => {
   color: var(--color-text-primary);
   padding-bottom: var(--spacing-3);
   border-bottom: 1px solid var(--color-border);
-}
-
-.settings-card__title--no-border {
-  padding-bottom: 0;
-  border-bottom: none;
-}
-
-.header-meta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--spacing-3);
-  justify-content: flex-end;
-}
-
-.cli-badge {
-  padding: 2px 8px;
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-primary);
-  background-color: var(--color-primary-bg);
-  border-radius: var(--radius-sm);
-}
-
-.session-count {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
-.selected-count {
-  font-size: var(--font-size-xs);
-  color: var(--color-primary);
 }
 
 .toolbar {
@@ -910,21 +432,6 @@ onMounted(async () => {
   to { transform: rotate(360deg); }
 }
 
-.root-path {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  padding: var(--spacing-2) var(--spacing-3);
-  background-color: var(--color-bg-tertiary);
-  border-radius: var(--radius-sm);
-}
-
-.root-path__value {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
-  word-break: break-all;
-}
-
 .loading,
 .error,
 .empty-state {
@@ -941,366 +448,8 @@ onMounted(async () => {
   color: var(--color-error);
   white-space: pre-wrap;
 }
-
-/* Session Groups */
-.session-groups {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-4);
-}
-
-.session-group {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-}
-
-.session-group__header {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  padding: var(--spacing-2) 0;
-  color: var(--color-text-secondary);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.session-group__name {
-  flex: 1;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-group__count {
-  padding: 1px 6px;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  background-color: var(--color-bg-tertiary);
-  border-radius: var(--radius-sm);
-}
-
-.session-group__list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: var(--spacing-3);
-}
-
-/* Session Card */
-.session-card {
-  display: flex;
-  gap: var(--spacing-2);
-  padding: var(--spacing-3);
-  background-color: var(--color-bg-tertiary);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  transition: border-color 0.2s, box-shadow 0.2s;
-}
-
-.session-card--selected {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 20%, transparent);
-}
-
-.session-card:hover {
-  border-color: var(--color-primary);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-.session-card__select {
-  display: flex;
-  align-items: flex-start;
-  padding-top: 2px;
-}
-
-.session-card__checkbox {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  accent-color: var(--color-primary);
-  cursor: pointer;
-}
-
-.session-card__main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-}
-
-.session-card__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-2);
-}
-
-.session-card__id {
-  font-size: var(--font-size-xs);
-  font-family: var(--font-family-mono);
-  color: var(--color-text-tertiary);
-}
-
-.session-card__time {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
-.session-card__preview {
-  flex: 1;
-  margin: 0;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-primary);
-  line-height: 1.4;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.session-card__footer {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-3);
-}
-
-.session-card__messages {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
-.session-card__actions {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-}
-
-.action-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-sm);
-  background-color: transparent;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  transition: background-color 0.2s, color 0.2s;
-}
-
-.action-btn:hover {
-  background-color: var(--color-bg-secondary);
-}
-
-.action-btn--view:hover {
-  color: var(--color-primary);
-}
-
-.action-btn--delete:hover {
-  color: var(--color-error);
-}
-
-/* Modal */
-.modal-title-wrap {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-3);
-}
-
-.modal-title {
-  margin: 0;
-  font-size: var(--font-size-lg);
-  font-weight: var(--font-weight-semibold);
-}
-
-.modal-subtitle {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-tertiary);
-}
-
-/* Detail */
-.detail {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-4);
-}
-
-.detail-summary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-4);
-  padding: var(--spacing-3);
-  background-color: var(--color-bg-tertiary);
-  border-radius: var(--radius-md);
-}
-
-.detail-summary__item {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
-}
-
-.detail-summary__label {
-  color: var(--color-text-tertiary);
-}
-
-.detail-summary__value {
-  font-family: var(--font-family-mono);
-  color: var(--color-text-primary);
-}
-
-.detail-summary__value--truncate {
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Message List */
-.message-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  max-height: 60vh;
-  overflow: auto;
-  padding-right: var(--spacing-2);
-}
-
-.message-item {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background-color: var(--color-bg-tertiary);
-  overflow: hidden;
-}
-
-.message-item--user {
-  border-left: 3px solid var(--color-primary);
-}
-
-.message-item--assistant {
-  border-left: 3px solid var(--color-success);
-}
-
-.message-item__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-2);
-  padding: var(--spacing-2) var(--spacing-3);
-  background-color: var(--color-bg-secondary);
-}
-
-.message-item__type {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-medium);
-  text-transform: capitalize;
-}
-
-.message-item__role {
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-  background-color: var(--color-bg-tertiary);
-  color: var(--color-text-tertiary);
-  text-transform: none;
-}
-
-.message-item__time {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
-.message-item__content {
-  padding: var(--spacing-3);
-  font-size: var(--font-size-sm);
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--color-text-primary);
-}
-
-.message-item__raw {
-  border-top: 1px solid var(--color-border);
-}
-
-.message-item__raw summary {
-  padding: var(--spacing-2) var(--spacing-3);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  cursor: pointer;
-}
-
-.message-item__raw summary:hover {
-  color: var(--color-text-secondary);
-}
-
-.message-item__raw pre {
-  margin: 0;
-  padding: var(--spacing-3);
-  font-size: var(--font-size-xs);
-  background-color: var(--color-bg-secondary);
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 200px;
-  overflow: auto;
-}
-
-/* Confirm Dialog */
-.confirm-text {
-  margin: 0;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-primary);
-}
-
-.confirm-session {
-  padding: var(--spacing-3);
-  background-color: var(--color-bg-tertiary);
-  border-radius: var(--radius-md);
-}
-
-.confirm-session-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  margin-top: var(--spacing-3);
-}
-
-.confirm-session__preview {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-primary);
-  margin-bottom: var(--spacing-2);
-}
-
-.confirm-session__path {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  word-break: break-all;
-}
-
-.confirm-session__more {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  text-align: center;
-}
-
 @media (max-width: 860px) {
   .toolbar {
-    grid-template-columns: 1fr;
-  }
-
-  .session-group__list {
     grid-template-columns: 1fr;
   }
 }

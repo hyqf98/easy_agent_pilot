@@ -231,10 +231,16 @@ function handleStartExecution() {
   max-width: 400px;
   display: flex;
   flex-direction: column;
-  background-color: var(--color-bg-tertiary, #f1f5f9);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-surface) 96%, #ffffff) 0%,
+      color-mix(in srgb, var(--color-bg-secondary) 92%, #f8fbff) 100%
+    );
   border-radius: var(--radius-lg, 12px);
-  transition: background-color var(--transition-fast, 150ms);
-  border: 2px solid transparent;
+  transition: background-color var(--transition-fast, 150ms), border-color var(--transition-fast, 150ms);
+  border: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
 }
 
 .column-header {
@@ -305,7 +311,8 @@ function handleStartExecution() {
 
 .column-count {
   padding: 0.125rem 0.5rem;
-  background-color: var(--color-surface, #fff);
+  background-color: color-mix(in srgb, var(--color-surface) 88%, var(--color-bg-secondary));
+  border: 1px solid color-mix(in srgb, var(--color-border) 56%, transparent);
   border-radius: var(--radius-full, 9999px);
   font-size: var(--font-size-xs, 12px);
   font-weight: var(--font-weight-medium, 500);
@@ -339,6 +346,15 @@ function handleStartExecution() {
 }
 
 .drag-item {
+  padding: 0.375rem;
+  border: 1px dashed color-mix(in srgb, var(--color-border-dark) 72%, transparent);
+  border-radius: calc(var(--radius-md, 8px) + 2px);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-surface) 78%, transparent),
+      color-mix(in srgb, var(--color-bg-secondary) 62%, transparent)
+    );
   cursor: grab;
   touch-action: none;
 }
@@ -365,9 +381,15 @@ function handleStartExecution() {
   font-size: var(--font-size-xs, 12px);
   color: var(--color-text-tertiary, #94a3b8);
   min-height: 80px;
-  border: 2px dashed var(--color-border, #e2e8f0);
+  border: 2px dashed color-mix(in srgb, var(--color-border-dark) 72%, transparent);
   border-radius: var(--radius-md, 8px);
   margin: var(--spacing-2, 0.5rem);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-surface) 82%, transparent),
+      color-mix(in srgb, var(--color-bg-secondary) 76%, transparent)
+    );
 }
 
 /* vuedraggable 拖拽样式 */
@@ -387,5 +409,46 @@ function handleStartExecution() {
   opacity: 0.8;
   background: #e0f2fe !important;
   cursor: grabbing !important;
+}
+
+[data-theme='dark'] .kanban-column {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-surface) 94%, #0f172a) 0%,
+      color-mix(in srgb, var(--color-bg-secondary) 90%, #020617) 100%
+    );
+  border-color: rgba(96, 165, 250, 0.12);
+  box-shadow: 0 16px 34px rgba(2, 6, 23, 0.34);
+}
+
+[data-theme='dark'] .column-label {
+  color: var(--color-text-primary, #e2e8f0);
+}
+
+[data-theme='dark'] .column-count {
+  background-color: rgba(15, 23, 42, 0.56);
+  border-color: rgba(148, 163, 184, 0.18);
+}
+
+[data-theme='dark'] .empty-column {
+  color: rgba(203, 213, 225, 0.72);
+  border-color: rgba(148, 163, 184, 0.28);
+  background:
+    linear-gradient(
+      180deg,
+      rgba(15, 23, 42, 0.28),
+      rgba(30, 41, 59, 0.4)
+    );
+}
+
+[data-theme='dark'] .drag-item {
+  border-color: rgba(148, 163, 184, 0.26);
+  background:
+    linear-gradient(
+      180deg,
+      rgba(15, 23, 42, 0.18),
+      rgba(30, 41, 59, 0.34)
+    );
 }
 </style>

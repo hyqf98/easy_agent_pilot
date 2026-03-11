@@ -1,7 +1,11 @@
 use anyhow::Result;
+use rusqlite::{types::Null, CachedStatement, Connection, Params, Row, ToSql};
 use serde::{Deserialize, Serialize};
 
-use super::support::{now_rfc3339, open_db_connection, open_db_connection_with_foreign_keys};
+use super::support::{
+    bind_value, now_rfc3339, open_db_connection, open_db_connection_with_foreign_keys,
+    UpdateSqlBuilder,
+};
 
 /// 任务数据结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,6 +115,10 @@ pub struct UpdateTaskInput {
     #[serde(default)]
     pub assignee: UpdateField<String>,
     #[serde(default)]
+    pub agent_id: UpdateField<String>,
+    #[serde(default)]
+    pub model_id: UpdateField<String>,
+    #[serde(default)]
     pub session_id: UpdateField<String>,
     #[serde(default)]
     pub progress_file: UpdateField<String>,
@@ -148,6 +156,161 @@ pub struct ReorderTasksInput {
 pub struct TaskOrderItem {
     pub id: String,
     pub order: i32,
+}
+
+fn has_update<T>(field: &UpdateField<T>) -> bool {
+    !matches!(field, UpdateField::Missing)
+}
+
+fn push_update<T>(builder: &mut UpdateSqlBuilder, column: &str, field: &UpdateField<T>) {
+    builder.push(column, has_update(field));
+}
+
+fn bind_update_field<T: ToSql>(
+    stmt: &mut CachedStatement<'_>,
+    param_index: &mut usize,
+    field: &UpdateField<T>,
+) -> rusqlite::Result<()> {
+    match field {
+        UpdateField::Value(value) => stmt.raw_bind_parameter(*param_index, value)?,
+        UpdateField::Null => stmt.raw_bind_parameter(*param_index, Null)?,
+        UpdateField::Missing => return Ok(()),
+    }
+
+    *param_index += 1;
+    Ok(())
+}
+
+fn bind_update_json<T: Serialize>(
+    stmt: &mut CachedStatement<'_>,
+    param_index: &mut usize,
+    field: &UpdateField<T>,
+    fallback: &str,
+) -> rusqlite::Result<()> {
+    match field {
+        UpdateField::Value(value) => {
+            let json = serde_json::to_string(value).unwrap_or_else(|_| fallback.to_string());
+            stmt.raw_bind_parameter(*param_index, json)?;
+        }
+        UpdateField::Null => stmt.raw_bind_parameter(*param_index, Null)?,
+        UpdateField::Missing => return Ok(()),
+    }
+
+    *param_index += 1;
+    Ok(())
+}
+
+const TASK_SELECT_BY_ID_SQL: &str = r#"
+    SELECT id, plan_id, parent_id, title, description, status, priority,
+           assignee, agent_id, model_id, session_id, progress_file, dependencies, task_order,
+           retry_count, max_retries, error_message,
+           implementation_steps, test_steps, acceptance_criteria,
+           block_reason, input_request, input_response,
+           created_at, updated_at
+    FROM tasks
+    WHERE id = ?1
+"#;
+const TASK_SELECT_BY_PLAN_SQL: &str = r#"
+    SELECT id, plan_id, parent_id, title, description, status, priority,
+           assignee, agent_id, model_id, session_id, progress_file, dependencies, task_order,
+           retry_count, max_retries, error_message,
+           implementation_steps, test_steps, acceptance_criteria,
+           block_reason, input_request, input_response,
+           created_at, updated_at
+    FROM tasks
+    WHERE plan_id = ?1
+    ORDER BY task_order ASC, created_at ASC
+"#;
+const TASK_SELECT_BY_PARENT_SQL: &str = r#"
+    SELECT id, plan_id, parent_id, title, description, status, priority,
+           assignee, agent_id, model_id, session_id, progress_file, dependencies, task_order,
+           retry_count, max_retries, error_message,
+           implementation_steps, test_steps, acceptance_criteria,
+           block_reason, input_request, input_response,
+           created_at, updated_at
+    FROM tasks
+    WHERE parent_id = ?1
+    ORDER BY task_order ASC, created_at ASC
+"#;
+const TASK_SELECT_BY_SESSION_SQL: &str = r#"
+    SELECT id, plan_id, parent_id, title, description, status, priority,
+           assignee, agent_id, model_id, session_id, progress_file, dependencies, task_order,
+           retry_count, max_retries, error_message,
+           implementation_steps, test_steps, acceptance_criteria,
+           block_reason, input_request, input_response,
+           created_at, updated_at
+    FROM tasks
+    WHERE session_id = ?1
+    LIMIT 1
+"#;
+
+fn map_rust_task_row(row: &Row<'_>) -> rusqlite::Result<RustTask> {
+    Ok(RustTask {
+        id: row.get(0)?,
+        plan_id: row.get(1)?,
+        parent_id: row.get(2)?,
+        title: row.get(3)?,
+        description: row.get(4)?,
+        status: row.get(5)?,
+        priority: row.get(6)?,
+        assignee: row.get(7)?,
+        agent_id: row.get(8)?,
+        model_id: row.get(9)?,
+        session_id: row.get(10)?,
+        progress_file: row.get(11)?,
+        dependencies: row.get(12)?,
+        task_order: row.get(13)?,
+        retry_count: row.get(14)?,
+        max_retries: row.get(15)?,
+        error_message: row.get(16)?,
+        implementation_steps: row.get(17)?,
+        test_steps: row.get(18)?,
+        acceptance_criteria: row.get(19)?,
+        block_reason: row.get(20)?,
+        input_request: row.get(21)?,
+        input_response: row.get(22)?,
+        created_at: row.get(23)?,
+        updated_at: row.get(24)?,
+    })
+}
+
+fn collect_tasks<P>(conn: &Connection, sql: &str, params: P) -> Result<Vec<Task>, String>
+where
+    P: Params,
+{
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params, map_rust_task_row)
+        .map_err(|e| e.to_string())?;
+
+    rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
+        .map(|tasks| tasks.into_iter().map(transform_task).collect())
+}
+
+fn fetch_task<P>(conn: &Connection, sql: &str, params: P) -> Result<Task, String>
+where
+    P: Params,
+{
+    conn.query_row(sql, params, map_rust_task_row)
+        .map(transform_task)
+        .map_err(|e| e.to_string())
+}
+
+fn fetch_optional_task<P>(conn: &Connection, sql: &str, params: P) -> Result<Option<Task>, String>
+where
+    P: Params,
+{
+    match conn.query_row(sql, params, map_rust_task_row) {
+        Ok(task) => Ok(Some(transform_task(task))),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn serialize_json_option<T: Serialize>(value: Option<&T>, fallback: &str) -> Option<String> {
+    value.map(|value| serde_json::to_string(value).unwrap_or_else(|_| fallback.to_string()))
 }
 
 /// 将 RustTask 转换为 Task
@@ -205,60 +368,11 @@ fn transform_task(rust_task: RustTask) -> Task {
 pub fn list_tasks(plan_id: String) -> Result<Vec<Task>, String> {
     let conn = open_db_connection().map_err(|e| e.to_string())?;
 
-    let mut stmt = conn
-        .prepare(
-            r#"
-            SELECT id, plan_id, parent_id, title, description, status, priority,
-                   assignee, agent_id, model_id, session_id, progress_file, dependencies, task_order,
-                   retry_count, max_retries, error_message,
-                   implementation_steps, test_steps, acceptance_criteria,
-                   block_reason, input_request, input_response,
-                   created_at, updated_at
-            FROM tasks
-            WHERE plan_id = ?1
-            ORDER BY task_order ASC, created_at ASC
-            "#,
-        )
-        .map_err(|e| e.to_string())?;
-
-    let tasks = stmt
-        .query_map([&plan_id], |row| {
-            Ok(RustTask {
-                id: row.get(0)?,
-                plan_id: row.get(1)?,
-                parent_id: row.get(2)?,
-                title: row.get(3)?,
-                description: row.get(4)?,
-                status: row.get(5)?,
-                priority: row.get(6)?,
-                assignee: row.get(7)?,
-                agent_id: row.get(8)?,
-                model_id: row.get(9)?,
-                session_id: row.get(10)?,
-                progress_file: row.get(11)?,
-                dependencies: row.get(12)?,
-                task_order: row.get(13)?,
-                retry_count: row.get(14)?,
-                max_retries: row.get(15)?,
-                error_message: row.get(16)?,
-                implementation_steps: row.get(17)?,
-                test_steps: row.get(18)?,
-                acceptance_criteria: row.get(19)?,
-                block_reason: row.get(20)?,
-                input_request: row.get(21)?,
-                input_response: row.get(22)?,
-                created_at: row.get(23)?,
-                updated_at: row.get(24)?,
-            })
-        })
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(transform_task)
-        .collect();
-
-    Ok(tasks)
+    collect_tasks(
+        &conn,
+        TASK_SELECT_BY_PLAN_SQL,
+        [&plan_id],
+    )
 }
 
 /// 获取单个任务
@@ -266,52 +380,7 @@ pub fn list_tasks(plan_id: String) -> Result<Vec<Task>, String> {
 pub fn get_task(id: String) -> Result<Task, String> {
     let conn = open_db_connection().map_err(|e| e.to_string())?;
 
-    let rust_task = conn
-        .query_row(
-            r#"
-            SELECT id, plan_id, parent_id, title, description, status, priority,
-                   assignee, agent_id, model_id, session_id, progress_file, dependencies, task_order,
-                   retry_count, max_retries, error_message,
-                   implementation_steps, test_steps, acceptance_criteria,
-                   block_reason, input_request, input_response,
-                   created_at, updated_at
-            FROM tasks
-            WHERE id = ?1
-            "#,
-            [&id],
-            |row| {
-                Ok(RustTask {
-                    id: row.get(0)?,
-                    plan_id: row.get(1)?,
-                    parent_id: row.get(2)?,
-                    title: row.get(3)?,
-                    description: row.get(4)?,
-                    status: row.get(5)?,
-                    priority: row.get(6)?,
-                    assignee: row.get(7)?,
-                    agent_id: row.get(8)?,
-                    model_id: row.get(9)?,
-                    session_id: row.get(10)?,
-                    progress_file: row.get(11)?,
-                    dependencies: row.get(12)?,
-                    task_order: row.get(13)?,
-                    retry_count: row.get(14)?,
-                    max_retries: row.get(15)?,
-                    error_message: row.get(16)?,
-                    implementation_steps: row.get(17)?,
-                    test_steps: row.get(18)?,
-                    acceptance_criteria: row.get(19)?,
-                    block_reason: row.get(20)?,
-                    input_request: row.get(21)?,
-                    input_response: row.get(22)?,
-                    created_at: row.get(23)?,
-                    updated_at: row.get(24)?,
-                })
-            },
-        )
-        .map_err(|e| e.to_string())?;
-
-    Ok(transform_task(rust_task))
+    fetch_task(&conn, TASK_SELECT_BY_ID_SQL, [&id])
 }
 
 /// 创建新任务
@@ -323,23 +392,11 @@ pub fn create_task(input: CreateTaskInput) -> Result<Task, String> {
     let now = now_rfc3339();
     let status = "pending".to_string();
     let priority = input.priority.unwrap_or_else(|| "medium".to_string());
-    let dependencies_json = input
-        .dependencies
-        .as_ref()
-        .map(|d| serde_json::to_string(d).unwrap_or_else(|_| "[]".to_string()));
+    let dependencies_json = serialize_json_option(input.dependencies.as_ref(), "[]");
     let max_retries = input.max_retries.unwrap_or(3);
-    let implementation_steps_json = input
-        .implementation_steps
-        .as_ref()
-        .map(|s| serde_json::to_string(s).unwrap_or_else(|_| "[]".to_string()));
-    let test_steps_json = input
-        .test_steps
-        .as_ref()
-        .map(|s| serde_json::to_string(s).unwrap_or_else(|_| "[]".to_string()));
-    let acceptance_criteria_json = input
-        .acceptance_criteria
-        .as_ref()
-        .map(|s| serde_json::to_string(s).unwrap_or_else(|_| "[]".to_string()));
+    let implementation_steps_json = serialize_json_option(input.implementation_steps.as_ref(), "[]");
+    let test_steps_json = serialize_json_option(input.test_steps.as_ref(), "[]");
+    let acceptance_criteria_json = serialize_json_option(input.acceptance_criteria.as_ref(), "[]");
 
     // 如果没有指定顺序，获取当前最大顺序 + 1
     let task_order = match input.order {
@@ -433,256 +490,71 @@ pub fn update_task(id: String, input: UpdateTaskInput) -> Result<Task, String> {
 
     let now = now_rfc3339();
 
-    // 构建动态更新语句
-    let mut updates: Vec<String> = vec!["updated_at = ?1".to_string()];
-    let mut param_index = 2;
+    let mut updates = UpdateSqlBuilder::new();
+    push_update(&mut updates, "title", &input.title);
+    push_update(&mut updates, "description", &input.description);
+    push_update(&mut updates, "status", &input.status);
+    push_update(&mut updates, "priority", &input.priority);
+    push_update(&mut updates, "assignee", &input.assignee);
+    push_update(&mut updates, "agent_id", &input.agent_id);
+    push_update(&mut updates, "model_id", &input.model_id);
+    push_update(&mut updates, "session_id", &input.session_id);
+    push_update(&mut updates, "progress_file", &input.progress_file);
+    push_update(&mut updates, "dependencies", &input.dependencies);
+    push_update(&mut updates, "task_order", &input.order);
+    push_update(&mut updates, "retry_count", &input.retry_count);
+    push_update(&mut updates, "max_retries", &input.max_retries);
+    push_update(&mut updates, "error_message", &input.error_message);
+    push_update(&mut updates, "implementation_steps", &input.implementation_steps);
+    push_update(&mut updates, "test_steps", &input.test_steps);
+    push_update(&mut updates, "acceptance_criteria", &input.acceptance_criteria);
+    push_update(&mut updates, "block_reason", &input.block_reason);
+    push_update(&mut updates, "input_request", &input.input_request);
+    push_update(&mut updates, "input_response", &input.input_response);
 
-    if !matches!(input.title, UpdateField::Missing) {
-        updates.push(format!("title = ?{}", param_index));
-        param_index += 1;
-    }
-    if !matches!(input.description, UpdateField::Missing) {
-        updates.push(format!("description = ?{}", param_index));
-        param_index += 1;
-    }
-    if !matches!(input.status, UpdateField::Missing) {
-        updates.push(format!("status = ?{}", param_index));
-        param_index += 1;
-    }
-    if !matches!(input.priority, UpdateField::Missing) {
-        updates.push(format!("priority = ?{}", param_index));
-        param_index += 1;
-    }
-    if !matches!(input.assignee, UpdateField::Missing) {
-        updates.push(format!("assignee = ?{}", param_index));
-        param_index += 1;
-    }
-    if !matches!(input.session_id, UpdateField::Missing) {
-        updates.push(format!("session_id = ?{}", param_index));
-        param_index += 1;
-    }
-    if !matches!(input.progress_file, UpdateField::Missing) {
-        updates.push(format!("progress_file = ?{}", param_index));
-        param_index += 1;
-    }
-    if !matches!(input.dependencies, UpdateField::Missing) {
-        updates.push(format!("dependencies = ?{}", param_index));
-        param_index += 1;
-    }
-    if !matches!(input.order, UpdateField::Missing) {
-        updates.push(format!("task_order = ?{}", param_index));
-        param_index += 1;
-    }
-    if !matches!(input.retry_count, UpdateField::Missing) {
-        updates.push(format!("retry_count = ?{}", param_index));
-        param_index += 1;
-    }
-    if !matches!(input.max_retries, UpdateField::Missing) {
-        updates.push(format!("max_retries = ?{}", param_index));
-        param_index += 1;
-    }
-    if !matches!(input.error_message, UpdateField::Missing) {
-        updates.push(format!("error_message = ?{}", param_index));
-        param_index += 1;
-    }
-    if !matches!(input.implementation_steps, UpdateField::Missing) {
-        updates.push(format!("implementation_steps = ?{}", param_index));
-        param_index += 1;
-    }
-    if !matches!(input.test_steps, UpdateField::Missing) {
-        updates.push(format!("test_steps = ?{}", param_index));
-        param_index += 1;
-    }
-    if !matches!(input.acceptance_criteria, UpdateField::Missing) {
-        updates.push(format!("acceptance_criteria = ?{}", param_index));
-        param_index += 1;
-    }
-    if !matches!(input.block_reason, UpdateField::Missing) {
-        updates.push(format!("block_reason = ?{}", param_index));
-        param_index += 1;
-    }
-    if !matches!(input.input_request, UpdateField::Missing) {
-        updates.push(format!("input_request = ?{}", param_index));
-        param_index += 1;
-    }
-    if !matches!(input.input_response, UpdateField::Missing) {
-        updates.push(format!("input_response = ?{}", param_index));
-        param_index += 1;
-    }
-
-    let sql = format!(
-        "UPDATE tasks SET {} WHERE id = ?{}",
-        updates.join(", "),
-        param_index
-    );
+    let sql = updates.finish("tasks", "id");
 
     let mut stmt = conn.prepare_cached(&sql).map_err(|e| e.to_string())?;
 
-    // 绑定参数
     let mut param_count = 1;
-    stmt.raw_bind_parameter(param_count, &now)
+    bind_value(&mut stmt, &mut param_count, &now).map_err(|e| e.to_string())?;
+    bind_update_field(&mut stmt, &mut param_count, &input.title).map_err(|e| e.to_string())?;
+    bind_update_field(&mut stmt, &mut param_count, &input.description)
         .map_err(|e| e.to_string())?;
-    param_count += 1;
-
-    if let UpdateField::Value(ref title) = input.title {
-        stmt.raw_bind_parameter(param_count, title)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if !matches!(input.description, UpdateField::Missing) {
-        match input.description {
-            UpdateField::Value(ref description) => stmt
-                .raw_bind_parameter(param_count, description)
-                .map_err(|e| e.to_string())?,
-            UpdateField::Null => stmt
-                .raw_bind_parameter(param_count, rusqlite::types::Null)
-                .map_err(|e| e.to_string())?,
-            UpdateField::Missing => {}
-        }
-        param_count += 1;
-    }
-    if let UpdateField::Value(ref status) = input.status {
-        stmt.raw_bind_parameter(param_count, status)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let UpdateField::Value(ref priority) = input.priority {
-        stmt.raw_bind_parameter(param_count, priority)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if !matches!(input.assignee, UpdateField::Missing) {
-        match input.assignee {
-            UpdateField::Value(ref assignee) => stmt
-                .raw_bind_parameter(param_count, assignee)
-                .map_err(|e| e.to_string())?,
-            UpdateField::Null => stmt
-                .raw_bind_parameter(param_count, rusqlite::types::Null)
-                .map_err(|e| e.to_string())?,
-            UpdateField::Missing => {}
-        }
-        param_count += 1;
-    }
-    if !matches!(input.session_id, UpdateField::Missing) {
-        match input.session_id {
-            UpdateField::Value(ref session_id) => stmt
-                .raw_bind_parameter(param_count, session_id)
-                .map_err(|e| e.to_string())?,
-            UpdateField::Null => stmt
-                .raw_bind_parameter(param_count, rusqlite::types::Null)
-                .map_err(|e| e.to_string())?,
-            UpdateField::Missing => {}
-        }
-        param_count += 1;
-    }
-    if !matches!(input.progress_file, UpdateField::Missing) {
-        match input.progress_file {
-            UpdateField::Value(ref progress_file) => stmt
-                .raw_bind_parameter(param_count, progress_file)
-                .map_err(|e| e.to_string())?,
-            UpdateField::Null => stmt
-                .raw_bind_parameter(param_count, rusqlite::types::Null)
-                .map_err(|e| e.to_string())?,
-            UpdateField::Missing => {}
-        }
-        param_count += 1;
-    }
-    if let UpdateField::Value(ref dependencies) = input.dependencies {
-        let json = serde_json::to_string(dependencies).unwrap_or_else(|_| "[]".to_string());
-        stmt.raw_bind_parameter(param_count, json)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let UpdateField::Value(order) = input.order {
-        stmt.raw_bind_parameter(param_count, order)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let UpdateField::Value(retry_count) = input.retry_count {
-        stmt.raw_bind_parameter(param_count, retry_count)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let UpdateField::Value(max_retries) = input.max_retries {
-        stmt.raw_bind_parameter(param_count, max_retries)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if !matches!(input.error_message, UpdateField::Missing) {
-        match input.error_message {
-            UpdateField::Value(ref error_message) => stmt
-                .raw_bind_parameter(param_count, error_message)
-                .map_err(|e| e.to_string())?,
-            UpdateField::Null => stmt
-                .raw_bind_parameter(param_count, rusqlite::types::Null)
-                .map_err(|e| e.to_string())?,
-            UpdateField::Missing => {}
-        }
-        param_count += 1;
-    }
-    if let UpdateField::Value(ref implementation_steps) = input.implementation_steps {
-        let json = serde_json::to_string(implementation_steps).unwrap_or_else(|_| "[]".to_string());
-        stmt.raw_bind_parameter(param_count, json)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let UpdateField::Value(ref test_steps) = input.test_steps {
-        let json = serde_json::to_string(test_steps).unwrap_or_else(|_| "[]".to_string());
-        stmt.raw_bind_parameter(param_count, json)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let UpdateField::Value(ref acceptance_criteria) = input.acceptance_criteria {
-        let json = serde_json::to_string(acceptance_criteria).unwrap_or_else(|_| "[]".to_string());
-        stmt.raw_bind_parameter(param_count, json)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if !matches!(input.block_reason, UpdateField::Missing) {
-        match input.block_reason {
-            UpdateField::Value(ref block_reason) => stmt
-                .raw_bind_parameter(param_count, block_reason)
-                .map_err(|e| e.to_string())?,
-            UpdateField::Null => stmt
-                .raw_bind_parameter(param_count, rusqlite::types::Null)
-                .map_err(|e| e.to_string())?,
-            UpdateField::Missing => {}
-        }
-        param_count += 1;
-    }
-    if !matches!(input.input_request, UpdateField::Missing) {
-        match input.input_request {
-            UpdateField::Value(ref input_request) => {
-                let json = serde_json::to_string(input_request).unwrap_or_else(|_| "{}".to_string());
-                stmt.raw_bind_parameter(param_count, json)
-                    .map_err(|e| e.to_string())?;
-            }
-            UpdateField::Null => {
-                stmt.raw_bind_parameter(param_count, rusqlite::types::Null)
-                    .map_err(|e| e.to_string())?;
-            }
-            UpdateField::Missing => {}
-        }
-        param_count += 1;
-    }
-    if !matches!(input.input_response, UpdateField::Missing) {
-        match input.input_response {
-            UpdateField::Value(ref input_response) => {
-                let json = serde_json::to_string(input_response).unwrap_or_else(|_| "{}".to_string());
-                stmt.raw_bind_parameter(param_count, json)
-                    .map_err(|e| e.to_string())?;
-            }
-            UpdateField::Null => {
-                stmt.raw_bind_parameter(param_count, rusqlite::types::Null)
-                    .map_err(|e| e.to_string())?;
-            }
-            UpdateField::Missing => {}
-        }
-        param_count += 1;
-    }
-
-    stmt.raw_bind_parameter(param_count, &id)
+    bind_update_field(&mut stmt, &mut param_count, &input.status).map_err(|e| e.to_string())?;
+    bind_update_field(&mut stmt, &mut param_count, &input.priority).map_err(|e| e.to_string())?;
+    bind_update_field(&mut stmt, &mut param_count, &input.assignee)
         .map_err(|e| e.to_string())?;
+    bind_update_field(&mut stmt, &mut param_count, &input.agent_id)
+        .map_err(|e| e.to_string())?;
+    bind_update_field(&mut stmt, &mut param_count, &input.model_id)
+        .map_err(|e| e.to_string())?;
+    bind_update_field(&mut stmt, &mut param_count, &input.session_id)
+        .map_err(|e| e.to_string())?;
+    bind_update_field(&mut stmt, &mut param_count, &input.progress_file)
+        .map_err(|e| e.to_string())?;
+    bind_update_json(&mut stmt, &mut param_count, &input.dependencies, "[]")
+        .map_err(|e| e.to_string())?;
+    bind_update_field(&mut stmt, &mut param_count, &input.order).map_err(|e| e.to_string())?;
+    bind_update_field(&mut stmt, &mut param_count, &input.retry_count)
+        .map_err(|e| e.to_string())?;
+    bind_update_field(&mut stmt, &mut param_count, &input.max_retries)
+        .map_err(|e| e.to_string())?;
+    bind_update_field(&mut stmt, &mut param_count, &input.error_message)
+        .map_err(|e| e.to_string())?;
+    bind_update_json(&mut stmt, &mut param_count, &input.implementation_steps, "[]")
+        .map_err(|e| e.to_string())?;
+    bind_update_json(&mut stmt, &mut param_count, &input.test_steps, "[]")
+        .map_err(|e| e.to_string())?;
+    bind_update_json(&mut stmt, &mut param_count, &input.acceptance_criteria, "[]")
+        .map_err(|e| e.to_string())?;
+    bind_update_field(&mut stmt, &mut param_count, &input.block_reason)
+        .map_err(|e| e.to_string())?;
+    bind_update_json(&mut stmt, &mut param_count, &input.input_request, "{}")
+        .map_err(|e| e.to_string())?;
+    bind_update_json(&mut stmt, &mut param_count, &input.input_response, "{}")
+        .map_err(|e| e.to_string())?;
+    bind_value(&mut stmt, &mut param_count, &id).map_err(|e| e.to_string())?;
     stmt.raw_execute().map_err(|e| e.to_string())?;
 
     // 更新计划的 updated_at 时间
@@ -699,52 +571,7 @@ pub fn update_task(id: String, input: UpdateTaskInput) -> Result<Task, String> {
     .map_err(|e| e.to_string())?;
 
     // 获取更新后的任务
-    let rust_task = conn
-        .query_row(
-            r#"
-            SELECT id, plan_id, parent_id, title, description, status, priority,
-                   assignee, agent_id, model_id, session_id, progress_file, dependencies, task_order,
-                   retry_count, max_retries, error_message,
-                   implementation_steps, test_steps, acceptance_criteria,
-                   block_reason, input_request, input_response,
-                   created_at, updated_at
-            FROM tasks
-            WHERE id = ?1
-            "#,
-            [&id],
-            |row| {
-                Ok(RustTask {
-                    id: row.get(0)?,
-                    plan_id: row.get(1)?,
-                    parent_id: row.get(2)?,
-                    title: row.get(3)?,
-                    description: row.get(4)?,
-                    status: row.get(5)?,
-                    priority: row.get(6)?,
-                    assignee: row.get(7)?,
-                    agent_id: row.get(8)?,
-                    model_id: row.get(9)?,
-                    session_id: row.get(10)?,
-                    progress_file: row.get(11)?,
-                    dependencies: row.get(12)?,
-                    task_order: row.get(13)?,
-                    retry_count: row.get(14)?,
-                    max_retries: row.get(15)?,
-                    error_message: row.get(16)?,
-                    implementation_steps: row.get(17)?,
-                    test_steps: row.get(18)?,
-                    acceptance_criteria: row.get(19)?,
-                    block_reason: row.get(20)?,
-                    input_request: row.get(21)?,
-                    input_response: row.get(22)?,
-                    created_at: row.get(23)?,
-                    updated_at: row.get(24)?,
-                })
-            },
-        )
-        .map_err(|e| e.to_string())?;
-
-    Ok(transform_task(rust_task))
+    fetch_task(&conn, TASK_SELECT_BY_ID_SQL, [&id])
 }
 
 /// 批量更新任务顺序
@@ -784,60 +611,11 @@ pub fn delete_task(id: String) -> Result<(), String> {
 pub fn list_subtasks(parent_id: String) -> Result<Vec<Task>, String> {
     let conn = open_db_connection().map_err(|e| e.to_string())?;
 
-    let mut stmt = conn
-        .prepare(
-            r#"
-            SELECT id, plan_id, parent_id, title, description, status, priority,
-                   assignee, agent_id, model_id, session_id, progress_file, dependencies, task_order,
-                   retry_count, max_retries, error_message,
-                   implementation_steps, test_steps, acceptance_criteria,
-                   block_reason, input_request, input_response,
-                   created_at, updated_at
-            FROM tasks
-            WHERE parent_id = ?1
-            ORDER BY task_order ASC, created_at ASC
-            "#,
-        )
-        .map_err(|e| e.to_string())?;
-
-    let tasks = stmt
-        .query_map([&parent_id], |row| {
-            Ok(RustTask {
-                id: row.get(0)?,
-                plan_id: row.get(1)?,
-                parent_id: row.get(2)?,
-                title: row.get(3)?,
-                description: row.get(4)?,
-                status: row.get(5)?,
-                priority: row.get(6)?,
-                assignee: row.get(7)?,
-                agent_id: row.get(8)?,
-                model_id: row.get(9)?,
-                session_id: row.get(10)?,
-                progress_file: row.get(11)?,
-                dependencies: row.get(12)?,
-                task_order: row.get(13)?,
-                retry_count: row.get(14)?,
-                max_retries: row.get(15)?,
-                error_message: row.get(16)?,
-                implementation_steps: row.get(17)?,
-                test_steps: row.get(18)?,
-                acceptance_criteria: row.get(19)?,
-                block_reason: row.get(20)?,
-                input_request: row.get(21)?,
-                input_response: row.get(22)?,
-                created_at: row.get(23)?,
-                updated_at: row.get(24)?,
-            })
-        })
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(transform_task)
-        .collect();
-
-    Ok(tasks)
+    collect_tasks(
+        &conn,
+        TASK_SELECT_BY_PARENT_SQL,
+        [&parent_id],
+    )
 }
 
 /// 重试任务 - 重置重试计数并恢复pending状态
@@ -854,52 +632,7 @@ pub fn retry_task(id: String) -> Result<Task, String> {
     .map_err(|e| e.to_string())?;
 
     // 获取更新后的任务
-    let rust_task = conn
-        .query_row(
-            r#"
-            SELECT id, plan_id, parent_id, title, description, status, priority,
-                   assignee, agent_id, model_id, session_id, progress_file, dependencies, task_order,
-                   retry_count, max_retries, error_message,
-                   implementation_steps, test_steps, acceptance_criteria,
-                   block_reason, input_request, input_response,
-                   created_at, updated_at
-            FROM tasks
-            WHERE id = ?1
-            "#,
-            [&id],
-            |row| {
-                Ok(RustTask {
-                    id: row.get(0)?,
-                    plan_id: row.get(1)?,
-                    parent_id: row.get(2)?,
-                    title: row.get(3)?,
-                    description: row.get(4)?,
-                    status: row.get(5)?,
-                    priority: row.get(6)?,
-                    assignee: row.get(7)?,
-                    agent_id: row.get(8)?,
-                    model_id: row.get(9)?,
-                    session_id: row.get(10)?,
-                    progress_file: row.get(11)?,
-                    dependencies: row.get(12)?,
-                    task_order: row.get(13)?,
-                    retry_count: row.get(14)?,
-                    max_retries: row.get(15)?,
-                    error_message: row.get(16)?,
-                    implementation_steps: row.get(17)?,
-                    test_steps: row.get(18)?,
-                    acceptance_criteria: row.get(19)?,
-                    block_reason: row.get(20)?,
-                    input_request: row.get(21)?,
-                    input_response: row.get(22)?,
-                    created_at: row.get(23)?,
-                    updated_at: row.get(24)?,
-                })
-            },
-        )
-        .map_err(|e| e.to_string())?;
-
-    Ok(transform_task(rust_task))
+    fetch_task(&conn, TASK_SELECT_BY_ID_SQL, [&id])
 }
 
 /// 批量更新任务状态
@@ -917,60 +650,11 @@ pub fn batch_update_status(plan_id: String, status: String) -> Result<Vec<Task>,
     .map_err(|e| e.to_string())?;
 
     // 获取更新后的任务列表
-    let mut stmt = conn
-        .prepare(
-            r#"
-            SELECT id, plan_id, parent_id, title, description, status, priority,
-                   assignee, agent_id, model_id, session_id, progress_file, dependencies, task_order,
-                   retry_count, max_retries, error_message,
-                   implementation_steps, test_steps, acceptance_criteria,
-                   block_reason, input_request, input_response,
-                   created_at, updated_at
-            FROM tasks
-            WHERE plan_id = ?1
-            ORDER BY task_order ASC, created_at ASC
-            "#,
-        )
-        .map_err(|e| e.to_string())?;
-
-    let tasks = stmt
-        .query_map([&plan_id], |row| {
-            Ok(RustTask {
-                id: row.get(0)?,
-                plan_id: row.get(1)?,
-                parent_id: row.get(2)?,
-                title: row.get(3)?,
-                description: row.get(4)?,
-                status: row.get(5)?,
-                priority: row.get(6)?,
-                assignee: row.get(7)?,
-                agent_id: row.get(8)?,
-                model_id: row.get(9)?,
-                session_id: row.get(10)?,
-                progress_file: row.get(11)?,
-                dependencies: row.get(12)?,
-                task_order: row.get(13)?,
-                retry_count: row.get(14)?,
-                max_retries: row.get(15)?,
-                error_message: row.get(16)?,
-                implementation_steps: row.get(17)?,
-                test_steps: row.get(18)?,
-                acceptance_criteria: row.get(19)?,
-                block_reason: row.get(20)?,
-                input_request: row.get(21)?,
-                input_response: row.get(22)?,
-                created_at: row.get(23)?,
-                updated_at: row.get(24)?,
-            })
-        })
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(transform_task)
-        .collect();
-
-    Ok(tasks)
+    collect_tasks(
+        &conn,
+        TASK_SELECT_BY_PLAN_SQL,
+        [&plan_id],
+    )
 }
 
 /// 停止任务执行
@@ -988,52 +672,7 @@ pub fn stop_task(id: String) -> Result<Task, String> {
     .map_err(|e| e.to_string())?;
 
     // 获取更新后的任务
-    let rust_task = conn
-        .query_row(
-            r#"
-            SELECT id, plan_id, parent_id, title, description, status, priority,
-                   assignee, agent_id, model_id, session_id, progress_file, dependencies, task_order,
-                   retry_count, max_retries, error_message,
-                   implementation_steps, test_steps, acceptance_criteria,
-                   block_reason, input_request, input_response,
-                   created_at, updated_at
-            FROM tasks
-            WHERE id = ?1
-            "#,
-            [&id],
-            |row| {
-                Ok(RustTask {
-                    id: row.get(0)?,
-                    plan_id: row.get(1)?,
-                    parent_id: row.get(2)?,
-                    title: row.get(3)?,
-                    description: row.get(4)?,
-                    status: row.get(5)?,
-                    priority: row.get(6)?,
-                    assignee: row.get(7)?,
-                    agent_id: row.get(8)?,
-                    model_id: row.get(9)?,
-                    session_id: row.get(10)?,
-                    progress_file: row.get(11)?,
-                    dependencies: row.get(12)?,
-                    task_order: row.get(13)?,
-                    retry_count: row.get(14)?,
-                    max_retries: row.get(15)?,
-                    error_message: row.get(16)?,
-                    implementation_steps: row.get(17)?,
-                    test_steps: row.get(18)?,
-                    acceptance_criteria: row.get(19)?,
-                    block_reason: row.get(20)?,
-                    input_request: row.get(21)?,
-                    input_response: row.get(22)?,
-                    created_at: row.get(23)?,
-                    updated_at: row.get(24)?,
-                })
-            },
-        )
-        .map_err(|e| e.to_string())?;
-
-    Ok(transform_task(rust_task))
+    fetch_task(&conn, TASK_SELECT_BY_ID_SQL, [&id])
 }
 
 /// 根据会话 ID 查找关联的任务和计划
@@ -1041,55 +680,11 @@ pub fn stop_task(id: String) -> Result<Task, String> {
 pub fn get_task_by_session_id(session_id: String) -> Result<Option<Task>, String> {
     let conn = open_db_connection().map_err(|e| e.to_string())?;
 
-    let result = conn.query_row(
-        r#"
-        SELECT id, plan_id, parent_id, title, description, status, priority,
-               assignee, agent_id, model_id, session_id, progress_file, dependencies, task_order,
-               retry_count, max_retries, error_message,
-               implementation_steps, test_steps, acceptance_criteria,
-               block_reason, input_request, input_response,
-               created_at, updated_at
-        FROM tasks
-        WHERE session_id = ?1
-        LIMIT 1
-        "#,
+    fetch_optional_task(
+        &conn,
+        TASK_SELECT_BY_SESSION_SQL,
         [&session_id],
-        |row| {
-            Ok(RustTask {
-                id: row.get(0)?,
-                plan_id: row.get(1)?,
-                parent_id: row.get(2)?,
-                title: row.get(3)?,
-                description: row.get(4)?,
-                status: row.get(5)?,
-                priority: row.get(6)?,
-                assignee: row.get(7)?,
-                agent_id: row.get(8)?,
-                model_id: row.get(9)?,
-                session_id: row.get(10)?,
-                progress_file: row.get(11)?,
-                dependencies: row.get(12)?,
-                task_order: row.get(13)?,
-                retry_count: row.get(14)?,
-                max_retries: row.get(15)?,
-                error_message: row.get(16)?,
-                implementation_steps: row.get(17)?,
-                test_steps: row.get(18)?,
-                acceptance_criteria: row.get(19)?,
-                block_reason: row.get(20)?,
-                input_request: row.get(21)?,
-                input_response: row.get(22)?,
-                created_at: row.get(23)?,
-                updated_at: row.get(24)?,
-            })
-        },
-    );
-
-    match result {
-        Ok(rust_task) => Ok(Some(transform_task(rust_task))),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e.to_string()),
-    }
+    )
 }
 
 /// 批量创建任务（从拆分结果）
@@ -1121,23 +716,13 @@ pub fn batch_create_tasks(
             .priority
             .clone()
             .unwrap_or_else(|| "medium".to_string());
-        let dependencies_json = task_input
-            .dependencies
-            .as_ref()
-            .map(|d| serde_json::to_string(d).unwrap_or_else(|_| "[]".to_string()));
+        let dependencies_json = serialize_json_option(task_input.dependencies.as_ref(), "[]");
         let max_retries = task_input.max_retries.unwrap_or(3);
-        let implementation_steps_json = task_input
-            .implementation_steps
-            .as_ref()
-            .map(|s| serde_json::to_string(s).unwrap_or_else(|_| "[]".to_string()));
-        let test_steps_json = task_input
-            .test_steps
-            .as_ref()
-            .map(|s| serde_json::to_string(s).unwrap_or_else(|_| "[]".to_string()));
-        let acceptance_criteria_json = task_input
-            .acceptance_criteria
-            .as_ref()
-            .map(|s| serde_json::to_string(s).unwrap_or_else(|_| "[]".to_string()));
+        let implementation_steps_json =
+            serialize_json_option(task_input.implementation_steps.as_ref(), "[]");
+        let test_steps_json = serialize_json_option(task_input.test_steps.as_ref(), "[]");
+        let acceptance_criteria_json =
+            serialize_json_option(task_input.acceptance_criteria.as_ref(), "[]");
 
         max_order += 1;
         let task_order = task_input.order.unwrap_or(max_order);

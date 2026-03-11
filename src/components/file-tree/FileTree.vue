@@ -8,10 +8,11 @@ import { ref, h, watch, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NTree, TreeOption } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
-import { watch as watchFs, type UnwatchFn } from '@tauri-apps/plugin-fs'
+import type { UnwatchFn } from '@tauri-apps/plugin-fs'
 import { EaIcon, EaButton } from '@/components/common'
 import type { FileTreeNode } from '@/stores/project'
 import { resolveFileIcon } from '@/utils/fileIcon'
+import { startFsWatcher } from '@/utils/fsWatcher'
 import { useFileOperations } from './composables/useFileOperations'
 import FileTreeContextMenu from './FileTreeContextMenu.vue'
 import FileTreeRenameDialog from './FileTreeRenameDialog.vue'
@@ -115,7 +116,7 @@ const startFileWatcher = async (projectPath: string) => {
   stopFileWatcher()
 
   try {
-    unwatchFileTree.value = await watchFs(
+    unwatchFileTree.value = await startFsWatcher(
       projectPath,
       () => {
         scheduleTreeReload()

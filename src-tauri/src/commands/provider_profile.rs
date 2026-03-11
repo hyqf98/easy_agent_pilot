@@ -1,7 +1,42 @@
 use anyhow::Result;
-use rusqlite::Connection;
+use rusqlite::{Connection, Row};
 use serde::{Deserialize, Serialize};
 use std::fs;
+
+use super::support::{
+    bind_optional, bind_value, bool_from_int, now_rfc3339, open_db_connection, UpdateSqlBuilder,
+};
+
+const PROVIDER_PROFILE_SELECT_SQL: &str =
+    "SELECT id, name, cli_type, is_active, api_key, base_url, provider_name, main_model, reasoning_model, haiku_model, sonnet_default, opus_default, codex_model, created_at, updated_at FROM provider_profiles";
+const PROVIDER_PROFILE_SELECT_BY_ID_SQL: &str =
+    "SELECT id, name, cli_type, is_active, api_key, base_url, provider_name, main_model, reasoning_model, haiku_model, sonnet_default, opus_default, codex_model, created_at, updated_at FROM provider_profiles WHERE id = ?1";
+const PROVIDER_PROFILE_SELECT_ACTIVE_SQL: &str =
+    "SELECT id, name, cli_type, is_active, api_key, base_url, provider_name, main_model, reasoning_model, haiku_model, sonnet_default, opus_default, codex_model, created_at, updated_at FROM provider_profiles WHERE cli_type = ?1 AND is_active = 1";
+
+fn open_conn() -> Result<Connection, String> {
+    open_db_connection().map_err(|e| e.to_string())
+}
+
+fn build_current_profile(cli_type: &str, now: String) -> ProviderProfile {
+    ProviderProfile {
+        id: String::new(),
+        name: "Current Config".to_string(),
+        cli_type: cli_type.to_string(),
+        is_active: true,
+        api_key: None,
+        base_url: None,
+        provider_name: None,
+        main_model: None,
+        reasoning_model: None,
+        haiku_model: None,
+        sonnet_default: None,
+        opus_default: None,
+        codex_model: None,
+        created_at: now.clone(),
+        updated_at: now,
+    }
+}
 
 /// Provider 配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,76 +92,47 @@ pub struct UpdateProviderProfileInput {
     pub codex_model: Option<String>,
 }
 
-/// 获取数据库路径
-fn get_db_path() -> Result<std::path::PathBuf> {
-    let persistence_dir = super::get_persistence_dir_path()?;
-    Ok(persistence_dir.join("data").join("easy-agent.db"))
+fn map_provider_profile_row(row: &Row<'_>) -> rusqlite::Result<ProviderProfile> {
+    Ok(ProviderProfile {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        cli_type: row.get(2)?,
+        is_active: bool_from_int(row.get::<_, Option<i32>>(3)?).unwrap_or(false),
+        api_key: row.get(4)?,
+        base_url: row.get(5)?,
+        provider_name: row.get(6)?,
+        main_model: row.get(7)?,
+        reasoning_model: row.get(8)?,
+        haiku_model: row.get(9)?,
+        sonnet_default: row.get(10)?,
+        opus_default: row.get(11)?,
+        codex_model: row.get(12)?,
+        created_at: row.get(13)?,
+        updated_at: row.get(14)?,
+    })
 }
 
 /// 列出所有 Provider 配置
 #[tauri::command]
 pub fn list_provider_profiles(cli_type: Option<String>) -> Result<Vec<ProviderProfile>, String> {
-    let db_path = get_db_path().map_err(|e| e.to_string())?;
-    let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+    let conn = open_conn()?;
 
     let sql = if let Some(ref _ct) = cli_type {
-        "SELECT id, name, cli_type, is_active, api_key, base_url, provider_name, main_model, reasoning_model, haiku_model, sonnet_default, opus_default, codex_model, created_at, updated_at FROM provider_profiles WHERE cli_type = ?1 ORDER BY updated_at DESC"
+        format!("{PROVIDER_PROFILE_SELECT_SQL} WHERE cli_type = ?1 ORDER BY updated_at DESC")
     } else {
-        "SELECT id, name, cli_type, is_active, api_key, base_url, provider_name, main_model, reasoning_model, haiku_model, sonnet_default, opus_default, codex_model, created_at, updated_at FROM provider_profiles ORDER BY cli_type, updated_at DESC"
+        format!("{PROVIDER_PROFILE_SELECT_SQL} ORDER BY cli_type, updated_at DESC")
     };
 
-    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
 
     let profiles = if cli_type.is_some() {
         let ct = cli_type.unwrap();
-        stmt.query_map([&ct], |row| {
-            Ok(ProviderProfile {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                cli_type: row.get(2)?,
-                is_active: row
-                    .get::<_, Option<i32>>(3)?
-                    .map(|v| v != 0)
-                    .unwrap_or(false),
-                api_key: row.get(4)?,
-                base_url: row.get(5)?,
-                provider_name: row.get(6)?,
-                main_model: row.get(7)?,
-                reasoning_model: row.get(8)?,
-                haiku_model: row.get(9)?,
-                sonnet_default: row.get(10)?,
-                opus_default: row.get(11)?,
-                codex_model: row.get(12)?,
-                created_at: row.get(13)?,
-                updated_at: row.get(14)?,
-            })
-        })
+        stmt.query_map([&ct], map_provider_profile_row)
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?
     } else {
-        stmt.query_map([], |row| {
-            Ok(ProviderProfile {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                cli_type: row.get(2)?,
-                is_active: row
-                    .get::<_, Option<i32>>(3)?
-                    .map(|v| v != 0)
-                    .unwrap_or(false),
-                api_key: row.get(4)?,
-                base_url: row.get(5)?,
-                provider_name: row.get(6)?,
-                main_model: row.get(7)?,
-                reasoning_model: row.get(8)?,
-                haiku_model: row.get(9)?,
-                sonnet_default: row.get(10)?,
-                opus_default: row.get(11)?,
-                codex_model: row.get(12)?,
-                created_at: row.get(13)?,
-                updated_at: row.get(14)?,
-            })
-        })
+        stmt.query_map([], map_provider_profile_row)
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?
@@ -138,33 +144,10 @@ pub fn list_provider_profiles(cli_type: Option<String>) -> Result<Vec<ProviderPr
 /// 获取单个 Provider 配置
 #[tauri::command]
 pub fn get_provider_profile(id: String) -> Result<ProviderProfile, String> {
-    let db_path = get_db_path().map_err(|e| e.to_string())?;
-    let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+    let conn = open_conn()?;
 
     let profile = conn
-        .query_row(
-            "SELECT id, name, cli_type, is_active, api_key, base_url, provider_name, main_model, reasoning_model, haiku_model, sonnet_default, opus_default, codex_model, created_at, updated_at FROM provider_profiles WHERE id = ?1",
-            [&id],
-            |row| {
-                Ok(ProviderProfile {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    cli_type: row.get(2)?,
-                    is_active: row.get::<_, Option<i32>>(3)?.map(|v| v != 0).unwrap_or(false),
-                    api_key: row.get(4)?,
-                    base_url: row.get(5)?,
-                    provider_name: row.get(6)?,
-                    main_model: row.get(7)?,
-                    reasoning_model: row.get(8)?,
-                    haiku_model: row.get(9)?,
-                    sonnet_default: row.get(10)?,
-                    opus_default: row.get(11)?,
-                    codex_model: row.get(12)?,
-                    created_at: row.get(13)?,
-                    updated_at: row.get(14)?,
-                })
-            },
-        )
+        .query_row(PROVIDER_PROFILE_SELECT_BY_ID_SQL, [&id], map_provider_profile_row)
         .map_err(|e| e.to_string())?;
 
     Ok(profile)
@@ -175,11 +158,10 @@ pub fn get_provider_profile(id: String) -> Result<ProviderProfile, String> {
 pub fn create_provider_profile(
     input: CreateProviderProfileInput,
 ) -> Result<ProviderProfile, String> {
-    let db_path = get_db_path().map_err(|e| e.to_string())?;
-    let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+    let conn = open_conn()?;
 
     let id = uuid::Uuid::new_v4().to_string();
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = now_rfc3339();
 
     conn.execute(
         "INSERT INTO provider_profiles (id, name, cli_type, is_active, api_key, base_url, provider_name, main_model, reasoning_model, haiku_model, sonnet_default, opus_default, codex_model, created_at, updated_at)
@@ -229,123 +211,39 @@ pub fn update_provider_profile(
     id: String,
     input: UpdateProviderProfileInput,
 ) -> Result<ProviderProfile, String> {
-    let db_path = get_db_path().map_err(|e| e.to_string())?;
-    let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+    let conn = open_conn()?;
 
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = now_rfc3339();
 
-    // 构建动态更新语句
-    let mut updates: Vec<String> = vec!["updated_at = ?1".to_string()];
-    let mut param_index = 2;
+    let mut updates = UpdateSqlBuilder::new();
+    updates.push("name", input.name.is_some());
+    updates.push("api_key", input.api_key.is_some());
+    updates.push("base_url", input.base_url.is_some());
+    updates.push("provider_name", input.provider_name.is_some());
+    updates.push("main_model", input.main_model.is_some());
+    updates.push("reasoning_model", input.reasoning_model.is_some());
+    updates.push("haiku_model", input.haiku_model.is_some());
+    updates.push("sonnet_default", input.sonnet_default.is_some());
+    updates.push("opus_default", input.opus_default.is_some());
+    updates.push("codex_model", input.codex_model.is_some());
 
-    if input.name.is_some() {
-        updates.push(format!("name = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.api_key.is_some() {
-        updates.push(format!("api_key = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.base_url.is_some() {
-        updates.push(format!("base_url = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.provider_name.is_some() {
-        updates.push(format!("provider_name = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.main_model.is_some() {
-        updates.push(format!("main_model = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.reasoning_model.is_some() {
-        updates.push(format!("reasoning_model = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.haiku_model.is_some() {
-        updates.push(format!("haiku_model = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.sonnet_default.is_some() {
-        updates.push(format!("sonnet_default = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.opus_default.is_some() {
-        updates.push(format!("opus_default = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.codex_model.is_some() {
-        updates.push(format!("codex_model = ?{}", param_index));
-        param_index += 1;
-    }
-
-    let sql = format!(
-        "UPDATE provider_profiles SET {} WHERE id = ?{}",
-        updates.join(", "),
-        param_index
-    );
+    let sql = updates.finish("provider_profiles", "id");
 
     let mut stmt = conn.prepare_cached(&sql).map_err(|e| e.to_string())?;
 
-    // 绑定参数
     let mut param_count = 1;
-    stmt.raw_bind_parameter(param_count, &now)
-        .map_err(|e| e.to_string())?;
-    param_count += 1;
-
-    if let Some(ref name) = input.name {
-        stmt.raw_bind_parameter(param_count, name)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref api_key) = input.api_key {
-        stmt.raw_bind_parameter(param_count, api_key)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref base_url) = input.base_url {
-        stmt.raw_bind_parameter(param_count, base_url)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref provider_name) = input.provider_name {
-        stmt.raw_bind_parameter(param_count, provider_name)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref main_model) = input.main_model {
-        stmt.raw_bind_parameter(param_count, main_model)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref reasoning_model) = input.reasoning_model {
-        stmt.raw_bind_parameter(param_count, reasoning_model)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref haiku_model) = input.haiku_model {
-        stmt.raw_bind_parameter(param_count, haiku_model)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref sonnet_default) = input.sonnet_default {
-        stmt.raw_bind_parameter(param_count, sonnet_default)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref opus_default) = input.opus_default {
-        stmt.raw_bind_parameter(param_count, opus_default)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref codex_model) = input.codex_model {
-        stmt.raw_bind_parameter(param_count, codex_model)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-
-    stmt.raw_bind_parameter(param_count, &id)
-        .map_err(|e| e.to_string())?;
+    bind_value(&mut stmt, &mut param_count, &now).map_err(|e| e.to_string())?;
+    bind_optional(&mut stmt, &mut param_count, &input.name).map_err(|e| e.to_string())?;
+    bind_optional(&mut stmt, &mut param_count, &input.api_key).map_err(|e| e.to_string())?;
+    bind_optional(&mut stmt, &mut param_count, &input.base_url).map_err(|e| e.to_string())?;
+    bind_optional(&mut stmt, &mut param_count, &input.provider_name).map_err(|e| e.to_string())?;
+    bind_optional(&mut stmt, &mut param_count, &input.main_model).map_err(|e| e.to_string())?;
+    bind_optional(&mut stmt, &mut param_count, &input.reasoning_model).map_err(|e| e.to_string())?;
+    bind_optional(&mut stmt, &mut param_count, &input.haiku_model).map_err(|e| e.to_string())?;
+    bind_optional(&mut stmt, &mut param_count, &input.sonnet_default).map_err(|e| e.to_string())?;
+    bind_optional(&mut stmt, &mut param_count, &input.opus_default).map_err(|e| e.to_string())?;
+    bind_optional(&mut stmt, &mut param_count, &input.codex_model).map_err(|e| e.to_string())?;
+    bind_value(&mut stmt, &mut param_count, &id).map_err(|e| e.to_string())?;
 
     stmt.raw_execute().map_err(|e| e.to_string())?;
 
@@ -355,37 +253,14 @@ pub fn update_provider_profile(
 
 /// 获取单个 Provider 配置
 fn get_provider_profile_by_id(conn: &Connection, id: &str) -> Result<ProviderProfile, String> {
-    conn.query_row(
-        "SELECT id, name, cli_type, is_active, api_key, base_url, provider_name, main_model, reasoning_model, haiku_model, sonnet_default, opus_default, codex_model, created_at, updated_at FROM provider_profiles WHERE id = ?1",
-        [id],
-        |row| {
-            Ok(ProviderProfile {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                cli_type: row.get(2)?,
-                is_active: row.get::<_, Option<i32>>(3)?.map(|v| v != 0).unwrap_or(false),
-                api_key: row.get(4)?,
-                base_url: row.get(5)?,
-                provider_name: row.get(6)?,
-                main_model: row.get(7)?,
-                reasoning_model: row.get(8)?,
-                haiku_model: row.get(9)?,
-                sonnet_default: row.get(10)?,
-                opus_default: row.get(11)?,
-                codex_model: row.get(12)?,
-                created_at: row.get(13)?,
-                updated_at: row.get(14)?,
-            })
-        },
-    )
+    conn.query_row(PROVIDER_PROFILE_SELECT_BY_ID_SQL, [id], map_provider_profile_row)
     .map_err(|e| e.to_string())
 }
 
 /// 删除 Provider 配置
 #[tauri::command]
 pub fn delete_provider_profile(id: String) -> Result<(), String> {
-    let db_path = get_db_path().map_err(|e| e.to_string())?;
-    let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+    let conn = open_conn()?;
 
     conn.execute("DELETE FROM provider_profiles WHERE id = ?1", [&id])
         .map_err(|e| e.to_string())?;
@@ -396,32 +271,9 @@ pub fn delete_provider_profile(id: String) -> Result<(), String> {
 /// 获取当前激活的配置
 #[tauri::command]
 pub fn get_active_provider_profile(cli_type: String) -> Result<Option<ProviderProfile>, String> {
-    let db_path = get_db_path().map_err(|e| e.to_string())?;
-    let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+    let conn = open_conn()?;
 
-    let result = conn.query_row(
-        "SELECT id, name, cli_type, is_active, api_key, base_url, provider_name, main_model, reasoning_model, haiku_model, sonnet_default, opus_default, codex_model, created_at, updated_at FROM provider_profiles WHERE cli_type = ?1 AND is_active = 1",
-        [&cli_type],
-        |row| {
-            Ok(ProviderProfile {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                cli_type: row.get(2)?,
-                is_active: row.get::<_, Option<i32>>(3)?.map(|v| v != 0).unwrap_or(false),
-                api_key: row.get(4)?,
-                base_url: row.get(5)?,
-                provider_name: row.get(6)?,
-                main_model: row.get(7)?,
-                reasoning_model: row.get(8)?,
-                haiku_model: row.get(9)?,
-                sonnet_default: row.get(10)?,
-                opus_default: row.get(11)?,
-                codex_model: row.get(12)?,
-                created_at: row.get(13)?,
-                updated_at: row.get(14)?,
-            })
-        },
-    );
+    let result = conn.query_row(PROVIDER_PROFILE_SELECT_ACTIVE_SQL, [&cli_type], map_provider_profile_row);
 
     match result {
         Ok(profile) => Ok(Some(profile)),
@@ -433,8 +285,7 @@ pub fn get_active_provider_profile(cli_type: String) -> Result<Option<ProviderPr
 /// 一键切换 Provider 配置
 #[tauri::command]
 pub fn switch_provider_profile(id: String) -> Result<ProviderProfile, String> {
-    let db_path = get_db_path().map_err(|e| e.to_string())?;
-    let mut conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+    let mut conn = open_conn()?;
 
     // 获取要切换的配置
     let profile = get_provider_profile_by_id(&conn, &id)?;
@@ -452,7 +303,7 @@ pub fn switch_provider_profile(id: String) -> Result<ProviderProfile, String> {
     // 激活当前配置
     tx.execute(
         "UPDATE provider_profiles SET is_active = 1, updated_at = ?1 WHERE id = ?2",
-        rusqlite::params![&chrono::Utc::now().to_rfc3339(), &id],
+        rusqlite::params![&now_rfc3339(), &id],
     )
     .map_err(|e| e.to_string())?;
 
@@ -645,23 +496,7 @@ pub fn read_current_cli_config(cli_type: String) -> Result<ProviderProfile, Stri
         "claude" => {
             let settings_path = home_dir.join(".claude").join("settings.json");
 
-            let mut profile = ProviderProfile {
-                id: "".to_string(),
-                name: "Current Config".to_string(),
-                cli_type: "claude".to_string(),
-                is_active: true,
-                api_key: None,
-                base_url: None,
-                provider_name: None,
-                main_model: None,
-                reasoning_model: None,
-                haiku_model: None,
-                sonnet_default: None,
-                opus_default: None,
-                codex_model: None,
-                created_at: now.clone(),
-                updated_at: now,
-            };
+            let mut profile = build_current_profile("claude", now);
 
             if settings_path.exists() {
                 let content = fs::read_to_string(&settings_path)
@@ -692,23 +527,7 @@ pub fn read_current_cli_config(cli_type: String) -> Result<ProviderProfile, Stri
             let config_path = codex_dir.join("config.toml");
             let auth_path = codex_dir.join("auth.json");
 
-            let mut profile = ProviderProfile {
-                id: "".to_string(),
-                name: "Current Config".to_string(),
-                cli_type: "codex".to_string(),
-                is_active: true,
-                api_key: None,
-                base_url: None,
-                provider_name: None,
-                main_model: None,
-                reasoning_model: None,
-                haiku_model: None,
-                sonnet_default: None,
-                opus_default: None,
-                codex_model: None,
-                created_at: now.clone(),
-                updated_at: now,
-            };
+            let mut profile = build_current_profile("codex", now);
 
             // 1. 从 auth.json 读取 API Key
             if auth_path.exists() {

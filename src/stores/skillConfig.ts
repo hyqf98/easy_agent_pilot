@@ -4,205 +4,46 @@ import { invoke } from '@tauri-apps/api/core'
 import { useNotificationStore } from './notification'
 import { getErrorMessage } from '@/utils/api'
 import type { AgentConfig } from './agent'
+import {
+  buildMcpConfigInput,
+  transformCliMcpConfig,
+  transformCliPlugin,
+  transformCliSkill,
+  transformDbMcpConfig,
+  transformDbPluginsConfig,
+  transformDbSkillsConfig,
+} from './skillConfigShared'
+import type {
+  CliCapabilities,
+  CliConfig,
+  CliConfigPaths,
+  ClaudeConfigScanResult,
+  ConfigSource,
+  McpToolCallResult,
+  McpToolsListResult,
+  RawAgentMcpConfig,
+  RawAgentPluginsConfig,
+  RawAgentSkillsConfig,
+  UnifiedMcpConfig,
+  UnifiedPluginConfig,
+  UnifiedSkillConfig,
+} from './skillConfigShared'
 
-// ============================================================================
-// 类型定义
-// ============================================================================
-
-/** 配置来源类型 */
-export type ConfigSource = 'database' | 'file'
-
-/** 统一配置项基础接口 */
-export interface UnifiedConfigItem {
-  id: string
-  name: string
-  enabled: boolean
-  source: ConfigSource
-  isReadOnly: boolean
-}
-
-/** MCP 传输类型 */
-export type McpTransportType = 'stdio' | 'sse' | 'http' | 'builtin'
-
-/** MCP 配置范围 */
-export type McpConfigScope = 'user' | 'local' | 'project'
-
-/** 统一 MCP 配置项 */
-export interface UnifiedMcpConfig extends UnifiedConfigItem {
-  transportType: McpTransportType
-  scope: McpConfigScope
-  command?: string
-  args?: string[]
-  env?: Record<string, string>
-  url?: string
-  headers?: Record<string, string>
-}
-
-/** 统一 Skill 配置项 */
-export interface UnifiedSkillConfig extends UnifiedConfigItem {
-  description?: string
-  skillPath: string
-  scriptsPath?: string
-  referencesPath?: string
-  assetsPath?: string
-}
-
-/** 统一 Plugin 配置项 */
-export interface UnifiedPluginConfig extends UnifiedConfigItem {
-  version?: string
-  description?: string
-  pluginPath: string
-}
-
-/** CLI 配置路径信息 */
-export interface CliConfigPaths {
-  configDir: string
-  configFile: string
-  cliType: string
-}
-
-/** MCP Tool definition */
-export interface McpTool {
-  name: string
-  description: string
-  inputSchema: Record<string, unknown>
-}
-
-/** MCP Tools List Result */
-export interface McpToolsListResult {
-  success: boolean
-  message: string
-  tools: McpTool[]
-}
-
-/** MCP Tool Call Result */
-export interface McpToolCallResult {
-  success: boolean
-  message: string
-  result: Record<string, unknown>
-  error?: string
-}
-
-/** MCP 配置输入参数（用于测试，不依赖数据库） */
-export interface McpConfigInput {
-  name: string
-  transport_type: string
-  command?: string
-  args?: string[]
-  env?: Record<string, string>
-  url?: string
-  headers?: Record<string, string>
-}
-
-/** CLI 能力信息 */
-export interface CliCapabilities {
-  supportsMcp: boolean
-  supportsSkills: boolean
-  supportsPlugins: boolean
-  mcpAddCommand: string | null
-}
-
-// ============================================================================
-// CLI 扫描结果类型
-// ============================================================================
-
-/** CLI 扫描的 Skill 结构 */
-interface ScannedSkill {
-  name: string
-  path: string
-  description: string | null
-  frontmatter_name: string | null
-  subdirectories: {
-    has_scripts: boolean
-    has_references: boolean
-    has_assets: boolean
-  }
-}
-
-/** CLI 扫描的 Plugin 结构 */
-interface ScannedPlugin {
-  name: string
-  path: string
-  enabled: boolean
-  version: string | null
-  description: string | null
-  author: string | null
-  subdirectories: {
-    has_agents: boolean
-    has_commands: boolean
-    has_skills: boolean
-    has_hooks: boolean
-    has_scripts: boolean
-  }
-}
-
-/** CLI 扫描结果 */
-interface ClaudeConfigScanResult {
-  claude_dir: string
-  mcp_servers: unknown[]
-  skills: ScannedSkill[]
-  plugins: ScannedPlugin[]
-  scan_success: boolean
-  error_message: string | null
-}
-
-/** CLI 配置结构 */
-interface CliConfig {
-  mcp_servers?: Record<string, CliMcpServerConfig>
-  mcpServers?: Record<string, CliMcpServerConfig>
-}
-
-interface CliMcpServerConfig {
-  command?: string
-  args?: string[]
-  env?: Record<string, string>
-  url?: string
-  headers?: Record<string, string>
-  disabled?: boolean
-}
-
-// 后端返回的原始数据结构（snake_case）
-interface RawAgentMcpConfig {
-  id: string
-  agent_id: string
-  name: string
-  transport_type: string
-  command?: string
-  args?: string
-  env?: string
-  url?: string
-  headers?: string
-  scope: string
-  enabled: boolean
-  created_at: string
-  updated_at: string
-}
-
-interface RawAgentSkillsConfig {
-  id: string
-  agent_id: string
-  name: string
-  description?: string
-  skill_path: string
-  scripts_path?: string
-  references_path?: string
-  assets_path?: string
-  enabled: boolean
-  created_at: string
-  updated_at: string
-}
-
-interface RawAgentPluginsConfig {
-  id: string
-  agent_id: string
-  name: string
-  version?: string
-  description?: string
-  plugin_path: string
-  enabled: boolean
-  created_at: string
-  updated_at: string
-}
+export type {
+  CliCapabilities,
+  CliConfigPaths,
+  ConfigSource,
+  McpConfigInput,
+  McpConfigScope,
+  McpTool,
+  McpToolCallResult,
+  McpToolsListResult,
+  McpTransportType,
+  UnifiedConfigItem,
+  UnifiedMcpConfig,
+  UnifiedPluginConfig,
+  UnifiedSkillConfig,
+} from './skillConfigShared'
 
 // ============================================================================
 // Store 定义
@@ -237,84 +78,6 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
     }
     return cliCapabilities.value?.supportsPlugins ?? false
   })
-
-  // ============================================================================
-  // 内部方法
-  // ============================================================================
-
-  /**
-   * 转换数据库 MCP 配置为统一格式
-   */
-  function transformDbMcpConfig(raw: RawAgentMcpConfig): UnifiedMcpConfig {
-    return {
-      id: raw.id,
-      name: raw.name,
-      enabled: raw.enabled,
-      source: 'database',
-      isReadOnly: false,
-      transportType: raw.transport_type as McpTransportType,
-      scope: raw.scope as McpConfigScope,
-      command: raw.command,
-      args: raw.args ? raw.args.split('\n').filter(Boolean) : undefined,
-      env: raw.env ? JSON.parse(raw.env) : undefined,
-      url: raw.url,
-      headers: raw.headers ? JSON.parse(raw.headers) : undefined,
-    }
-  }
-
-  /**
-   * 转换数据库 Skills 配置为统一格式
-   */
-  function transformDbSkillsConfig(raw: RawAgentSkillsConfig): UnifiedSkillConfig {
-    return {
-      id: raw.id,
-      name: raw.name,
-      enabled: raw.enabled,
-      source: 'database',
-      isReadOnly: false,
-      description: raw.description,
-      skillPath: raw.skill_path,
-      scriptsPath: raw.scripts_path,
-      referencesPath: raw.references_path,
-      assetsPath: raw.assets_path,
-    }
-  }
-
-  /**
-   * 转换数据库 Plugins 配置为统一格式
-   */
-  function transformDbPluginsConfig(raw: RawAgentPluginsConfig): UnifiedPluginConfig {
-    return {
-      id: raw.id,
-      name: raw.name,
-      enabled: raw.enabled,
-      source: 'database',
-      isReadOnly: false,
-      version: raw.version,
-      description: raw.description,
-      pluginPath: raw.plugin_path,
-    }
-  }
-
-  /**
-   * 转换 CLI MCP 配置为统一格式
-   */
-  function transformCliMcpConfig(name: string, config: CliMcpServerConfig): UnifiedMcpConfig {
-    return {
-      id: `cli-${name}`,
-      name,
-      enabled: !config.disabled,
-      source: 'file',
-      isReadOnly: true,
-      transportType: config.url ? (config.url.includes('/sse') ? 'sse' : 'http') : 'stdio',
-      scope: 'user',
-      command: config.command,
-      args: config.args,
-      env: config.env,
-      url: config.url,
-      headers: config.headers,
-    }
-  }
 
   // ============================================================================
   // Actions - 智能体选择与配置加载
@@ -423,30 +186,10 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
       })
 
       // 转换 Skills
-      skillsConfigs.value = scanResult.skills.map(skill => ({
-        id: `cli-skill-${skill.name}`,
-        name: skill.name,
-        enabled: true,
-        source: 'file' as ConfigSource,
-        isReadOnly: true,
-        description: skill.description || undefined,
-        skillPath: skill.path,
-        scriptsPath: skill.subdirectories.has_scripts ? `${skill.path}/scripts` : undefined,
-        referencesPath: skill.subdirectories.has_references ? `${skill.path}/references` : undefined,
-        assetsPath: skill.subdirectories.has_assets ? `${skill.path}/assets` : undefined,
-      }))
+      skillsConfigs.value = scanResult.skills.map(transformCliSkill)
 
       // 转换 Plugins
-      pluginsConfigs.value = scanResult.plugins.map(plugin => ({
-        id: `cli-plugin-${plugin.name}`,
-        name: plugin.name,
-        enabled: plugin.enabled,
-        source: 'file' as ConfigSource,
-        isReadOnly: true,
-        version: plugin.version || undefined,
-        description: plugin.description || undefined,
-        pluginPath: plugin.path,
-      }))
+      pluginsConfigs.value = scanResult.plugins.map(transformCliPlugin)
     } catch (error) {
       console.error('Failed to load CLI configs:', error)
       notificationStore.networkError(
@@ -899,20 +642,9 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   async function listMcpTools(config: UnifiedMcpConfig): Promise<McpToolsListResult> {
     const notificationStore = useNotificationStore()
 
-    // 构建配置输入参数
-    const configInput: McpConfigInput = {
-      name: config.name,
-      transport_type: config.transportType,
-      command: config.command,
-      args: config.args,
-      env: config.env,
-      url: config.url,
-      headers: config.headers,
-    }
-
     try {
       const result = await invoke<McpToolsListResult>('list_mcp_tools_by_config', {
-        config: configInput,
+        config: buildMcpConfigInput(config),
       })
       return result
     } catch (error) {
@@ -936,20 +668,9 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   ): Promise<McpToolCallResult> {
     const notificationStore = useNotificationStore()
 
-    // 构建配置输入参数
-    const configInput: McpConfigInput = {
-      name: config.name,
-      transport_type: config.transportType,
-      command: config.command,
-      args: config.args,
-      env: config.env,
-      url: config.url,
-      headers: config.headers,
-    }
-
     try {
       const result = await invoke<McpToolCallResult>('call_mcp_tool_by_config', {
-        config: configInput,
+        config: buildMcpConfigInput(config),
         toolName,
         params,
       })

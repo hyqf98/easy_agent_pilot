@@ -11,6 +11,20 @@ const zhCN = {
     zhCN: '简体中文',
     enUS: 'English'
   },
+  fileMention: {
+    ...enUS.fileMention,
+    searchFiles: '搜索文件...',
+    noFiles: '未找到文件',
+    loading: '正在加载...',
+    resultCount: '{count} 个结果',
+    selectFile: '选择文件',
+    back: '返回',
+    enterDir: '进入目录',
+    backToRoot: '返回根目录',
+    navigate: '导航',
+    select: '选择',
+    close: '关闭'
+  },
   common: {
     ...enUS.common,
     back: '返回',
@@ -33,6 +47,17 @@ const zhCN = {
     minutesAgo: '{n} 分钟前',
     hoursAgo: '{n} 小时前',
     daysAgo: '{n} 天前'
+  },
+  token: {
+    ...enUS.token,
+    used: '已用',
+    limit: '上限',
+    percentage: '占比',
+    usageTooltip: '已使用 {used} / {limit} Token',
+    compress: '压缩',
+    compressTooltip: '压缩当前会话，释放上下文空间',
+    contextWindow: '上下文窗口',
+    contextWindowHint: '模型可接受的最大上下文长度（Token）'
   },
   compression: {
     ...enUS.compression,
@@ -139,6 +164,8 @@ const zhCN = {
     noSessionSelected: '选择或创建一个会话开始对话',
     startConversation: '开始新对话',
     inputPlaceholder: '输入消息...（{shortcut} 发送）',
+    shortcutEnter: '回车',
+    shortcutModifierEnter: 'Ctrl/Cmd + 回车',
     sending: '发送中...',
     sent: '已发送',
     failed: '发送失败',
@@ -154,6 +181,9 @@ const zhCN = {
     clearMessagesSuccess: '消息已清空',
     emptyWelcome: '欢迎使用 Easy Agent Pilot',
     emptyHint: '在下方输入框中开始与 AI 对话',
+    emptyTip1: '按回车发送，Shift + 回车换行',
+    emptyTip2: '可通过左侧面板切换项目或会话',
+    scrollToBottom: '回到底部',
     thinking: '思考过程',
     toolCall: '工具调用',
     result: '结果',
@@ -215,8 +245,8 @@ const zhCN = {
       autoSaveWarning: '自动保存已禁用，请记得手动保存更改',
       confirmBeforeDelete: '删除前确认',
       confirmBeforeDeleteDesc: '删除项目或会话前显示确认对话框',
-      sendOnEnter: 'Enter 发送',
-      sendOnEnterDesc: '禁用时，使用 Ctrl/Cmd+Enter 发送',
+      sendOnEnter: '回车发送',
+      sendOnEnterDesc: '关闭后，使用 Ctrl/Cmd + 回车发送',
       editorSettings: '编辑器设置',
       editorFontSize: '编辑器字体大小',
       editorFontSizeDesc: '代码编辑器的字体大小',
@@ -448,9 +478,14 @@ const zhCN = {
         command: '命令',
         commandPlaceholder: '例如：npx 或 /path/to/mcp-server',
         args: '参数',
-        argsPlaceholder: '例如：-y @modelscope/server-name',
+        argsPlaceholder: '例如：-y modelscope-server-name',
         env: '环境变量',
-        envPlaceholder: 'KEY=value\nKEY2=value2'
+        envPlaceholder: 'KEY=value\nKEY2=value2',
+        addEnvVar: '添加环境变量',
+        url: 'URL',
+        urlPlaceholder: 'https://example.com/mcp',
+        headers: '请求头',
+        addHeader: '添加请求头'
       },
       skills: {
         title: '技能配置',
@@ -894,6 +929,14 @@ const zhCN = {
     implementationSteps: '实现步骤',
     testSteps: '测试步骤',
     acceptanceCriteria: '验收标准',
+    form: {
+      title: '标题',
+      titlePlaceholder: '任务标题',
+      description: '描述',
+      descriptionPlaceholder: '任务描述',
+      priority: '优先级',
+      addItem: '添加'
+    },
     // 继续拆分弹框
     resplitModal: {
       title: '继续拆分任务',

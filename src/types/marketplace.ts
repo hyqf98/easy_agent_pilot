@@ -152,3 +152,108 @@ export interface MarketListResponse<T> {
   items: T[]
   total: number
 }
+
+// ============ MCP Market 网站特定类型 ============
+
+// MCP Market 服务器卡片
+export interface McpMarketServerCard {
+  slug: string
+  name: string
+  author: string
+  description: string
+  category: string
+  stars: number
+  github_url: string
+  is_official: boolean
+  is_featured: boolean
+  is_sponsored: boolean
+}
+
+// MCP Market 服务器详情
+export interface McpMarketServerDetail extends McpMarketServerCard {
+  categories: string[]
+  tabs: {
+    about: string
+    readme: string
+    faq: string
+  }
+  features: string[]
+  use_cases: McpMarketUseCase[]
+  related_skills: McpMarketSkillCard[]
+  installation: {
+    skillfish_command: string
+  }
+}
+
+// MCP Market Skill卡片
+export interface McpMarketSkillCard {
+  slug: string
+  name: string
+  author: string
+  description: string
+  category: string
+  stars: number
+  github_url: string
+  install_command: string
+  download_url: string
+}
+
+// MCP Market Skill详情
+export interface McpMarketSkillDetail extends McpMarketSkillCard {
+  full_description: string
+  skill_content: string
+  use_cases: McpMarketUseCase[]
+  related_servers: McpMarketServerCard[]
+}
+
+// MCP Market 分类
+export interface McpMarketCategory {
+  slug: string
+  name: string
+  icon: string
+  count: number
+  description: string
+}
+
+// MCP Market 使用案例
+export interface McpMarketUseCase {
+  title: string
+  description: string
+}
+
+// MCP Market 客户端
+export interface McpMarketClient {
+  slug: string
+  name: string
+  description: string
+  icon: string
+  website_url: string
+  features: string[]
+  supported_platforms: string[]
+}
+
+// MCP Market 搜索参数
+export interface McpMarketSearchParams {
+  q?: string
+  category?: string
+  type?: 'servers' | 'skills'
+  page?: number
+}
+
+// MCP Market 分页结果
+export interface McpMarketPaginatedResult<T> {
+  items: T[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+}
+
+// MCP Market 首页数据
+export interface McpMarketHomeData {
+  official_servers: McpMarketServerCard[]
+  featured_servers: McpMarketServerCard[]
+  popular_servers: McpMarketServerCard[]
+  recent_servers: McpMarketServerCard[]
+  categories: McpMarketCategory[]
+}

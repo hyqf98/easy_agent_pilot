@@ -227,6 +227,8 @@ async function confirmSplit() {
       title: task.title,
       description: task.description,
       priority: task.priority,
+      agentId: task.agentId,
+      modelId: task.modelId,
       implementationSteps: task.implementationSteps,
       testSteps: task.testSteps,
       acceptanceCriteria: task.acceptanceCriteria,

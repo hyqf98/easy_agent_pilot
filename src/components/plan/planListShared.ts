@@ -24,6 +24,8 @@ export interface ProjectOption {
   path: string
 }
 
+export type PlanTabKey = 'draft' | 'splitting' | 'executing' | 'completed'
+
 export interface PlanCreateFormState {
   name: string
   description: string

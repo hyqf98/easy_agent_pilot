@@ -2,6 +2,8 @@ use anyhow::Result;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
+use super::support::{now_rfc3339, open_db_connection};
+
 /// 工具调用数据结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,6 +29,7 @@ pub struct Message {
     pub error_message: Option<String>,
     pub tool_calls: Option<Vec<ToolCall>>,
     pub thinking: Option<String>,
+    pub compression_metadata: Option<String>,
     pub created_at: String,
 }
 
@@ -41,6 +44,7 @@ pub struct CreateMessageInput {
     pub error_message: Option<String>,
     pub tool_calls: Option<String>, // JSON string
     pub thinking: Option<String>,
+    pub compression_metadata: Option<String>,
 }
 
 /// 更新消息输入
@@ -52,12 +56,7 @@ pub struct UpdateMessageInput {
     pub error_message: Option<String>,
     pub tool_calls: Option<String>, // JSON string
     pub thinking: Option<String>,
-}
-
-/// 获取数据库路径
-fn get_db_path() -> Result<std::path::PathBuf> {
-    let persistence_dir = super::get_persistence_dir_path()?;
-    Ok(persistence_dir.join("data").join("easy-agent.db"))
+    pub compression_metadata: Option<String>,
 }
 
 /// 分页消息结果
@@ -75,8 +74,7 @@ pub fn list_messages(
     limit: Option<usize>,
     before: Option<String>,
 ) -> Result<PaginatedMessages, String> {
-    let db_path = get_db_path().map_err(|e| e.to_string())?;
-    let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
 
     // 获取总数
     let total: usize = conn
@@ -95,7 +93,7 @@ pub fn list_messages(
         (
             format!(
                 r#"
-                SELECT id, session_id, role, content, status, tokens, error_message, tool_calls, thinking, created_at
+                SELECT id, session_id, role, content, status, tokens, error_message, tool_calls, thinking, compression_metadata, created_at
                 FROM messages
                 WHERE session_id = ?1 AND created_at < ?2
                 ORDER BY created_at DESC
@@ -112,7 +110,7 @@ pub fn list_messages(
         (
             format!(
                 r#"
-                SELECT id, session_id, role, content, status, tokens, error_message, tool_calls, thinking, created_at
+                SELECT id, session_id, role, content, status, tokens, error_message, tool_calls, thinking, compression_metadata, created_at
                 FROM messages
                 WHERE session_id = ?1
                 ORDER BY created_at DESC
@@ -144,7 +142,8 @@ pub fn list_messages(
                 error_message: row.get(6)?,
                 tool_calls,
                 thinking: row.get(8)?,
-                created_at: row.get(9)?,
+                compression_metadata: row.get(9)?,
+                created_at: row.get(10)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -167,11 +166,10 @@ pub fn list_messages(
 /// 创建新消息
 #[tauri::command]
 pub fn create_message(input: CreateMessageInput) -> Result<Message, String> {
-    let db_path = get_db_path().map_err(|e| e.to_string())?;
-    let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
 
     let id = uuid::Uuid::new_v4().to_string();
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = now_rfc3339();
     let status = input.status.unwrap_or_else(|| "completed".to_string());
 
     // 解析 tool_calls JSON
@@ -181,7 +179,7 @@ pub fn create_message(input: CreateMessageInput) -> Result<Message, String> {
         .and_then(|json| serde_json::from_str(json).ok());
 
     conn.execute(
-        "INSERT INTO messages (id, session_id, role, content, status, tokens, error_message, tool_calls, thinking, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO messages (id, session_id, role, content, status, tokens, error_message, tool_calls, thinking, compression_metadata, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         rusqlite::params![
             &id,
             &input.session_id,
@@ -192,6 +190,7 @@ pub fn create_message(input: CreateMessageInput) -> Result<Message, String> {
             &input.error_message,
             &input.tool_calls,
             &input.thinking,
+            &input.compression_metadata,
             &now
         ],
     )
@@ -214,6 +213,7 @@ pub fn create_message(input: CreateMessageInput) -> Result<Message, String> {
         error_message: input.error_message,
         tool_calls,
         thinking: input.thinking,
+        compression_metadata: input.compression_metadata,
         created_at: now,
     })
 }
@@ -221,8 +221,7 @@ pub fn create_message(input: CreateMessageInput) -> Result<Message, String> {
 /// 更新消息
 #[tauri::command]
 pub fn update_message(id: String, input: UpdateMessageInput) -> Result<Message, String> {
-    let db_path = get_db_path().map_err(|e| e.to_string())?;
-    let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
 
     // 构建动态更新语句
     let mut updates: Vec<String> = vec![];
@@ -250,6 +249,10 @@ pub fn update_message(id: String, input: UpdateMessageInput) -> Result<Message, 
     }
     if input.thinking.is_some() {
         updates.push(format!("thinking = ?{}", param_index));
+        param_index += 1;
+    }
+    if input.compression_metadata.is_some() {
+        updates.push(format!("compression_metadata = ?{}", param_index));
         param_index += 1;
     }
 
@@ -298,6 +301,11 @@ pub fn update_message(id: String, input: UpdateMessageInput) -> Result<Message, 
             .map_err(|e| e.to_string())?;
         param_count += 1;
     }
+    if let Some(ref compression_metadata) = input.compression_metadata {
+        stmt.raw_bind_parameter(param_count, compression_metadata)
+            .map_err(|e| e.to_string())?;
+        param_count += 1;
+    }
 
     stmt.raw_bind_parameter(param_count, &id)
         .map_err(|e| e.to_string())?;
@@ -314,7 +322,7 @@ pub fn update_message(id: String, input: UpdateMessageInput) -> Result<Message, 
 fn get_message_by_id(conn: &Connection, id: &str) -> Result<Message, String> {
     let message = conn
         .query_row(
-            "SELECT id, session_id, role, content, status, tokens, error_message, tool_calls, thinking, created_at FROM messages WHERE id = ?1",
+            "SELECT id, session_id, role, content, status, tokens, error_message, tool_calls, thinking, compression_metadata, created_at FROM messages WHERE id = ?1",
             [id],
             |row| {
                 // 解析 tool_calls JSON
@@ -332,7 +340,8 @@ fn get_message_by_id(conn: &Connection, id: &str) -> Result<Message, String> {
                     error_message: row.get(6)?,
                     tool_calls,
                     thinking: row.get(8)?,
-                    created_at: row.get(9)?,
+                    compression_metadata: row.get(9)?,
+                    created_at: row.get(10)?,
                 })
             },
         )
@@ -344,8 +353,7 @@ fn get_message_by_id(conn: &Connection, id: &str) -> Result<Message, String> {
 /// 删除消息
 #[tauri::command]
 pub fn delete_message(id: String) -> Result<(), String> {
-    let db_path = get_db_path().map_err(|e| e.to_string())?;
-    let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
 
     conn.execute("DELETE FROM messages WHERE id = ?1", [&id])
         .map_err(|e| e.to_string())?;
@@ -356,8 +364,7 @@ pub fn delete_message(id: String) -> Result<(), String> {
 /// 删除会话的所有消息
 #[tauri::command]
 pub fn clear_session_messages(session_id: String) -> Result<(), String> {
-    let db_path = get_db_path().map_err(|e| e.to_string())?;
-    let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
 
     conn.execute("DELETE FROM messages WHERE session_id = ?1", [&session_id])
         .map_err(|e| e.to_string())?;

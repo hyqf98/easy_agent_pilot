@@ -1,18 +1,8 @@
 use anyhow::Result;
 use rusqlite::OptionalExtension;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::support::{now_rfc3339, open_db_connection};
-
-/// 应用设置项
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub struct AppSetting {
-    pub key: String,
-    pub value: String,
-    pub updated_at: String,
-}
 
 /// 获取单个设置值
 #[tauri::command]

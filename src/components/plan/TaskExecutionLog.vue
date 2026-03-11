@@ -3,10 +3,14 @@ import { computed, ref, watch, nextTick, onMounted } from 'vue'
 import { useTaskExecutionStore } from '@/stores/taskExecution'
 import { useTaskStore } from '@/stores/task'
 import ExecutionTimeline from '@/components/message/ExecutionTimeline.vue'
+import StructuredContentRenderer from '@/components/message/StructuredContentRenderer.vue'
 import DynamicForm from '@/components/plan/DynamicForm.vue'
 import type { TimelineEntry } from '@/types/timeline'
+import type { TaskExecutionResultRecord } from '@/types/taskExecution'
 import { buildToolCallFromLogs } from '@/utils/toolCallLog'
 import { containsFormSchema } from '@/utils/structuredContent'
+import { buildStructuredResultContentFromRecord } from '@/utils/taskExecutionResult'
+import { getTaskExecutionStatusMeta, resolveTaskExecutionStatus } from '@/utils/taskExecutionStatus'
 
 const props = defineProps<{
   taskId: string
@@ -20,6 +24,7 @@ const logContainerRef = ref<HTMLElement | null>(null)
 
 // 是否自动滚动
 const autoScroll = ref(true)
+const resultRecord = ref<TaskExecutionResultRecord | null>(null)
 
 // 任务信息
 const task = computed(() => {
@@ -46,23 +51,7 @@ const effectiveStatus = computed(() => {
   if (memoryStatus && memoryStatus !== 'idle') {
     return memoryStatus
   }
-
-  if (task.value?.status === 'blocked' && task.value?.blockReason === 'waiting_input') {
-    return 'waiting_input'
-  }
-  if (task.value?.status === 'in_progress') {
-    return 'running'
-  }
-  if (task.value?.status === 'completed') {
-    return 'completed'
-  }
-  if (task.value?.status === 'failed') {
-    return 'failed'
-  }
-  if (task.value?.status === 'cancelled') {
-    return 'stopped'
-  }
-  return memoryStatus ?? 'idle'
+  return resolveTaskExecutionStatus(task.value, memoryStatus)
 })
 
 // 是否正在执行
@@ -70,33 +59,19 @@ const isRunning = computed(() => {
   return effectiveStatus.value === 'running'
 })
 
+const structuredResultContent = computed(() => {
+  if (!resultRecord.value) return ''
+  return buildStructuredResultContentFromRecord(resultRecord.value)
+})
+
 // 执行状态文本
 const statusText = computed(() => {
-  const status = effectiveStatus.value
-  switch (status) {
-    case 'idle': return '等待执行'
-    case 'queued': return '排队中'
-    case 'running': return '执行中'
-    case 'waiting_input': return '等待输入'
-    case 'completed': return '执行完成'
-    case 'failed': return '执行失败'
-    case 'stopped': return '已停止'
-    default: return ''
-  }
+  return getTaskExecutionStatusMeta(effectiveStatus.value).label
 })
 
 // 状态颜色
 const statusColor = computed(() => {
-  const status = effectiveStatus.value
-  switch (status) {
-    case 'running': return 'primary'
-    case 'queued': return 'warning'
-    case 'waiting_input': return 'warning'
-    case 'completed': return 'success'
-    case 'failed': return 'error'
-    case 'stopped': return 'gray'
-    default: return 'gray'
-  }
+  return getTaskExecutionStatusMeta(effectiveStatus.value).color
 })
 
 // 停止执行
@@ -117,6 +92,17 @@ async function handleInputSubmit(values: Record<string, unknown>) {
 // 跳过任务
 async function handleSkip() {
   await taskExecutionStore.skipBlockedTask(props.taskId)
+}
+
+async function loadResultRecord(taskId: string) {
+  const currentTask = taskStore.tasks.find(item => item.id === taskId)
+  if (!currentTask) {
+    resultRecord.value = null
+    return
+  }
+
+  const records = await taskExecutionStore.listRecentPlanResults(currentTask.planId, 200)
+  resultRecord.value = records.find(record => record.task_id === taskId) ?? null
 }
 
 // 滚动到底部
@@ -189,6 +175,7 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
 // 加载历史日志
 onMounted(async () => {
   await taskExecutionStore.loadTaskLogs(props.taskId)
+  await loadResultRecord(props.taskId)
   scrollToBottom()
 })
 
@@ -196,7 +183,15 @@ watch(
   () => props.taskId,
   async (taskId) => {
     await taskExecutionStore.loadTaskLogs(taskId)
+    await loadResultRecord(taskId)
     scrollToBottom()
+  }
+)
+
+watch(
+  () => `${task.value?.status || ''}:${task.value?.updatedAt || ''}`,
+  async () => {
+    await loadResultRecord(props.taskId)
   }
 )
 </script>
@@ -276,6 +271,13 @@ watch(
       @scroll="handleScroll"
     >
       <div
+        v-if="structuredResultContent"
+        class="result-summary"
+      >
+        <StructuredContentRenderer :content="structuredResultContent" />
+      </div>
+
+      <div
         v-if="logs.length === 0"
         class="empty-state"
       >
@@ -307,9 +309,16 @@ watch(
   display: flex;
   flex-direction: column;
   height: 100%;
-  background-color: var(--color-surface, #fff);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-surface-elevated, #fff) 96%, #ffffff) 0%,
+      color-mix(in srgb, var(--color-surface, #fff) 92%, var(--color-bg-secondary, #f8fafc)) 100%
+    );
   border-radius: var(--radius-lg, 12px);
   overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
+  box-shadow: 0 16px 32px rgba(15, 23, 42, 0.08);
 }
 
 .log-header {
@@ -318,7 +327,12 @@ watch(
   justify-content: space-between;
   padding: var(--spacing-3, 0.75rem) var(--spacing-4, 1rem);
   border-bottom: 1px solid var(--color-border, #e2e8f0);
-  background-color: var(--color-bg-secondary, #f8fafc);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-bg-secondary, #f8fafc) 94%, #ffffff),
+      color-mix(in srgb, var(--color-surface, #ffffff) 90%, var(--color-bg-secondary, #f8fafc))
+    );
 }
 
 .header-left {
@@ -397,18 +411,29 @@ watch(
 }
 
 .btn-clear {
-  background-color: var(--color-bg-tertiary, #f1f5f9);
+  background-color: color-mix(in srgb, var(--color-bg-tertiary, #f1f5f9) 92%, #ffffff);
   color: var(--color-text-secondary, #64748b);
+  border: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
 }
 
 .btn-clear:hover {
-  background-color: var(--color-bg-secondary, #e2e8f0);
+  background-color: color-mix(in srgb, var(--color-bg-tertiary, #f1f5f9) 100%, var(--color-bg-secondary, #e2e8f0));
 }
 
 .log-content {
   flex: 1;
   overflow-y: auto;
   padding: var(--spacing-3, 0.75rem);
+  background:
+    linear-gradient(
+      180deg,
+      transparent 0%,
+      color-mix(in srgb, var(--color-bg-secondary, #f8fafc) 56%, transparent) 100%
+    );
+}
+
+.result-summary {
+  margin-bottom: var(--spacing-3, 0.75rem);
 }
 
 .empty-state {
@@ -483,8 +508,14 @@ watch(
   gap: var(--spacing-2, 0.5rem);
   padding: var(--spacing-2, 0.5rem);
   margin-top: var(--spacing-3, 0.75rem);
-  background-color: var(--color-primary-light, #eff6ff);
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--color-primary-light, #eff6ff) 90%, white),
+      color-mix(in srgb, var(--color-primary-light, #eff6ff) 68%, transparent)
+    );
   border-radius: var(--radius-sm, 4px);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 22%, transparent);
 }
 
 .indicator-dot {
@@ -513,7 +544,12 @@ watch(
 .input-form-section {
   padding: var(--spacing-4, 1rem);
   border-bottom: 1px solid var(--color-border, #e2e8f0);
-  background-color: var(--color-warning-light, #fef3c7);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-warning-light, #fef3c7) 74%, #fff8eb),
+      color-mix(in srgb, var(--color-surface, #fff) 90%, var(--color-warning-light, #fef3c7))
+    );
 }
 
 .section-title {
@@ -545,5 +581,79 @@ watch(
 .status-badge.warning {
   background-color: var(--color-warning-light, #fef3c7);
   color: var(--color-warning, #d97706);
+}
+
+[data-theme='dark'] .task-execution-log {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(15, 23, 42, 0.96) 0%,
+      rgba(15, 23, 42, 0.9) 100%
+    );
+  border-color: rgba(96, 165, 250, 0.14);
+  box-shadow: 0 22px 38px rgba(2, 6, 23, 0.42);
+}
+
+[data-theme='dark'] .log-header {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(30, 41, 59, 0.92),
+      rgba(15, 23, 42, 0.88)
+    );
+  border-bottom-color: rgba(148, 163, 184, 0.12);
+}
+
+[data-theme='dark'] .btn-clear {
+  background-color: rgba(51, 65, 85, 0.9);
+  color: rgba(226, 232, 240, 0.86);
+  border-color: rgba(148, 163, 184, 0.18);
+}
+
+[data-theme='dark'] .btn-clear:hover {
+  background-color: rgba(71, 85, 105, 0.95);
+}
+
+[data-theme='dark'] .log-content {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(15, 23, 42, 0.12),
+      rgba(2, 6, 23, 0.22)
+    );
+}
+
+[data-theme='dark'] .running-indicator {
+  background:
+    linear-gradient(
+      90deg,
+      rgba(30, 64, 175, 0.22),
+      rgba(15, 23, 42, 0.12)
+    );
+  border-color: rgba(96, 165, 250, 0.18);
+}
+
+[data-theme='dark'] .input-form-section {
+  border-bottom-color: rgba(148, 163, 184, 0.14);
+  background:
+    linear-gradient(
+      180deg,
+      rgba(120, 53, 15, 0.32),
+      rgba(15, 23, 42, 0.24)
+    );
+}
+
+[data-theme='dark'] .section-title {
+  color: #f8fafc;
+}
+
+[data-theme='dark'] .btn-skip {
+  border-color: rgba(251, 191, 36, 0.28);
+  color: rgba(251, 191, 36, 0.92);
+}
+
+[data-theme='dark'] .btn-skip:hover {
+  background-color: rgba(120, 53, 15, 0.24);
+  border-color: rgba(251, 191, 36, 0.42);
 }
 </style>
