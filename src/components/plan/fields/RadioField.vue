@@ -6,6 +6,7 @@ const props = defineProps<{
   field: FormField
   modelValue: string | number
   error?: string
+  disabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -17,6 +18,9 @@ const field = computed(() => props.field)
 const OTHER_VALUE = '__other__'
 const isOtherSelected = ref(false)
 const otherValue = ref('')
+const hasExplicitOtherOption = computed(() =>
+  props.field.options?.some(option => String(option.value) === OTHER_VALUE) ?? false
+)
 
 watch(() => props.modelValue, (value) => {
   const hasPresetValue = props.field.options?.some(option => option.value === value)
@@ -70,13 +74,14 @@ function onOtherInput(event: Event) {
           :name="inputId"
           :value="option.value"
           :checked="modelValue === option.value"
+          :disabled="disabled"
           class="radio"
           @change="onChange(option.value)"
         >
         <span class="label-text">{{ option.label }}</span>
       </label>
       <label
-        v-if="field.allowOther"
+        v-if="field.allowOther && !hasExplicitOtherOption"
         class="radio-label"
       >
         <input
@@ -84,6 +89,7 @@ function onOtherInput(event: Event) {
           :name="inputId"
           :value="OTHER_VALUE"
           :checked="isOtherSelected"
+          :disabled="disabled"
           class="radio"
           @change="onChange(OTHER_VALUE)"
         >
@@ -95,6 +101,7 @@ function onOtherInput(event: Event) {
       type="text"
       class="other-input"
       :value="otherValue"
+      :disabled="disabled"
       :placeholder="`请输入${field.label}`"
       @input="onOtherInput"
     >

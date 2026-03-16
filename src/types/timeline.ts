@@ -18,5 +18,7 @@ export interface TimelineEntry {
   role?: 'user' | 'assistant' | 'system'
   toolCall?: ToolCall
   formSchema?: DynamicFormSchema
+  formInitialValues?: Record<string, unknown>
   formDisabled?: boolean
+  formVariant?: 'active' | 'submitted'
 }

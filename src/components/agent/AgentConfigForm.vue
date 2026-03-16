@@ -19,29 +19,34 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
-const form = ref({
-  name: '',
-  type: 'cli' as AgentType,
-  provider: 'claude' as AgentProvider,
-  apiKey: '',
-  baseUrl: '',
-  cliPath: ''
-})
+function createDefaultForm() {
+  return {
+    name: '',
+    type: 'cli' as AgentType,
+    provider: 'claude' as AgentProvider,
+    apiKey: '',
+    baseUrl: '',
+    cliPath: ''
+  }
+}
 
-// 字段级错误状态
-const fieldErrors = ref({
-  name: '',
-  baseUrl: '',
-  cliPath: ''
-})
+const form = ref(createDefaultForm())
 
-// 验证状态
+function createDefaultFieldErrors() {
+  return {
+    name: '',
+    baseUrl: '',
+    cliPath: ''
+  }
+}
+
+const fieldErrors = ref(createDefaultFieldErrors())
+
 const isValidating = ref({
   baseUrl: false,
   cliPath: false
 })
 
-// CLI 路径验证结果
 interface CliValidationResult {
   name: string
   path: string
@@ -54,6 +59,16 @@ const isSubmitting = ref(false)
 
 const isEditing = computed(() => !!props.agent)
 
+function resetForm() {
+  form.value = createDefaultForm()
+  fieldErrors.value = createDefaultFieldErrors()
+  errorMessage.value = ''
+  isValidating.value = {
+    baseUrl: false,
+    cliPath: false
+  }
+}
+
 // 编辑模式下填充表单
 watch(() => props.agent, (agent) => {
   if (agent) {
@@ -65,6 +80,10 @@ watch(() => props.agent, (agent) => {
       baseUrl: agent.baseUrl || '',
       cliPath: agent.cliPath || ''
     }
+    fieldErrors.value = createDefaultFieldErrors()
+    errorMessage.value = ''
+  } else {
+    resetForm()
   }
 }, { immediate: true })
 
@@ -98,10 +117,16 @@ watch(() => form.value.cliPath, () => {
   }
 })
 
-const typeOptions = computed(() => [
-  { value: 'cli', label: t('settings.agent.modeCli') },
-  { value: 'sdk', label: t('settings.agent.modeApi') }
-])
+const typeOptions = computed(() => (
+  isEditing.value
+    ? [
+        { value: 'cli', label: t('settings.agent.modeCli') },
+        { value: 'sdk', label: t('settings.agent.modeApi') }
+      ]
+    : [
+        { value: 'cli', label: t('settings.agent.modeCli') }
+      ]
+))
 
 const providerOptions = computed(() => {
   if (form.value.type === 'cli') {
@@ -305,7 +330,10 @@ const handleCliPathBlur = () => {
       </div>
 
       <div class="form-row">
-        <div class="form-group">
+        <div
+          v-if="isEditing"
+          class="form-group"
+        >
           <label class="form-label">
             {{ t('settings.agent.type') }} <span class="form-label__required">*</span>
           </label>

@@ -4,13 +4,14 @@ import { invoke } from '@tauri-apps/api/core'
 import { useI18n } from 'vue-i18n'
 import { EaButton, EaIcon, EaSelect } from '@/components/common'
 import { useAgentStore } from '@/stores/agent'
+import { useNotificationStore } from '@/stores/notification'
+import { useProjectStore } from '@/stores/project'
 import CliSessionBrowser from '@/components/settings/session-manager/CliSessionBrowser.vue'
 import CliSessionDeleteModal from '@/components/settings/session-manager/CliSessionDeleteModal.vue'
 import CliSessionDetailModal from '@/components/settings/session-manager/CliSessionDetailModal.vue'
-import {
-  buildCliDeleteErrorMessage,
-} from '@/utils/sessionManager'
+import { buildCliDeleteErrorMessage } from '@/utils/sessionManager'
 import type {
+  AgentCliSessionProjectsResult,
   AgentCliSessionsResult,
   CliSessionDetail,
   DeleteCliSessionsResult,
@@ -19,9 +20,11 @@ import type {
 
 const { t } = useI18n()
 const agentStore = useAgentStore()
+const projectStore = useProjectStore()
+const notificationStore = useNotificationStore()
 
 const selectedAgentId = ref('')
-const selectedProjectPath = ref<string>('')
+const selectedProjectPath = ref('')
 
 const sessions = ref<ScannedCliSession[]>([])
 const cliName = ref('')
@@ -29,6 +32,7 @@ const sessionRoot = ref('')
 const availableProjects = ref<string[]>([])
 
 const isLoadingSessions = ref(false)
+const isLoadingProjects = ref(false)
 const sessionsError = ref('')
 
 const showDetailModal = ref(false)
@@ -41,9 +45,14 @@ const deleting = ref(false)
 const pendingDeleteSessions = ref<ScannedCliSession[]>([])
 const deleteError = ref('')
 const selectedSessionPaths = ref<string[]>([])
+const isPreparingCurrentProjectDelete = ref(false)
+
+let projectListRequestId = 0
+let sessionLoadRequestId = 0
 
 const cliAgents = computed(() => agentStore.agents.filter(agent => agent.type === 'cli'))
 const hasCliAgents = computed(() => cliAgents.value.length > 0)
+const currentProjectPath = computed(() => projectStore.currentProject?.path ?? '')
 const selectedSessionPathSet = computed(() => new Set(selectedSessionPaths.value))
 const selectedSessions = computed(() =>
   sessions.value.filter(session => selectedSessionPathSet.value.has(session.session_path))
@@ -52,6 +61,7 @@ const selectedCount = computed(() => selectedSessions.value.length)
 const allVisibleSelected = computed(() =>
   sessions.value.length > 0 && selectedCount.value === sessions.value.length
 )
+const sessionListLoading = computed(() => isLoadingProjects.value || isLoadingSessions.value)
 
 const agentOptions = computed(() =>
   cliAgents.value.map(agent => {
@@ -65,15 +75,24 @@ const agentOptions = computed(() =>
 
 const projectOptions = computed(() => {
   const options = [{ value: '', label: t('settings.sessionManager.allProjects') }]
-  for (const path of availableProjects.value) {
-    // 显示项目名称而非完整路径
+  const seen = new Set<string>()
+  const projectPaths = [...availableProjects.value]
+
+  if (selectedProjectPath.value && !projectPaths.includes(selectedProjectPath.value)) {
+    projectPaths.unshift(selectedProjectPath.value)
+  }
+
+  for (const path of projectPaths) {
+    if (seen.has(path)) continue
+    seen.add(path)
+
     const name = path.split('/').pop() || path.split('\\').pop() || path
     options.push({ value: path, label: name })
   }
+
   return options
 })
 
-// 按项目分组会话
 const groupedSessions = computed(() => {
   const groups: Record<string, ScannedCliSession[]> = {}
 
@@ -85,7 +104,6 @@ const groupedSessions = computed(() => {
     groups[key].push(session)
   }
 
-  // 按更新时间排序每个分组内的会话
   for (const key of Object.keys(groups)) {
     groups[key].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
   }
@@ -93,35 +111,122 @@ const groupedSessions = computed(() => {
   return groups
 })
 
+const resolveNextProjectPath = (projectPaths: string[], preferredProjectPath?: string | null) => {
+  if (preferredProjectPath === null) {
+    return ''
+  }
+
+  if (typeof preferredProjectPath === 'string' && preferredProjectPath.trim()) {
+    return preferredProjectPath
+  }
+
+  if (
+    selectedProjectPath.value &&
+    (projectPaths.includes(selectedProjectPath.value) || selectedProjectPath.value === currentProjectPath.value)
+  ) {
+    return selectedProjectPath.value
+  }
+
+  return projectPaths[0] || ''
+}
+
+const loadProjectPaths = async (preferredProjectPath?: string | null) => {
+  sessionsError.value = ''
+
+  if (!selectedAgentId.value) {
+    availableProjects.value = []
+    selectedProjectPath.value = ''
+    return false
+  }
+
+  const requestId = ++projectListRequestId
+  isLoadingProjects.value = true
+
+  try {
+    const result = await invoke<AgentCliSessionProjectsResult>('list_agent_cli_session_projects', {
+      agentId: selectedAgentId.value
+    })
+
+    if (requestId !== projectListRequestId) {
+      return false
+    }
+
+    availableProjects.value = result.project_paths
+    cliName.value = result.cli_name
+    sessionRoot.value = result.session_root
+
+    const nextProjectPath = resolveNextProjectPath(result.project_paths, preferredProjectPath)
+    const changed = nextProjectPath !== selectedProjectPath.value
+    selectedProjectPath.value = nextProjectPath
+    return changed
+  } catch (error) {
+    if (requestId !== projectListRequestId) {
+      return false
+    }
+
+    availableProjects.value = []
+    selectedProjectPath.value = ''
+    sessions.value = []
+    selectedSessionPaths.value = []
+    sessionsError.value = String(error)
+    return false
+  } finally {
+    if (requestId === projectListRequestId) {
+      isLoadingProjects.value = false
+    }
+  }
+}
+
 const loadSessions = async () => {
   sessionsError.value = ''
   sessions.value = []
-  availableProjects.value = []
   selectedSessionPaths.value = []
 
   if (!selectedAgentId.value) {
     return
   }
 
+  const requestId = ++sessionLoadRequestId
   isLoadingSessions.value = true
+
   try {
-    const projectPath = selectedProjectPath.value || null
     const result = await invoke<AgentCliSessionsResult>('list_agent_cli_sessions', {
       agentId: selectedAgentId.value,
-      projectPath
+      projectPath: selectedProjectPath.value || null
     })
+
+    if (requestId !== sessionLoadRequestId) {
+      return
+    }
+
     sessions.value = result.sessions
     cliName.value = result.cli_name
     sessionRoot.value = result.session_root
 
-    // 只在首次加载或没有选择项目时更新项目列表
-    if (!selectedProjectPath.value) {
+    if (result.project_paths.length > 0) {
       availableProjects.value = result.project_paths
     }
   } catch (error) {
+    if (requestId !== sessionLoadRequestId) {
+      return
+    }
+
     sessionsError.value = String(error)
   } finally {
-    isLoadingSessions.value = false
+    if (requestId === sessionLoadRequestId) {
+      isLoadingSessions.value = false
+    }
+  }
+}
+
+const handleRefresh = async () => {
+  if (!selectedAgentId.value) return
+
+  const preserveSelection = selectedProjectPath.value || null
+  const selectionChanged = await loadProjectPaths(preserveSelection)
+
+  if (!selectionChanged) {
+    await loadSessions()
   }
 }
 
@@ -155,6 +260,46 @@ const requestDeleteSelected = () => {
   pendingDeleteSessions.value = [...selectedSessions.value]
   deleteError.value = ''
   showDeleteModal.value = true
+}
+
+const selectCurrentProject = async () => {
+  if (!currentProjectPath.value) return
+
+  if (selectedProjectPath.value === currentProjectPath.value) {
+    await loadSessions()
+    return
+  }
+
+  selectedProjectPath.value = currentProjectPath.value
+}
+
+const requestDeleteCurrentProjectSessions = async () => {
+  if (!selectedAgentId.value || !currentProjectPath.value) return
+
+  isPreparingCurrentProjectDelete.value = true
+  deleteError.value = ''
+
+  try {
+    const result = await invoke<AgentCliSessionsResult>('list_agent_cli_sessions', {
+      agentId: selectedAgentId.value,
+      projectPath: currentProjectPath.value
+    })
+
+    if (!result.sessions.length) {
+      notificationStore.info(t('settings.sessionManager.noCurrentProjectSessions'))
+      return
+    }
+
+    pendingDeleteSessions.value = result.sessions
+    showDeleteModal.value = true
+  } catch (error) {
+    notificationStore.error(
+      t('settings.sessionManager.loadCurrentProjectSessionsFailed'),
+      String(error)
+    )
+  } finally {
+    isPreparingCurrentProjectDelete.value = false
+  }
 }
 
 const closeDeleteModal = () => {
@@ -233,6 +378,7 @@ const confirmDelete = async () => {
     }
 
     closeDeleteModal()
+    await loadProjectPaths(selectedProjectPath.value || null)
     await loadSessions()
   } catch (error) {
     deleteError.value = String(error)
@@ -253,15 +399,25 @@ watch(cliAgents, (agents) => {
   }
 }, { immediate: true })
 
-// 当切换智能体时，重置项目选择并加载会话
-watch(selectedAgentId, () => {
+watch(selectedAgentId, async () => {
   selectedProjectPath.value = ''
-  loadSessions()
+  sessions.value = []
+  selectedSessionPaths.value = []
+  availableProjects.value = []
+
+  if (!selectedAgentId.value) {
+    return
+  }
+
+  await loadProjectPaths()
 })
 
-// 当切换项目时，加载会话
-watch(selectedProjectPath, () => {
-  loadSessions()
+watch(selectedProjectPath, async (next, prev) => {
+  if (!selectedAgentId.value || next === prev) {
+    return
+  }
+
+  await loadSessions()
 })
 
 onMounted(async () => {
@@ -271,8 +427,6 @@ onMounted(async () => {
 
   if (cliAgents.value.length && !selectedAgentId.value) {
     selectedAgentId.value = cliAgents.value[0].id
-  } else if (selectedAgentId.value && !isLoadingSessions.value && sessions.value.length === 0) {
-    await loadSessions()
   }
 })
 </script>
@@ -305,23 +459,43 @@ onMounted(async () => {
           <EaSelect
             v-model="selectedProjectPath"
             :options="projectOptions"
-            :disabled="availableProjects.length === 0"
           />
         </div>
 
-        <EaButton
-          type="ghost"
-          size="small"
-          :disabled="isLoadingSessions"
-          @click="loadSessions"
-        >
-          <EaIcon
-            name="refresh-cw"
-            :size="14"
-            :class="{ 'is-spinning': isLoadingSessions }"
-          />
-          {{ t('common.refresh') }}
-        </EaButton>
+        <div class="toolbar__actions">
+          <EaButton
+            type="secondary"
+            size="small"
+            :disabled="!currentProjectPath"
+            @click="selectCurrentProject"
+          >
+            {{ t('settings.sessionManager.useCurrentProject') }}
+          </EaButton>
+
+          <EaButton
+            type="danger"
+            size="small"
+            :disabled="!currentProjectPath || isPreparingCurrentProjectDelete"
+            :loading="isPreparingCurrentProjectDelete"
+            @click="requestDeleteCurrentProjectSessions"
+          >
+            {{ t('settings.sessionManager.deleteCurrentProjectSessions') }}
+          </EaButton>
+
+          <EaButton
+            type="ghost"
+            size="small"
+            :disabled="sessionListLoading"
+            @click="handleRefresh"
+          >
+            <EaIcon
+              name="refresh-cw"
+              :size="14"
+              :class="{ 'is-spinning': sessionListLoading }"
+            />
+            {{ t('common.refresh') }}
+          </EaButton>
+        </div>
       </div>
 
       <div
@@ -342,12 +516,12 @@ onMounted(async () => {
       :session-root="sessionRoot"
       :sessions="sessions"
       :grouped-sessions="groupedSessions"
-      :is-loading-sessions="isLoadingSessions"
+      :is-loading-sessions="sessionListLoading"
       :sessions-error="sessionsError"
       :selected-session-paths="selectedSessionPaths"
       :selected-count="selectedCount"
       :all-visible-selected="allVisibleSelected"
-      @refresh="loadSessions"
+      @refresh="handleRefresh"
       @toggle-select-all="toggleSelectAllSessions"
       @request-delete-selected="requestDeleteSelected"
       @selection-change="handleSessionSelectionChange"
@@ -407,7 +581,7 @@ onMounted(async () => {
 
 .toolbar {
   display: grid;
-  grid-template-columns: 1fr 1fr auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   gap: var(--spacing-3);
   align-items: end;
 }
@@ -416,6 +590,14 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
+}
+
+.toolbar__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacing-2);
+  flex-wrap: wrap;
 }
 
 .toolbar__label {
@@ -448,9 +630,14 @@ onMounted(async () => {
   color: var(--color-error);
   white-space: pre-wrap;
 }
+
 @media (max-width: 860px) {
   .toolbar {
     grid-template-columns: 1fr;
+  }
+
+  .toolbar__actions {
+    justify-content: flex-start;
   }
 }
 </style>

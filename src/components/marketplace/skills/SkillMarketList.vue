@@ -1,53 +1,114 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMarketplaceStore } from '@/stores/marketplace'
-import { EaIcon, EaLoading, EaButton, EaInput } from '@/components/common'
+import { EaButton, EaIcon, EaInput, EaLoading } from '@/components/common'
 import SkillMarketCard from './SkillMarketCard.vue'
+import SkillDetailModal from './SkillDetailModal.vue'
 import SkillInstallModal from './SkillInstallModal.vue'
 import type { SkillMarketItem } from '@/types/marketplace'
 
 const { t } = useI18n()
 const marketplaceStore = useMarketplaceStore()
 
+const listRef = ref<HTMLElement | null>(null)
+const loadMoreTriggerRef = ref<HTMLElement | null>(null)
+const scrollContainer = ref<HTMLElement | null>(null)
 const searchQuery = ref('')
-const selectedCategory = ref<string | null>(null)
+const selectedCategorySlug = ref('')
+const showDetailModal = ref(false)
 const showInstallModal = ref(false)
 const selectedSkill = ref<SkillMarketItem | null>(null)
 
-// 获取所有分类
-const categories = computed(() => {
-  const cats = new Set<string>()
-  marketplaceStore.skillsMarketItems.forEach(item => {
-    if (item.category) {
-      cats.add(item.category)
-    }
+let loadMoreScheduled = false
+let loadMoreObserver: IntersectionObserver | null = null
+let loadMorePollTimer: number | null = null
+
+const categoryOptions = computed(() => [
+  { value: '', label: t('marketplace.allCategories') },
+  ...marketplaceStore.skillsMarketCategories.map(category => ({
+    value: category.slug || category.value,
+    label: category.label
+  }))
+])
+
+function syncLocalFilters() {
+  searchQuery.value = marketplaceStore.skillsMarketQuery.search || ''
+  selectedCategorySlug.value = marketplaceStore.skillsMarketQuery.category_slug || ''
+}
+
+async function refreshMarket() {
+  await marketplaceStore.fetchSkillsMarket({
+    ...marketplaceStore.skillsMarketQuery,
+    page: 1
   })
-  return Array.from(cats).sort()
-})
+}
 
-// 过滤后的列表
-const filteredItems = computed(() => {
-  let items = marketplaceStore.skillsMarketItems
+async function submitSearch() {
+  await marketplaceStore.fetchSkillsMarket({
+    page: 1,
+    search: searchQuery.value || null,
+    category: null,
+    category_slug: null
+  })
+}
 
-  if (searchQuery.value) {
-    const query = searchQuery.value.toLowerCase()
-    items = items.filter(item =>
-      item.name.toLowerCase().includes(query) ||
-      item.description.toLowerCase().includes(query)
-    )
+async function resetFilters() {
+  searchQuery.value = ''
+  selectedCategorySlug.value = ''
+  await marketplaceStore.fetchSkillsMarket({
+    page: 1,
+    search: null,
+    category: null,
+    category_slug: null
+  })
+}
+
+async function handleCategoryChange(event: Event) {
+  const value = (event.target as HTMLSelectElement).value
+  selectedCategorySlug.value = value
+  searchQuery.value = ''
+
+  const selectedCategory = marketplaceStore.skillsMarketCategories.find(category => {
+    const slug = category.slug || category.value
+    return slug === value
+  })
+
+  await marketplaceStore.fetchSkillsMarket({
+    page: 1,
+    search: null,
+    category: selectedCategory?.label || null,
+    category_slug: value || null
+  })
+}
+
+async function loadMore() {
+  if (!marketplaceStore.skillsMarketPagination.hasMore || marketplaceStore.isLoadingSkillsMarket) {
+    return
   }
 
-  if (selectedCategory.value) {
-    items = items.filter(item => item.category === selectedCategory.value)
-  }
-
-  return items
-})
+  await marketplaceStore.fetchSkillsMarket(
+    {
+      ...marketplaceStore.skillsMarketQuery,
+      page: marketplaceStore.skillsMarketPagination.page + 1
+    },
+    { append: true }
+  )
+}
 
 function openInstallModal(item: SkillMarketItem) {
   selectedSkill.value = item
   showInstallModal.value = true
+}
+
+function openDetailModal(item: SkillMarketItem) {
+  selectedSkill.value = item
+  showDetailModal.value = true
+}
+
+function closeDetailModal() {
+  showDetailModal.value = false
+  selectedSkill.value = null
 }
 
 function closeInstallModal() {
@@ -55,48 +116,169 @@ function closeInstallModal() {
   selectedSkill.value = null
 }
 
+function openInstallFromDetail(item: SkillMarketItem) {
+  selectedSkill.value = item
+  showDetailModal.value = false
+  showInstallModal.value = true
+}
+
 function onInstallComplete() {
   closeInstallModal()
 }
 
-async function refreshMarket() {
-  await marketplaceStore.fetchSkillsMarket()
+function isNearBottom() {
+  const container = scrollContainer.value
+  if (!container) {
+    return false
+  }
+
+  const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight
+  return distanceToBottom < 240
 }
 
-onMounted(() => {
-  if (marketplaceStore.skillsMarketItems.length === 0) {
-    marketplaceStore.fetchSkillsMarket()
+function scheduleLoadMoreCheck() {
+  if (loadMoreScheduled) {
+    return
   }
+
+  loadMoreScheduled = true
+  window.setTimeout(async () => {
+    loadMoreScheduled = false
+    if (isNearBottom()) {
+      await loadMore()
+    }
+  }, 0)
+}
+
+function handleScroll() {
+  scheduleLoadMoreCheck()
+}
+
+function cleanupLoadMoreObserver() {
+  loadMoreObserver?.disconnect()
+  loadMoreObserver = null
+}
+
+function stopLoadMorePolling() {
+  if (loadMorePollTimer !== null) {
+    window.clearInterval(loadMorePollTimer)
+    loadMorePollTimer = null
+  }
+}
+
+function startLoadMorePolling() {
+  stopLoadMorePolling()
+
+  loadMorePollTimer = window.setInterval(() => {
+    scheduleLoadMoreCheck()
+  }, 1000)
+}
+
+function initLoadMoreObserver() {
+  cleanupLoadMoreObserver()
+
+  if (!scrollContainer.value || !loadMoreTriggerRef.value || !marketplaceStore.skillsMarketPagination.hasMore) {
+    return
+  }
+
+  loadMoreObserver = new IntersectionObserver((entries) => {
+    if (entries.some(entry => entry.isIntersecting)) {
+      scheduleLoadMoreCheck()
+    }
+  }, {
+    root: scrollContainer.value,
+    rootMargin: '0px 0px 320px 0px'
+  })
+
+  loadMoreObserver.observe(loadMoreTriggerRef.value)
+}
+
+watch(
+  () => [marketplaceStore.skillsMarketQuery.search, marketplaceStore.skillsMarketQuery.category_slug],
+  () => syncLocalFilters(),
+  { immediate: true }
+)
+
+watch(
+  () => marketplaceStore.skillsMarketItems.length,
+  async () => {
+    await nextTick()
+    initLoadMoreObserver()
+    scheduleLoadMoreCheck()
+  }
+)
+
+watch(
+  () => marketplaceStore.skillsMarketPagination.hasMore,
+  async () => {
+    await nextTick()
+    initLoadMoreObserver()
+  },
+  { immediate: true }
+)
+
+onMounted(async () => {
+  scrollContainer.value = listRef.value?.closest('.marketplace-page__content') as HTMLElement | null
+  scrollContainer.value?.addEventListener('scroll', handleScroll, { passive: true })
+  startLoadMorePolling()
+
+  if (marketplaceStore.skillsMarketItems.length === 0 && !marketplaceStore.isLoadingSkillsMarket) {
+    await marketplaceStore.fetchSkillsMarket({ page: 1 })
+  }
+
+  await nextTick()
+  initLoadMoreObserver()
+  scheduleLoadMoreCheck()
+})
+
+onBeforeUnmount(() => {
+  cleanupLoadMoreObserver()
+  stopLoadMorePolling()
+  scrollContainer.value?.removeEventListener('scroll', handleScroll)
 })
 </script>
 
 <template>
-  <div class="skill-market-list">
-    <!-- 工具栏 -->
+  <div ref="listRef" class="skill-market-list">
     <div class="skill-market-list__toolbar">
       <div class="skill-market-list__search">
         <EaInput
           v-model="searchQuery"
           :placeholder="t('marketplace.search')"
-          icon="search"
-          clearable
+          @keydown.enter="submitSearch"
         />
       </div>
 
       <div class="skill-market-list__filters">
         <select
-          v-model="selectedCategory"
+          :value="selectedCategorySlug"
           class="skill-market-list__select"
+          @change="handleCategoryChange"
         >
-          <option :value="null">{{ t('marketplace.allCategories') }}</option>
           <option
-            v-for="cat in categories"
-            :key="cat"
-            :value="cat"
+            v-for="option in categoryOptions"
+            :key="option.value"
+            :value="option.value"
           >
-            {{ cat }}
+            {{ option.label }}
           </option>
         </select>
+
+        <EaButton
+          type="primary"
+          size="small"
+          @click="submitSearch"
+        >
+          {{ t('common.search') }}
+        </EaButton>
+
+        <EaButton
+          type="ghost"
+          size="small"
+          @click="resetFilters"
+        >
+          {{ t('common.clear') }}
+        </EaButton>
 
         <EaButton
           type="ghost"
@@ -108,13 +290,11 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- 加载状态 -->
     <EaLoading
-      v-if="marketplaceStore.isLoadingSkillsMarket"
+      v-if="marketplaceStore.isLoadingSkillsMarket && marketplaceStore.skillsMarketItems.length === 0"
       :message="t('marketplace.loading')"
     />
 
-    <!-- 错误状态 -->
     <div
       v-else-if="marketplaceStore.skillsMarketError"
       class="skill-market-list__error"
@@ -129,35 +309,62 @@ onMounted(() => {
       </EaButton>
     </div>
 
-    <!-- 空状态 -->
     <div
-      v-else-if="filteredItems.length === 0"
+      v-else-if="marketplaceStore.skillsMarketItems.length === 0"
       class="skill-market-list__empty"
     >
       <EaIcon name="sparkles" :size="48" />
       <p>{{ t('marketplace.noResults') }}</p>
     </div>
 
-    <!-- 列表 -->
-    <div
-      v-else
-      class="skill-market-list__grid"
-    >
-      <SkillMarketCard
-        v-for="item in filteredItems"
-        :key="item.id"
-        :item="item"
-        :is-installed="marketplaceStore.installedSkillNames.has(item.name.toLowerCase())"
-        @install="openInstallModal(item)"
-      />
-    </div>
+    <template v-else>
+      <div class="skill-market-list__grid">
+        <SkillMarketCard
+          v-for="item in marketplaceStore.skillsMarketItems"
+          :key="item.id"
+          :item="item"
+          :is-installed="marketplaceStore.installedSkillNames.has(item.slug.toLowerCase())"
+          @view="openDetailModal(item)"
+          @install="openInstallModal(item)"
+        />
+      </div>
 
-    <!-- 安装弹窗 -->
+      <div
+        v-if="marketplaceStore.skillsMarketPagination.hasMore"
+        class="skill-market-list__load-more"
+      >
+        <div
+          ref="loadMoreTriggerRef"
+          class="skill-market-list__load-more-sentinel"
+          aria-hidden="true"
+        />
+        <EaLoading
+          v-if="marketplaceStore.isLoadingSkillsMarket"
+          size="sm"
+          :message="t('marketplace.loadMore')"
+        />
+        <EaButton
+          v-else
+          type="secondary"
+          @click="loadMore"
+        >
+          {{ t('marketplace.loadMore') }}
+        </EaButton>
+      </div>
+    </template>
+
     <SkillInstallModal
       v-if="showInstallModal && selectedSkill"
       :skill-item="selectedSkill"
       @close="closeInstallModal"
       @complete="onInstallComplete"
+    />
+
+    <SkillDetailModal
+      v-if="showDetailModal && selectedSkill"
+      :skill-item="selectedSkill"
+      @close="closeDetailModal"
+      @install="openInstallFromDetail"
     />
   </div>
 </template>
@@ -178,14 +385,14 @@ onMounted(() => {
 
 .skill-market-list__search {
   flex: 1;
-  min-width: 200px;
-  max-width: 400px;
+  min-width: 220px;
 }
 
 .skill-market-list__filters {
   display: flex;
   gap: var(--spacing-2);
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .skill-market-list__select {
@@ -193,7 +400,7 @@ onMounted(() => {
   -webkit-appearance: none;
   -moz-appearance: none;
   height: 36px;
-  min-width: 120px;
+  min-width: 160px;
   padding: var(--spacing-2) var(--spacing-8) var(--spacing-2) var(--spacing-3);
   font-size: var(--font-size-sm);
   color: var(--color-text-primary);
@@ -224,19 +431,37 @@ onMounted(() => {
 }
 
 .skill-market-list__error,
-.skill-market-list__empty {
+.skill-market-list__empty,
+.skill-market-list__load-more {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: var(--spacing-3);
+}
+
+.skill-market-list__load-more-sentinel {
+  width: 100%;
+  height: 1px;
+}
+
+.skill-market-list__error,
+.skill-market-list__empty {
   padding: var(--spacing-8);
   color: var(--color-text-secondary);
   text-align: center;
 }
+@media (max-width: 960px) {
+  .skill-market-list__toolbar {
+    align-items: stretch;
+  }
 
-.skill-market-list__error p,
-.skill-market-list__empty p {
-  margin: 0;
+  .skill-market-list__filters {
+    width: 100%;
+  }
+
+  .skill-market-list__select {
+    flex: 1;
+  }
 }
 </style>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import type { FileEditChangeType, FileEditRange } from '@/types/fileTrace'
 
 type DiffOpType = 'equal' | 'remove' | 'add'
@@ -17,6 +17,23 @@ interface DiffRow {
   variant: DiffRowVariant
 }
 
+type DisplayDiffRow =
+  | (DiffRow & { type: 'row' })
+  | {
+    type: 'omitted'
+    count: number
+  }
+
+interface WindowSlice {
+  lines: string[]
+  startLine: number
+  truncated: boolean
+}
+
+const MAX_DIFF_LINES_WITHOUT_RANGE = 240
+const DIFF_CONTEXT_LINES = 4
+const COLLAPSE_CONTEXT_ROWS = 2
+
 const props = withDefaults(defineProps<{
   beforeContent: string
   afterContent: string
@@ -25,6 +42,9 @@ const props = withDefaults(defineProps<{
 }>(), {
   focusRange: null
 })
+
+const rootRef = ref<HTMLElement | null>(null)
+const showFullContext = ref(false)
 
 function normalizeLines(content: string): string[] {
   if (!content) {
@@ -38,20 +58,39 @@ function normalizeLines(content: string): string[] {
   return lines
 }
 
-function sliceWindow(lines: string[], range: FileEditRange | null, context: number) {
-  if (!range || lines.length <= 18) {
+function sliceWindow(lines: string[], range: FileEditRange | null, context: number): WindowSlice {
+  if (range) {
+    if (lines.length <= 18) {
+      return {
+        lines,
+        startLine: 1,
+        truncated: false
+      }
+    }
+
+    const start = Math.max(0, range.startLine - 1 - context)
+    const end = Math.min(lines.length, range.endLine + context)
+
     return {
-      lines,
-      startLine: 1
+      lines: lines.slice(start, end),
+      startLine: start + 1,
+      truncated: start > 0 || end < lines.length
     }
   }
 
-  const start = Math.max(0, range.startLine - 1 - context)
-  const end = Math.min(lines.length, range.endLine + context)
+  if (lines.length <= MAX_DIFF_LINES_WITHOUT_RANGE) {
+    return {
+      lines,
+      startLine: 1,
+      truncated: false
+    }
+  }
 
+  // 没有 focusRange 时只保留有限窗口，避免对整份大文件执行高成本 diff。
   return {
-    lines: lines.slice(start, end),
-    startLine: start + 1
+    lines: lines.slice(0, MAX_DIFF_LINES_WITHOUT_RANGE),
+    startLine: 1,
+    truncated: true
   }
 }
 
@@ -147,11 +186,75 @@ function buildAfterRows(ops: DiffOp[], startLine: number): DiffRow[] {
   return rows
 }
 
-const beforeWindow = computed(() => sliceWindow(normalizeLines(props.beforeContent), props.focusRange, 4))
-const afterWindow = computed(() => sliceWindow(normalizeLines(props.afterContent), props.focusRange, 4))
+function collapseNeutralRows(rows: DiffRow[]): DisplayDiffRow[] {
+  if (showFullContext.value) {
+    return rows.map(row => ({ ...row, type: 'row' as const }))
+  }
+
+  const changedIndexes = rows
+    .map((row, index) => row.variant !== 'neutral' ? index : -1)
+    .filter(index => index !== -1)
+
+  if (changedIndexes.length === 0) {
+    return rows.map(row => ({ ...row, type: 'row' as const }))
+  }
+
+  const keepIndexes = new Set<number>()
+  for (const changedIndex of changedIndexes) {
+    for (
+      let index = Math.max(0, changedIndex - COLLAPSE_CONTEXT_ROWS);
+      index <= Math.min(rows.length - 1, changedIndex + COLLAPSE_CONTEXT_ROWS);
+      index += 1
+    ) {
+      keepIndexes.add(index)
+    }
+  }
+
+  const collapsed: DisplayDiffRow[] = []
+  let index = 0
+  while (index < rows.length) {
+    if (keepIndexes.has(index)) {
+      collapsed.push({ ...rows[index], type: 'row' })
+      index += 1
+      continue
+    }
+
+    let omittedCount = 0
+    while (index < rows.length && !keepIndexes.has(index)) {
+      omittedCount += 1
+      index += 1
+    }
+
+    collapsed.push({
+      type: 'omitted',
+      count: omittedCount
+    })
+  }
+
+  return collapsed
+}
+
+const jumpToFirstChange = async () => {
+  await nextTick()
+  const firstChangedRow = rootRef.value?.querySelector('.trace-diff-stack__row--changed')
+  if (!(firstChangedRow instanceof HTMLElement)) {
+    return
+  }
+
+  firstChangedRow.scrollIntoView({
+    block: 'center',
+    behavior: 'smooth'
+  })
+}
+
+const beforeWindow = computed(() => sliceWindow(normalizeLines(props.beforeContent), props.focusRange, DIFF_CONTEXT_LINES))
+const afterWindow = computed(() => sliceWindow(normalizeLines(props.afterContent), props.focusRange, DIFF_CONTEXT_LINES))
 const diffOps = computed(() => buildDiffOps(beforeWindow.value.lines, afterWindow.value.lines))
 const beforeRows = computed(() => buildBeforeRows(diffOps.value, beforeWindow.value.startLine))
 const afterRows = computed(() => buildAfterRows(diffOps.value, afterWindow.value.startLine))
+const beforeDisplayRows = computed(() => collapseNeutralRows(beforeRows.value))
+const afterDisplayRows = computed(() => collapseNeutralRows(afterRows.value))
+const isWindowTruncated = computed(() => beforeWindow.value.truncated || afterWindow.value.truncated)
 const diffStats = computed(() => diffOps.value.reduce((stats, op) => {
   if (op.type === 'add') {
     stats.added += 1
@@ -167,7 +270,16 @@ const diffStats = computed(() => diffOps.value.reduce((stats, op) => {
 </script>
 
 <template>
-  <div class="trace-diff-stack">
+  <div
+    ref="rootRef"
+    class="trace-diff-stack"
+  >
+    <div
+      v-if="isWindowTruncated"
+      class="trace-diff-stack__notice"
+    >
+      当前仅展示局部窗口以保证大文件对比性能。
+    </div>
     <div
       v-if="changeType === 'modify' && (diffStats.added > 0 || diffStats.removed > 0)"
       class="trace-diff-stack__summary"
@@ -178,6 +290,18 @@ const diffStats = computed(() => diffOps.value.reduce((stats, op) => {
       <span class="trace-diff-stack__summary-chip trace-diff-stack__summary-chip--added">
         + {{ diffStats.added }} 行
       </span>
+      <button
+        class="trace-diff-stack__summary-action"
+        @click="showFullContext = !showFullContext"
+      >
+        {{ showFullContext ? '折叠未改动区块' : '展开完整上下文' }}
+      </button>
+      <button
+        class="trace-diff-stack__summary-action"
+        @click="jumpToFirstChange"
+      >
+        跳到首个变更
+      </button>
     </div>
 
     <section class="trace-diff-stack__panel">
@@ -200,17 +324,30 @@ const diffStats = computed(() => diffOps.value.reduce((stats, op) => {
         class="trace-diff-stack__rows"
       >
         <div
-          v-for="(row, index) in beforeRows"
-          :key="`before-${index}-${row.lineNumber}`"
-          class="trace-diff-stack__row"
-          :class="{
-            'trace-diff-stack__row--removed': row.variant === 'removed',
-            'trace-diff-stack__row--neutral': row.variant === 'neutral'
-          }"
+          v-for="(row, index) in beforeDisplayRows"
+          :key="`before-${index}-${row.type === 'row' ? row.lineNumber : `omitted-${row.count}`}`"
+          class="trace-diff-stack__row-wrap"
         >
-          <span class="trace-diff-stack__marker">{{ row.marker }}</span>
-          <span class="trace-diff-stack__line">{{ row.lineNumber }}</span>
-          <code class="trace-diff-stack__code">{{ row.text || ' ' }}</code>
+          <button
+            v-if="row.type === 'omitted'"
+            class="trace-diff-stack__omitted"
+            @click="showFullContext = true"
+          >
+            展开未改动 {{ row.count }} 行
+          </button>
+          <div
+            v-else
+            class="trace-diff-stack__row"
+            :class="{
+              'trace-diff-stack__row--removed': row.variant === 'removed',
+              'trace-diff-stack__row--neutral': row.variant === 'neutral',
+              'trace-diff-stack__row--changed': row.variant !== 'neutral'
+            }"
+          >
+            <span class="trace-diff-stack__marker">{{ row.marker }}</span>
+            <span class="trace-diff-stack__line">{{ row.lineNumber }}</span>
+            <code class="trace-diff-stack__code">{{ row.text || ' ' }}</code>
+          </div>
         </div>
       </div>
     </section>
@@ -235,17 +372,30 @@ const diffStats = computed(() => diffOps.value.reduce((stats, op) => {
         class="trace-diff-stack__rows"
       >
         <div
-          v-for="(row, index) in afterRows"
-          :key="`after-${index}-${row.lineNumber}`"
-          class="trace-diff-stack__row"
-          :class="{
-            'trace-diff-stack__row--added': row.variant === 'added',
-            'trace-diff-stack__row--neutral': row.variant === 'neutral'
-          }"
+          v-for="(row, index) in afterDisplayRows"
+          :key="`after-${index}-${row.type === 'row' ? row.lineNumber : `omitted-${row.count}`}`"
+          class="trace-diff-stack__row-wrap"
         >
-          <span class="trace-diff-stack__marker">{{ row.marker }}</span>
-          <span class="trace-diff-stack__line">{{ row.lineNumber }}</span>
-          <code class="trace-diff-stack__code">{{ row.text || ' ' }}</code>
+          <button
+            v-if="row.type === 'omitted'"
+            class="trace-diff-stack__omitted"
+            @click="showFullContext = true"
+          >
+            展开未改动 {{ row.count }} 行
+          </button>
+          <div
+            v-else
+            class="trace-diff-stack__row"
+            :class="{
+              'trace-diff-stack__row--added': row.variant === 'added',
+              'trace-diff-stack__row--neutral': row.variant === 'neutral',
+              'trace-diff-stack__row--changed': row.variant !== 'neutral'
+            }"
+          >
+            <span class="trace-diff-stack__marker">{{ row.marker }}</span>
+            <span class="trace-diff-stack__line">{{ row.lineNumber }}</span>
+            <code class="trace-diff-stack__code">{{ row.text || ' ' }}</code>
+          </div>
         </div>
       </div>
     </section>
@@ -266,10 +416,37 @@ const diffStats = computed(() => diffOps.value.reduce((stats, op) => {
     linear-gradient(180deg, color-mix(in srgb, var(--color-surface-hover) 72%, transparent), var(--color-surface));
 }
 
+.trace-diff-stack__notice {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(59, 130, 246, 0.18);
+  background: rgba(59, 130, 246, 0.06);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
 .trace-diff-stack__summary {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.trace-diff-stack__summary-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: color-mix(in srgb, var(--color-surface) 92%, white 8%);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.trace-diff-stack__summary-action:hover {
+  color: var(--color-text-primary);
+  border-color: rgba(59, 130, 246, 0.28);
 }
 
 .trace-diff-stack__summary-chip {
@@ -336,6 +513,10 @@ const diffStats = computed(() => diffOps.value.reduce((stats, op) => {
   overflow: auto;
 }
 
+.trace-diff-stack__row-wrap {
+  display: block;
+}
+
 .trace-diff-stack__row {
   display: grid;
   grid-template-columns: 24px 56px minmax(0, 1fr);
@@ -360,6 +541,20 @@ const diffStats = computed(() => diffOps.value.reduce((stats, op) => {
 
 .trace-diff-stack__row--added {
   background: rgba(220, 252, 231, 0.7);
+}
+
+.trace-diff-stack__omitted {
+  width: 100%;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.72);
+  background: color-mix(in srgb, var(--color-surface-hover) 82%, transparent);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  text-align: left;
+}
+
+.trace-diff-stack__omitted:hover {
+  color: var(--color-text-primary);
 }
 
 .trace-diff-stack__marker,

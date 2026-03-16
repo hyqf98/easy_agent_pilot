@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use rusqlite::{params, params_from_iter, OptionalExtension, ToSql};
 use serde::{Deserialize, Serialize};
 
@@ -66,6 +67,25 @@ pub struct ListRawMemoryRecordsQuery {
     pub session_id: Option<String>,
     pub project_id: Option<String>,
     pub search: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchDeleteRawMemoryRecordsInput {
+    pub session_id: Option<String>,
+    pub project_id: Option<String>,
+    pub search: Option<String>,
+    pub start_at: Option<String>,
+    pub end_at: Option<String>,
+    pub limit: Option<i64>,
+    pub delete_order: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchDeleteRawMemoryRecordsResult {
+    pub deleted_count: i32,
+    pub deleted_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,6 +160,52 @@ fn normalize_required_string(value: String, field: &str) -> Result<String, Strin
         return Err(format!("{} 不能为空", field));
     }
     Ok(trimmed.to_string())
+}
+
+fn normalize_timestamp(value: Option<String>, field: &str) -> Result<Option<String>, String> {
+    let Some(raw) = normalize_optional_string(value) else {
+        return Ok(None);
+    };
+
+    let parsed = DateTime::parse_from_rfc3339(&raw)
+        .map_err(|_| format!("{} 时间格式无效", field))?;
+    Ok(Some(parsed.with_timezone(&Utc).to_rfc3339()))
+}
+
+fn append_raw_record_filters(
+    sql: &mut String,
+    bindings: &mut Vec<Box<dyn ToSql>>,
+    query: &ListRawMemoryRecordsQuery,
+    start_at: Option<&String>,
+    end_at: Option<&String>,
+) {
+    if let Some(project_id) = query.project_id.clone() {
+        sql.push_str(&format!(" AND r.project_id = ?{}", bindings.len() + 1));
+        bindings.push(Box::new(project_id));
+    }
+
+    if let Some(session_id) = query.session_id.clone() {
+        sql.push_str(&format!(" AND r.session_id = ?{}", bindings.len() + 1));
+        bindings.push(Box::new(session_id));
+    }
+
+    if let Some(search) = normalize_optional_string(query.search.clone()) {
+        sql.push_str(&format!(
+            " AND LOWER(r.content) LIKE LOWER(?{})",
+            bindings.len() + 1
+        ));
+        bindings.push(Box::new(format!("%{}%", search)));
+    }
+
+    if let Some(start_at) = start_at {
+        sql.push_str(&format!(" AND r.created_at >= ?{}", bindings.len() + 1));
+        bindings.push(Box::new(start_at.clone()));
+    }
+
+    if let Some(end_at) = end_at {
+        sql.push_str(&format!(" AND r.created_at <= ?{}", bindings.len() + 1));
+        bindings.push(Box::new(end_at.clone()));
+    }
 }
 
 fn parse_string_array(raw: String) -> Vec<String> {
@@ -413,24 +479,7 @@ pub fn list_raw_memory_records(
     );
 
     let mut bindings: Vec<Box<dyn ToSql>> = Vec::new();
-
-    if let Some(project_id) = query.project_id {
-        sql.push_str(&format!(" AND r.project_id = ?{}", bindings.len() + 1));
-        bindings.push(Box::new(project_id));
-    }
-
-    if let Some(session_id) = query.session_id {
-        sql.push_str(&format!(" AND r.session_id = ?{}", bindings.len() + 1));
-        bindings.push(Box::new(session_id));
-    }
-
-    if let Some(search) = normalize_optional_string(query.search) {
-        sql.push_str(&format!(
-            " AND LOWER(r.content) LIKE LOWER(?{})",
-            bindings.len() + 1
-        ));
-        bindings.push(Box::new(format!("%{}%", search)));
-    }
+    append_raw_record_filters(&mut sql, &mut bindings, &query, None, None);
 
     sql.push_str(" ORDER BY r.created_at DESC");
 
@@ -525,6 +574,93 @@ pub fn delete_raw_memory_record(id: String) -> Result<(), String> {
     conn.execute("DELETE FROM raw_memory_records WHERE id = ?1", [&id])
         .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn batch_delete_raw_memory_records(
+    input: BatchDeleteRawMemoryRecordsInput,
+) -> Result<BatchDeleteRawMemoryRecordsResult, String> {
+    let start_at = normalize_timestamp(input.start_at, "开始时间")?;
+    let end_at = normalize_timestamp(input.end_at, "结束时间")?;
+    if let (Some(start_at), Some(end_at)) = (&start_at, &end_at) {
+        if start_at > end_at {
+            return Err("开始时间不能晚于结束时间".to_string());
+        }
+    }
+
+    let limit = input.limit.unwrap_or(0);
+    if limit < 0 {
+        return Err("删除条数不能小于 0".to_string());
+    }
+    if start_at.is_none() && end_at.is_none() && limit == 0 {
+        return Err("请至少设置时间范围或删除条数".to_string());
+    }
+
+    let delete_order = match normalize_optional_string(input.delete_order) {
+        Some(order) if order.eq_ignore_ascii_case("latest") || order.eq_ignore_ascii_case("newest") => {
+            "DESC"
+        }
+        Some(order) if order.eq_ignore_ascii_case("oldest") => "ASC",
+        Some(_) => return Err("删除顺序仅支持 oldest 或 latest".to_string()),
+        None => "ASC",
+    };
+
+    let query = ListRawMemoryRecordsQuery {
+        session_id: input.session_id,
+        project_id: input.project_id,
+        search: input.search,
+    };
+
+    let conn = get_db_connection().map_err(|error| error.to_string())?;
+    let mut sql = String::from("SELECT r.id FROM raw_memory_records r WHERE 1 = 1");
+    let mut bindings: Vec<Box<dyn ToSql>> = Vec::new();
+    append_raw_record_filters(
+        &mut sql,
+        &mut bindings,
+        &query,
+        start_at.as_ref(),
+        end_at.as_ref(),
+    );
+    sql.push_str(&format!(" ORDER BY r.created_at {}", delete_order));
+
+    if limit > 0 {
+        sql.push_str(&format!(" LIMIT ?{}", bindings.len() + 1));
+        bindings.push(Box::new(limit));
+    }
+
+    let params: Vec<&dyn ToSql> = bindings.iter().map(|value| value.as_ref()).collect();
+    let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
+    let deleted_ids = stmt
+        .query_map(params_from_iter(params), |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| error.to_string())?;
+
+    if deleted_ids.is_empty() {
+        return Ok(BatchDeleteRawMemoryRecordsResult {
+            deleted_count: 0,
+            deleted_ids,
+        });
+    }
+
+    let tx = conn.unchecked_transaction().map_err(|error| error.to_string())?;
+    let placeholders = (1..=deleted_ids.len())
+        .map(|index| format!("?{}", index))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let delete_sql = format!(
+        "DELETE FROM raw_memory_records WHERE id IN ({})",
+        placeholders
+    );
+    let delete_params = deleted_ids.iter().map(|id| id as &dyn ToSql);
+    tx.execute(&delete_sql, params_from_iter(delete_params))
+        .map_err(|error| error.to_string())?;
+    tx.commit().map_err(|error| error.to_string())?;
+
+    Ok(BatchDeleteRawMemoryRecordsResult {
+        deleted_count: deleted_ids.len() as i32,
+        deleted_ids,
+    })
 }
 
 #[tauri::command]

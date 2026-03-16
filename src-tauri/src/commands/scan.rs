@@ -720,8 +720,31 @@ const FAST_SESSION_SCAN_LINE_LIMIT: usize = 120;
 const FULL_SESSION_SCAN_SIZE_THRESHOLD: u64 = 256 * 1024;
 const UNKNOWN_MESSAGE_COUNT: i32 = -1;
 
+fn extract_session_project_path(session_path: &PathBuf) -> Option<String> {
+    let file = fs::File::open(session_path).ok()?;
+    let reader = BufReader::new(file);
+
+    for (index, line) in reader.lines().enumerate() {
+        let Ok(line) = line else {
+            continue;
+        };
+
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
+            if let Some(project_path) = extract_jsonl_project_path(&json) {
+                return Some(project_path);
+            }
+        }
+
+        if index >= FAST_SESSION_SCAN_LINE_LIMIT {
+            break;
+        }
+    }
+
+    None
+}
+
 /// 从会话jsonl文件中提取会话信息
-fn extract_session_info(session_path: &PathBuf) -> Option<ScannedCliSession> {
+fn extract_session_info(session_path: &PathBuf, force_fast_scan: bool) -> Option<ScannedCliSession> {
     let file_name = session_path.file_stem()?.to_string_lossy().to_string();
     let metadata = fs::metadata(session_path).ok()?;
     let modified = metadata
@@ -729,7 +752,7 @@ fn extract_session_info(session_path: &PathBuf) -> Option<ScannedCliSession> {
         .ok()
         .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
     let modified_str = chrono::DateTime::<chrono::Utc>::from(modified).to_rfc3339();
-    let fast_scan_only = metadata.len() > FULL_SESSION_SCAN_SIZE_THRESHOLD;
+    let fast_scan_only = force_fast_scan || metadata.len() > FULL_SESSION_SCAN_SIZE_THRESHOLD;
 
     let file = fs::File::open(session_path).ok()?;
     let reader = BufReader::new(file);
@@ -800,6 +823,60 @@ fn extract_session_info(session_path: &PathBuf) -> Option<ScannedCliSession> {
     })
 }
 
+fn list_cli_session_project_paths(cli_name: &str, config_dir: &PathBuf) -> Vec<String> {
+    let mut project_paths = Vec::new();
+
+    match cli_name {
+        "claude" | "claude-code" => {
+            let projects_dir = config_dir.join("projects");
+            if let Ok(project_entries) = fs::read_dir(&projects_dir) {
+                for project_entry in project_entries.flatten() {
+                    let project_dir = project_entry.path();
+                    if !project_dir.is_dir() {
+                        continue;
+                    }
+
+                    if let Ok(session_entries) = fs::read_dir(&project_dir) {
+                        for session_entry in session_entries.flatten() {
+                            let session_path = session_entry.path();
+                            if session_path
+                                .extension()
+                                .map(|ext| ext == "jsonl")
+                                .unwrap_or(false)
+                            {
+                                if let Some(project_path) =
+                                    extract_session_project_path(&session_path)
+                                {
+                                    project_paths.push(project_path);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        "codex" => {
+            let sessions_dir = config_dir.join("sessions");
+            if sessions_dir.exists() {
+                let mut session_files = Vec::new();
+                collect_jsonl_files(&sessions_dir, &mut session_files);
+
+                for session_file in session_files {
+                    if let Some(project_path) = extract_session_project_path(&session_file) {
+                        project_paths.push(project_path);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+
+    project_paths.sort();
+    project_paths.dedup();
+    project_paths
+}
+
 /// 根据 agentId 获取 agent 的 cli_path
 fn get_agent_cli_path(agent_id: &str) -> Result<String, String> {
     let persistence_dir = super::get_persistence_dir_path().map_err(|e| e.to_string())?;
@@ -833,6 +910,46 @@ pub struct AgentCliSessionsResult {
     pub project_paths: Vec<String>,
 }
 
+/// Agent CLI 会话项目列表结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentCliSessionProjectsResult {
+    /// Agent ID
+    pub agent_id: String,
+    /// CLI 名称
+    pub cli_name: String,
+    /// 会话根目录
+    pub session_root: String,
+    /// 项目路径列表
+    pub project_paths: Vec<String>,
+}
+
+/// 列出指定 Agent 的 CLI 会话项目列表 (Tauri 命令)
+#[tauri::command]
+pub async fn list_agent_cli_session_projects(
+    agent_id: String,
+) -> Result<AgentCliSessionProjectsResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        list_agent_cli_session_projects_impl(agent_id)
+    })
+    .await
+    .map_err(|e| format!("加载会话项目列表失败: {}", e))?
+}
+
+fn list_agent_cli_session_projects_impl(
+    agent_id: String,
+) -> Result<AgentCliSessionProjectsResult, String> {
+    let cli_path = get_agent_cli_path(&agent_id)?;
+    let (config_dir, _, cli_name) =
+        get_cli_config_dir(Some(cli_path.as_str())).map_err(|e| format!("无法确定配置目录: {}", e))?;
+
+    Ok(AgentCliSessionProjectsResult {
+        agent_id,
+        cli_name: cli_name.clone(),
+        session_root: config_dir.to_string_lossy().to_string(),
+        project_paths: list_cli_session_project_paths(&cli_name, &config_dir),
+    })
+}
+
 /// 列出指定 Agent 的 CLI 会话 (Tauri 命令)
 #[tauri::command]
 pub async fn list_agent_cli_sessions(
@@ -850,41 +967,23 @@ fn list_agent_cli_sessions_impl(
     agent_id: String,
     project_path: Option<String>,
 ) -> Result<AgentCliSessionsResult, String> {
-    // 获取 agent 的 cli_path
     let cli_path = get_agent_cli_path(&agent_id)?;
-
-    // 首先获取所有会话以提取项目路径列表
-    let all_result = scan_cli_sessions(ScanCliSessionsInput {
-        cli_path: Some(cli_path.clone()),
-        project_path: None,
-    })?;
-
-    // 提取唯一的项目路径列表
-    let mut project_paths: Vec<String> = all_result
-        .sessions
-        .iter()
-        .filter_map(|s| s.project_path.clone())
-        .collect();
-    project_paths.sort();
-    project_paths.dedup();
-
-    let sessions = if let Some(ref filter_project) = project_path {
-        all_result
-            .sessions
-            .iter()
-            .filter(|session| session.project_path.as_deref() == Some(filter_project.as_str()))
-            .cloned()
-            .collect()
-    } else {
-        all_result.sessions.clone()
-    };
+    let project_listing = list_agent_cli_session_projects_impl(agent_id.clone())?;
+    let prefer_fast_scan = project_path.is_none();
+    let session_result = scan_cli_sessions_internal(
+        ScanCliSessionsInput {
+            cli_path: Some(cli_path),
+            project_path,
+        },
+        prefer_fast_scan,
+    )?;
 
     Ok(AgentCliSessionsResult {
         agent_id,
-        cli_name: all_result.cli_name,
-        session_root: all_result.config_dir,
-        sessions,
-        project_paths,
+        cli_name: session_result.cli_name,
+        session_root: session_result.config_dir,
+        sessions: session_result.sessions,
+        project_paths: project_listing.project_paths,
     })
 }
 
@@ -1089,6 +1188,13 @@ pub async fn delete_cli_sessions(
 /// 扫描智能体会话历史 (Tauri 命令)
 #[tauri::command]
 pub fn scan_cli_sessions(input: ScanCliSessionsInput) -> Result<ScanCliSessionsResult, String> {
+    scan_cli_sessions_internal(input, false)
+}
+
+fn scan_cli_sessions_internal(
+    input: ScanCliSessionsInput,
+    prefer_fast_scan: bool,
+) -> Result<ScanCliSessionsResult, String> {
     // 获取 CLI 配置目录
     let (config_dir, _, cli_name) = match get_cli_config_dir(input.cli_path.as_deref()) {
         Ok(result) => result,
@@ -1137,7 +1243,7 @@ pub fn scan_cli_sessions(input: ScanCliSessionsInput) -> Result<ScanCliSessionsR
                             for entry in entries.flatten() {
                                 let path = entry.path();
                                 if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
-                                    if let Some(session) = extract_session_info(&path) {
+                                    if let Some(session) = extract_session_info(&path, false) {
                                         sessions.push(session);
                                     }
                                 }
@@ -1159,7 +1265,7 @@ pub fn scan_cli_sessions(input: ScanCliSessionsInput) -> Result<ScanCliSessionsR
                                             .unwrap_or(false)
                                         {
                                             if let Some(session) =
-                                                extract_session_info(&session_path)
+                                                extract_session_info(&session_path, prefer_fast_scan)
                                             {
                                                 sessions.push(session);
                                             }
@@ -1180,7 +1286,7 @@ pub fn scan_cli_sessions(input: ScanCliSessionsInput) -> Result<ScanCliSessionsR
                 collect_jsonl_files(&sessions_dir, &mut session_files);
 
                 for session_file in session_files {
-                    if let Some(session) = extract_session_info(&session_file) {
+                    if let Some(session) = extract_session_info(&session_file, prefer_fast_scan) {
                         let should_keep = input
                             .project_path
                             .as_ref()

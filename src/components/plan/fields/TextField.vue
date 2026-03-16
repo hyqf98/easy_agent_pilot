@@ -6,6 +6,7 @@ const props = defineProps<{
   field: FormField
   modelValue: string
   error?: string
+  disabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -38,6 +39,7 @@ function onInput(event: Event) {
       :value="modelValue"
       :placeholder="field.placeholder"
       :required="field.required"
+      :disabled="disabled"
       class="input"
       :class="{ 'has-error': error }"
       @input="onInput"

@@ -173,7 +173,9 @@ const resultPreview = computed(() => {
 
 <style scoped>
 .tool-call {
-  width: 100%;
+  align-self: flex-start;
+  width: var(--timeline-panel-width, min(100%, 29.5rem));
+  max-width: 100%;
   border-radius: var(--radius-lg);
   background: linear-gradient(135deg, rgba(251, 146, 60, 0.1), rgba(251, 146, 60, 0.05));
   border: 1px solid rgba(251, 146, 60, 0.3);
@@ -230,6 +232,7 @@ const resultPreview = computed(() => {
   display: flex;
   align-items: center;
   gap: var(--spacing-2);
+  min-width: 0;
 }
 
 .tool-call__icon {
@@ -265,6 +268,7 @@ const resultPreview = computed(() => {
   display: flex;
   align-items: center;
   gap: var(--spacing-2);
+  flex-shrink: 0;
 }
 
 .tool-call__toggle {

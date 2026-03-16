@@ -6,6 +6,7 @@ const props = defineProps<{
   field: FormField
   modelValue: boolean
   error?: string
+  disabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -30,6 +31,7 @@ function onChange(event: Event) {
         :id="inputId"
         type="checkbox"
         :checked="modelValue"
+        :disabled="disabled"
         class="checkbox"
         @change="onChange"
       >

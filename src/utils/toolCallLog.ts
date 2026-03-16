@@ -1,5 +1,6 @@
 import type { ToolCall } from '@/stores/message'
-import type { DynamicFormSchema } from '@/types/plan'
+import type { AIFormRequest, DynamicFormSchema } from '@/types/plan'
+import { normalizeFormSchemaForRendering, normalizeFormSchemasForRendering } from './formSchema'
 
 interface ToolCallLogLike {
   id: string
@@ -67,7 +68,31 @@ export function extractDynamicFormSchema(payload: unknown): DynamicFormSchema | 
     return null
   }
 
-  return candidate as unknown as DynamicFormSchema
+  return normalizeFormSchemaForRendering(candidate as unknown as DynamicFormSchema)
+}
+
+export function extractDynamicFormSchemas(payload: unknown): DynamicFormSchema[] {
+  if (!isRecord(payload)) {
+    return []
+  }
+
+  const formRequest = payload as Partial<AIFormRequest> & Record<string, unknown>
+  const forms = Array.isArray(formRequest.forms)
+    ? formRequest.forms
+    : []
+
+  const normalizedForms = forms.filter(isRecord).filter(form =>
+    typeof form.formId === 'string'
+    && typeof form.title === 'string'
+    && Array.isArray(form.fields)
+  ) as unknown as DynamicFormSchema[]
+
+  if (normalizedForms.length > 0) {
+    return normalizeFormSchemasForRendering(normalizedForms)
+  }
+
+  const singleSchema = extractDynamicFormSchema(payload)
+  return singleSchema ? [singleSchema] : []
 }
 
 export function buildToolCallFromLogs<T extends ToolCallLogLike>(

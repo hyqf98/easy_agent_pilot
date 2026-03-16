@@ -20,6 +20,7 @@ interface MonacoCodeEditorProps {
   fontSize: number
   tabSize: number
   wordWrap: boolean
+  performanceMode?: 'default' | 'large'
   completions?: CompletionEntry[]
   readOnly?: boolean
   highlightedRanges?: EditorHighlightRange[]
@@ -27,6 +28,7 @@ interface MonacoCodeEditorProps {
 }
 
 const props = withDefaults(defineProps<MonacoCodeEditorProps>(), {
+  performanceMode: 'default',
   completions: () => [],
   readOnly: false,
   highlightedRanges: () => [],
@@ -75,11 +77,42 @@ const resolveTheme = (): 'easy-agent-light' | 'easy-agent-dark' => {
   return themeStore.isDark ? 'easy-agent-dark' : 'easy-agent-light'
 }
 
+const buildEditorOptions = (): monaco.editor.IStandaloneEditorConstructionOptions => {
+  const isLargeFile = props.performanceMode === 'large'
+
+  return {
+    fontSize: props.fontSize,
+    tabSize: props.tabSize,
+    wordWrap: props.wordWrap ? 'on' : 'off',
+    readOnly: props.readOnly,
+    minimap: { enabled: false },
+    scrollBeyondLastLine: false,
+    automaticLayout: true,
+    smoothScrolling: !isLargeFile,
+    quickSuggestions: isLargeFile
+      ? false
+      : {
+          other: true,
+          comments: true,
+          strings: true
+        },
+    suggestOnTriggerCharacters: !isLargeFile,
+    snippetSuggestions: isLargeFile ? 'none' : 'inline',
+    occurrencesHighlight: isLargeFile ? 'off' : 'singleFile',
+    selectionHighlight: !isLargeFile,
+    folding: !isLargeFile,
+    guides: {
+      bracketPairs: !isLargeFile,
+      indentation: !isLargeFile
+    }
+  }
+}
+
 const registerCompletionProvider = (): void => {
   completionProviderDisposable?.dispose()
   completionProviderDisposable = null
 
-  if (!props.completions.length) {
+  if (props.performanceMode === 'large' || !props.completions.length) {
     return
   }
 
@@ -108,16 +141,7 @@ const updateEditorOptions = (): void => {
     return
   }
 
-  editor.updateOptions({
-    fontSize: props.fontSize,
-    tabSize: props.tabSize,
-    wordWrap: props.wordWrap ? 'on' : 'off',
-    readOnly: props.readOnly,
-    minimap: { enabled: false },
-    smoothScrolling: true,
-    scrollBeyondLastLine: false,
-    automaticLayout: true
-  })
+  editor.updateOptions(buildEditorOptions())
 }
 
 const updateDecorations = (): void => {
@@ -208,21 +232,7 @@ onMounted(() => {
   editor = monaco.editor.create(containerRef.value, {
     model,
     theme: resolveTheme(),
-    fontSize: props.fontSize,
-    tabSize: props.tabSize,
-    wordWrap: props.wordWrap ? 'on' : 'off',
-    minimap: { enabled: false },
-    readOnly: props.readOnly,
-    quickSuggestions: {
-      other: true,
-      comments: true,
-      strings: true
-    },
-    suggestOnTriggerCharacters: true,
-    snippetSuggestions: 'inline',
-    smoothScrolling: true,
-    scrollBeyondLastLine: false,
-    automaticLayout: true
+    ...buildEditorOptions()
   })
 
   decorationCollection = editor.createDecorationsCollection()
@@ -270,8 +280,9 @@ watch(() => props.completions, () => {
   registerCompletionProvider()
 }, { deep: true })
 
-watch(() => [props.fontSize, props.tabSize, props.wordWrap, props.readOnly], () => {
+watch(() => [props.fontSize, props.tabSize, props.wordWrap, props.readOnly, props.performanceMode], () => {
   updateEditorOptions()
+  registerCompletionProvider()
 })
 
 watch(() => props.highlightedRanges, () => {

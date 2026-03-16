@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useAgentStore, type AgentConfig } from './agent'
 import { logger } from '@/utils/logger'
+import { normalizeFormSchemaForRendering, normalizeFormSchemasForRendering } from '@/utils/formSchema'
 import {
   buildPlanSplitJsonSchema,
   buildPlanSplitKickoffPrompt,
@@ -31,7 +32,12 @@ interface TaskSplitContext {
   workingDirectory?: string
 }
 
-const OTHER_VALUE = '__other__'
+interface SubmittedFormSnapshot {
+  formId: string
+  schema: DynamicFormSchema
+  values: Record<string, unknown>
+  submittedAt: string
+}
 
 function getAllowedTools(provider: string): string[] {
   if ((provider || '').toLowerCase() === 'codex') {
@@ -55,40 +61,6 @@ function summarizeFormValues(schema: DynamicFormSchema, values: Record<string, u
   return schema.fields
     .map(field => `${field.label}：${formatOptionValue(field, values[field.name])}`)
     .join('\n')
-}
-
-function normalizeFieldOptions(schema: DynamicFormSchema): DynamicFormSchema {
-  return {
-    ...schema,
-    fields: schema.fields.map(field => {
-      if (!['select', 'radio', 'multiselect'].includes(field.type) || !field.options?.length) {
-        return field
-      }
-
-      const nextOptions = field.options
-        .map(option => {
-          const isOther =
-            String(option.value) === OTHER_VALUE ||
-            String(option.label).trim() === (field.otherLabel || '其他')
-
-          if (!isOther) return option
-          return {
-            label: field.otherLabel || '其他',
-            value: OTHER_VALUE
-          }
-        })
-        .filter((option, index, array) =>
-          array.findIndex(item => String(item.value) === String(option.value)) === index
-        )
-
-      return {
-        ...field,
-        options: nextOptions,
-        allowOther: true,
-        otherLabel: field.otherLabel || '其他'
-      }
-    })
-  }
 }
 
 function parseJson<T>(raw?: string | null, fallback?: T): T {
@@ -142,7 +114,7 @@ function toSplitMessages(raw?: string | null): SplitMessage[] {
 
 function toFormQueue(raw?: string | null): DynamicFormSchema[] {
   const forms = parseJson<DynamicFormSchema[]>(raw, [])
-  return forms.map(normalizeFieldOptions)
+  return normalizeFormSchemasForRendering(forms)
 }
 
 function toSplitResult(raw?: string | null): AITaskItem[] | null {
@@ -163,6 +135,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
   const logs = ref<PlanSplitLogRecord[]>([])
   const isProcessing = ref(false)
   const splitResult = ref<AITaskItem[] | null>(null)
+  const submittedForms = ref<SubmittedFormSnapshot[]>([])
   const currentFormId = ref<string | null>(null)
   const formQueue = ref<DynamicFormSchema[]>([])
   const currentFormIndex = ref<number>(0)
@@ -192,6 +165,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     logs.value = []
     isProcessing.value = false
     splitResult.value = null
+    submittedForms.value = []
     currentFormId.value = null
     formQueue.value = []
     currentFormIndex.value = 0
@@ -293,7 +267,28 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     applySessionSnapshot(snapshot, true)
   }
 
+  function rememberSubmittedForm(schema: DynamicFormSchema, values: Record<string, unknown>) {
+    const submittedAt = new Date().toISOString()
+    const snapshot: SubmittedFormSnapshot = {
+      formId: schema.formId,
+      schema: normalizeFormSchemaForRendering(
+        JSON.parse(JSON.stringify(schema)) as DynamicFormSchema
+      ),
+      values: JSON.parse(JSON.stringify(values)) as Record<string, unknown>,
+      submittedAt
+    }
+
+    submittedForms.value = [
+      ...submittedForms.value.filter(item => item.formId !== schema.formId),
+      snapshot
+    ]
+  }
+
   async function initSession(nextContext: TaskSplitContext) {
+    if (context.value?.planId !== nextContext.planId) {
+      submittedForms.value = []
+    }
+
     context.value = nextContext
     await subscribeToPlan(nextContext.planId)
     await loadSession(nextContext.planId)
@@ -345,6 +340,22 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       }
     })
     applySessionSnapshot(snapshot, true)
+    rememberSubmittedForm(schema, values)
+  }
+
+  async function retry() {
+    if (!context.value || !session.value) {
+      return
+    }
+
+    const llmMessages = parseJson<MessageInput[]>(session.value.llmMessagesJson, [])
+    const uiMessages = toSplitMessages(session.value.messagesJson)
+
+    if (llmMessages.length === 0) {
+      throw new Error('当前会话缺少可重试的上下文。')
+    }
+
+    await startBackgroundSession(context.value, llmMessages, uiMessages)
   }
 
   async function stop() {
@@ -479,6 +490,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     logs,
     isProcessing,
     splitResult,
+    submittedForms,
     currentFormId,
     currentFormIndex,
     formQueue,
@@ -491,6 +503,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     subSplitConfig,
     initSession,
     submitFormResponse,
+    retry,
     stop,
     updateSplitTask,
     removeSplitTask,

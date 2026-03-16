@@ -16,6 +16,13 @@ export interface AgentCliSessionsResult {
   project_paths: string[]
 }
 
+export interface AgentCliSessionProjectsResult {
+  agent_id: string
+  cli_name: string
+  session_root: string
+  project_paths: string[]
+}
+
 export interface CliSessionMessage {
   line_no: number
   message_type: string

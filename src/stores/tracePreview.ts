@@ -56,7 +56,7 @@ export const useTracePreviewStore = defineStore('tracePreview', () => {
 
     try {
       const nextContent = await readProjectFile(input.projectPath, input.trace.filePath)
-      content.value = nextContent
+      content.value = nextContent.content
       languageId.value = getLanguageStrategy(input.trace.filePath).monacoLanguageId
     } catch (error) {
       content.value = input.trace.preview?.afterSnippet ?? ''

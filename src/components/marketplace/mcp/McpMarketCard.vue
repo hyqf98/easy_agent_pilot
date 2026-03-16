@@ -12,6 +12,7 @@ const props = defineProps<Props>()
 
 const emit = defineEmits<{
   install: [item: McpMarketItem]
+  view: [item: McpMarketItem]
 }>()
 
 const { t } = useI18n()
@@ -19,10 +20,27 @@ const { t } = useI18n()
 function handleInstall() {
   emit('install', props.item)
 }
+
+function handleView() {
+  emit('view', props.item)
+}
+
+function handleCardKeydown(event: KeyboardEvent) {
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault()
+    handleView()
+  }
+}
 </script>
 
 <template>
-  <div class="mcp-market-card">
+  <div
+    class="mcp-market-card"
+    role="button"
+    tabindex="0"
+    @click="handleView"
+    @keydown="handleCardKeydown"
+  >
     <div class="mcp-market-card__header">
       <div class="mcp-market-card__icon">
         <EaIcon name="plug" :size="24" />
@@ -39,7 +57,7 @@ function handleInstall() {
           </EaTag>
         </h3>
         <p class="mcp-market-card__author">
-          {{ t('marketplace.by') }} {{ item.author }}
+          {{ t('marketplace.by') }} {{ item.author || 'MCP Market' }}
         </p>
       </div>
     </div>
@@ -65,18 +83,18 @@ function handleInstall() {
     <div class="mcp-market-card__footer">
       <div class="mcp-market-card__stats">
         <span
-          v-if="item.downloads"
-          class="mcp-market-card__stat"
-        >
-          <EaIcon name="download" :size="14" />
-          {{ item.downloads.toLocaleString() }}
-        </span>
-        <span
-          v-if="item.rating"
+          v-if="item.stars"
           class="mcp-market-card__stat"
         >
           <EaIcon name="star" :size="14" />
-          {{ item.rating.toFixed(1) }}
+          {{ item.stars.toLocaleString() }}
+        </span>
+        <span
+          v-if="item.category"
+          class="mcp-market-card__stat"
+        >
+          <EaIcon name="tag" :size="14" />
+          {{ item.category }}
         </span>
       </div>
 
@@ -85,7 +103,7 @@ function handleInstall() {
         size="small"
         class="mcp-market-card__action"
         :class="{ 'mcp-market-card__action--installed': isInstalled }"
-        @click="handleInstall"
+        @click.stop="handleInstall"
       >
         <EaIcon
           :name="isInstalled ? 'refresh-cw' : 'download'"
@@ -106,12 +124,18 @@ function handleInstall() {
   background-color: var(--color-bg-secondary);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
+  cursor: pointer;
   transition: all var(--transition-fast) var(--easing-default);
 }
 
 .mcp-market-card:hover {
   border-color: var(--color-primary);
   box-shadow: var(--shadow-sm);
+}
+
+.mcp-market-card:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
 }
 
 .mcp-market-card__header {

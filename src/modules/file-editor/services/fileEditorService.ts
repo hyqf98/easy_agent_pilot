@@ -1,8 +1,8 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { FileContentPayload } from '../types'
+import type { FileContentPayload, ProjectFileContent } from '../types'
 
-export async function readProjectFile(projectPath: string, filePath: string): Promise<string> {
-  return invoke<string>('read_project_file', {
+export async function readProjectFile(projectPath: string, filePath: string): Promise<ProjectFileContent> {
+  return invoke<ProjectFileContent>('read_project_file', {
     projectPath,
     filePath
   })

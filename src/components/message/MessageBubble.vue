@@ -147,25 +147,7 @@ const assistantVisibleEditTraces = computed(() => {
     return []
   }
 
-  const sessionMessages = messageStore.messagesBySession(props.message.sessionId)
-  const latestTraceByFile = new Map<string, { traceId: string; messageId: string; timestamp: string }>()
-
-  for (const message of sessionMessages) {
-    if (message.role !== 'assistant' || !message.editTraces?.length) {
-      continue
-    }
-
-    for (const trace of message.editTraces) {
-      const existing = latestTraceByFile.get(trace.filePath)
-      if (!existing || existing.timestamp <= trace.timestamp) {
-        latestTraceByFile.set(trace.filePath, {
-          traceId: trace.id,
-          messageId: message.id,
-          timestamp: trace.timestamp
-        })
-      }
-    }
-  }
+  const latestTraceByFile = messageStore.getLatestAssistantTraceIdsByFile(props.message.sessionId)
 
   const latestVisibleTraces = props.message.editTraces.filter(trace => {
     const latest = latestTraceByFile.get(trace.filePath)

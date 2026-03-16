@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAgentStore } from '@/stores/agent'
-import { useProjectStore } from '@/stores/project'
 import { useMarketplaceStore, type McpInstallInput } from '@/stores/marketplace'
-import { EaIcon, EaButton, EaInput, EaModal, EaSelect } from '@/components/common'
+import { EaButton, EaIcon, EaInput, EaModal, EaSelect } from '@/components/common'
 import type { McpMarketItem } from '@/types/marketplace'
 
 interface Props {
@@ -20,12 +19,9 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const agentStore = useAgentStore()
-const projectStore = useProjectStore()
 const marketplaceStore = useMarketplaceStore()
 
-// 表单状态
-const selectedAgentId = ref<string>('')
-const scope = ref<'global' | 'project'>('global')
+const selectedAgentId = ref('')
 const customCommand = ref('')
 const customArgs = ref('')
 const envKey = ref('')
@@ -35,50 +31,61 @@ const isInstalling = ref(false)
 const installError = ref<string | null>(null)
 const installSuccess = ref(false)
 
-// 可用的CLI Agent列表
-const cliAgents = computed(() => {
-  return agentStore.agents.filter(a => a.type === 'cli')
+const cliAgents = computed(() =>
+  agentStore.agents.filter(
+    agent => agent.type === 'cli' && (agent.provider === 'claude' || agent.provider === 'codex')
+  )
+)
+
+const selectedAgent = computed(() =>
+  cliAgents.value.find(agent => agent.id === selectedAgentId.value)
+)
+
+const selectedDetail = computed(() => {
+  const detail = marketplaceStore.selectedMcpDetail
+  return detail?.slug === props.mcpItem.slug ? detail : null
 })
 
-// 选中的Agent
-const selectedAgent = computed(() => {
-  return cliAgents.value.find(a => a.id === selectedAgentId.value)
-})
+const defaultCommand = computed(() =>
+  selectedDetail.value?.install_command || props.mcpItem.install_command || 'npx'
+)
 
-const currentProjectPath = computed(() => projectStore.currentProject?.path ?? null)
+const defaultArgs = computed(() =>
+  (selectedDetail.value?.install_args || props.mcpItem.install_args || []).join(' ')
+)
 
-// 默认命令
-const defaultCommand = computed(() => {
-  return props.mcpItem.installCommand || 'npx'
-})
+const canInstall = computed(() => Boolean(selectedAgentId.value) && !isInstalling.value)
 
-// 默认参数
-const defaultArgs = computed(() => {
-  return props.mcpItem.installArgs || ''
-})
+function splitArgs(value: string): string[] {
+  const matches = value.match(/"[^"]*"|'[^']*'|\S+/g) || []
+  return matches
+    .map(item => item.trim().replace(/^['"]|['"]$/g, ''))
+    .filter(Boolean)
+}
 
-// 是否可以安装
-const canInstall = computed(() => {
-  return selectedAgentId.value && !isInstalling.value
-})
-
-// 添加环境变量
 function addEnv() {
-  if (envKey.value && envValue.value) {
-    customEnv.value[envKey.value] = envValue.value
-    envKey.value = ''
-    envValue.value = ''
+  if (!envKey.value || !envValue.value) {
+    return
   }
+
+  customEnv.value = {
+    ...customEnv.value,
+    [envKey.value.trim()]: envValue.value.trim()
+  }
+  envKey.value = ''
+  envValue.value = ''
 }
 
-// 移除环境变量
 function removeEnv(key: string) {
-  delete customEnv.value[key]
+  const nextEnv = { ...customEnv.value }
+  delete nextEnv[key]
+  customEnv.value = nextEnv
 }
 
-// 执行安装
 async function handleInstall() {
-  if (!canInstall.value || !selectedAgent.value) return
+  if (!selectedAgent.value || !canInstall.value) {
+    return
+  }
 
   isInstalling.value = true
   installError.value = null
@@ -86,26 +93,24 @@ async function handleInstall() {
 
   try {
     const input: McpInstallInput = {
-      mcp_id: props.mcpItem.id,
-      mcp_name: props.mcpItem.name,
-      cli_path: selectedAgent.value.cliPath || 'claude',
+      mcp_id: props.mcpItem.slug,
+      mcp_name: props.mcpItem.slug,
+      cli_path: selectedAgent.value.cliPath || selectedAgent.value.provider || 'claude',
       command: customCommand.value || defaultCommand.value,
-      args: customArgs.value || defaultArgs.value || null,
-      env: Object.keys(customEnv.value).length > 0 ? { ...customEnv.value } : null,
-      scope: scope.value,
-      project_path: scope.value === 'project' ? currentProjectPath.value : null
+      args: splitArgs(customArgs.value || defaultArgs.value),
+      env: { ...customEnv.value },
+      scope: 'global',
+      project_path: null
     }
 
     const result = await marketplaceStore.installMcp(input)
-
     if (result.success) {
       installSuccess.value = true
-      setTimeout(() => {
-        emit('complete')
-      }, 1500)
-    } else {
-      installError.value = result.message
+      setTimeout(() => emit('complete'), 1200)
+      return
     }
+
+    installError.value = result.message
   } catch (error) {
     installError.value = error instanceof Error ? error.message : t('marketplace.installFailed')
   } finally {
@@ -113,20 +118,18 @@ async function handleInstall() {
   }
 }
 
-// 关闭弹窗
 function handleClose() {
   if (!isInstalling.value) {
     emit('close')
   }
 }
 
-onMounted(() => {
-  // 自动选择第一个CLI Agent
+onMounted(async () => {
   if (cliAgents.value.length > 0) {
     selectedAgentId.value = cliAgents.value[0].id
   }
 
-  // 初始化默认值
+  await marketplaceStore.fetchMcpDetail(props.mcpItem.slug, marketplaceStore.activeMarketSource)
   customCommand.value = defaultCommand.value
   customArgs.value = defaultArgs.value
 })
@@ -140,7 +143,6 @@ onMounted(() => {
     @close="handleClose"
   >
     <div class="mcp-install-modal">
-      <!-- 成功状态 -->
       <div
         v-if="installSuccess"
         class="mcp-install-modal__success"
@@ -153,20 +155,24 @@ onMounted(() => {
         <p>{{ t('marketplace.installSuccess') }}</p>
       </div>
 
-      <!-- 安装表单 -->
       <template v-else>
-        <!-- MCP信息 -->
         <div class="mcp-install-modal__info">
           <h4>{{ mcpItem.name }}</h4>
           <p>{{ mcpItem.description }}</p>
+          <div class="mcp-install-modal__meta">
+            <span v-if="mcpItem.category">{{ mcpItem.category }}</span>
+            <span v-if="mcpItem.stars">{{ mcpItem.stars.toLocaleString() }} ★</span>
+          </div>
         </div>
 
-        <!-- 选择Agent -->
         <div class="mcp-install-modal__field">
           <label>{{ t('marketplace.selectAgent') }}</label>
           <EaSelect
             v-model="selectedAgentId"
-            :options="cliAgents.map(a => ({ value: a.id, label: a.name }))"
+            :options="cliAgents.map(agent => ({
+              value: agent.id,
+              label: `${agent.name} · ${(agent.provider || 'claude').toUpperCase()}`
+            }))"
             :placeholder="t('marketplace.selectAgentPlaceholder')"
           />
           <p
@@ -175,32 +181,14 @@ onMounted(() => {
           >
             {{ t('marketplace.noCliAgent') }}
           </p>
+          <p
+            v-else
+            class="mcp-install-modal__hint"
+          >
+            {{ t('marketplace.globalOnly') }}
+          </p>
         </div>
 
-        <!-- 安装范围 -->
-        <div class="mcp-install-modal__field">
-          <label>{{ t('marketplace.installScope') }}</label>
-          <div class="mcp-install-modal__radio-group">
-            <label class="mcp-install-modal__radio">
-              <input
-                v-model="scope"
-                type="radio"
-                value="global"
-              >
-              <span>{{ t('marketplace.scopeGlobal') }}</span>
-            </label>
-            <label class="mcp-install-modal__radio">
-              <input
-                v-model="scope"
-                type="radio"
-                value="project"
-              >
-              <span>{{ t('marketplace.scopeProject') }}</span>
-            </label>
-          </div>
-        </div>
-
-        <!-- 命令配置 -->
         <div class="mcp-install-modal__field">
           <label>{{ t('marketplace.command') }}</label>
           <EaInput
@@ -217,10 +205,12 @@ onMounted(() => {
           />
         </div>
 
-        <!-- 环境变量 -->
         <div class="mcp-install-modal__field">
           <label>{{ t('marketplace.envVars') }}</label>
-          <div class="mcp-install-modal__env-list">
+          <div
+            v-if="Object.keys(customEnv).length > 0"
+            class="mcp-install-modal__env-list"
+          >
             <div
               v-for="(value, key) in customEnv"
               :key="key"
@@ -236,6 +226,7 @@ onMounted(() => {
               </button>
             </div>
           </div>
+
           <div class="mcp-install-modal__env-add">
             <EaInput
               v-model="envKey"
@@ -256,7 +247,6 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- 错误信息 -->
         <div
           v-if="installError"
           class="mcp-install-modal__error"
@@ -306,25 +296,32 @@ onMounted(() => {
 }
 
 .mcp-install-modal__success-icon {
-  color: var(--color-success);
   margin-bottom: var(--spacing-4);
+  color: var(--color-success);
 }
 
 .mcp-install-modal__info {
   padding: var(--spacing-3);
-  background-color: var(--color-bg-secondary);
+  background: var(--color-bg-secondary);
   border-radius: var(--radius-md);
 }
 
 .mcp-install-modal__info h4 {
   margin: 0 0 var(--spacing-1);
   font-size: var(--font-size-base);
-  font-weight: var(--font-weight-semibold);
 }
 
 .mcp-install-modal__info p {
   margin: 0;
+  color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
+}
+
+.mcp-install-modal__meta {
+  display: flex;
+  gap: var(--spacing-3);
+  margin-top: var(--spacing-2);
+  font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
 }
 
@@ -341,77 +338,51 @@ onMounted(() => {
 }
 
 .mcp-install-modal__hint {
+  margin: 0;
   font-size: var(--font-size-xs);
-  color: var(--color-warning);
-}
-
-.mcp-install-modal__radio-group {
-  display: flex;
-  gap: var(--spacing-4);
-}
-
-.mcp-install-modal__radio {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
+  color: var(--color-text-secondary);
 }
 
 .mcp-install-modal__env-list {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
-  margin-bottom: var(--spacing-2);
 }
 
 .mcp-install-modal__env-item {
-  display: flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   gap: var(--spacing-2);
-  padding: var(--spacing-2);
-  background-color: var(--color-bg-secondary);
-  border-radius: var(--radius-sm);
+  align-items: center;
+  padding: var(--spacing-2) var(--spacing-3);
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-md);
 }
 
-.mcp-install-modal__env-key {
-  font-family: monospace;
-  font-size: var(--font-size-sm);
-  color: var(--color-primary);
-}
-
+.mcp-install-modal__env-key,
 .mcp-install-modal__env-value {
-  flex: 1;
-  font-family: monospace;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
 }
 
 .mcp-install-modal__env-remove {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  background: none;
+  width: 28px;
+  height: 28px;
+  background: transparent;
   border: none;
   color: var(--color-text-secondary);
   cursor: pointer;
-  border-radius: var(--radius-sm);
-}
-
-.mcp-install-modal__env-remove:hover {
-  background-color: var(--color-surface-hover);
-  color: var(--color-danger);
 }
 
 .mcp-install-modal__env-add {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   gap: var(--spacing-2);
-}
-
-.mcp-install-modal__env-add :deep(.ea-input) {
-  flex: 1;
 }
 
 .mcp-install-modal__error {
@@ -419,9 +390,9 @@ onMounted(() => {
   align-items: center;
   gap: var(--spacing-2);
   padding: var(--spacing-3);
-  background-color: var(--color-danger-light);
-  color: var(--color-danger);
+  background: var(--color-danger-light);
   border-radius: var(--radius-md);
+  color: var(--color-danger);
   font-size: var(--font-size-sm);
 }
 

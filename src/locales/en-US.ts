@@ -559,6 +559,8 @@ export default {
       agentSelection: 'CLI Agent Session Management',
       agentLabel: 'Agent',
       projectLabel: 'Project',
+      useCurrentProject: 'Use Current Project',
+      deleteCurrentProjectSessions: 'Delete Current Project Sessions',
       scopeLabel: 'Scope',
       scopeAll: 'All Projects',
       scopeCurrentProject: 'Current Project',
@@ -588,6 +590,8 @@ export default {
       confirmDeleteDesc: 'This will remove the session file and cannot be undone.',
       confirmBatchDeleteTitle: 'Delete Sessions',
       confirmBatchDeleteDesc: 'This will remove {n} session files and cannot be undone.',
+      noCurrentProjectSessions: 'No sessions found for the current project',
+      loadCurrentProjectSessionsFailed: 'Failed to load current project sessions',
       partialDeleteFailed: '{n} sessions failed to delete:',
       moreSelected: '+{n} more sessions',
       justNow: 'Just now',
@@ -1225,17 +1229,19 @@ export default {
   // Marketplace page (integrated MCP/Skills/Plugins market)
   marketplace: {
     title: 'Marketplace',
-    subtitle: 'Discover and install MCP servers, Skills, and Plugins to extend AI capabilities',
+    subtitle: 'Switch marketplace sources and install MCP servers or Skills into Claude CLI and Codex CLI',
     tabs: {
       mcp: 'MCP Servers',
       skills: 'Skills',
       plugins: 'Plugins'
     },
+    sourceMarket: 'Marketplace Source',
     search: 'Search...',
     allCategories: 'All Categories',
     allTypes: 'All Types',
     loading: 'Loading...',
     noResults: 'No results found',
+    loadMore: 'Load More',
     installed: 'Installed',
     reinstall: 'Reinstall',
     install: 'Install',
@@ -1250,6 +1256,8 @@ export default {
     installScope: 'Install Scope',
     scopeGlobal: 'Global',
     scopeProject: 'Current Project',
+    globalOnly: 'Marketplace MCP installs currently write to the global Claude/Codex CLI config.',
+    globalSkillInstall: 'Marketplace skills are installed into the native global skills directory of the selected CLI.',
     command: 'Command',
     args: 'Arguments',
     envVars: 'Environment Variables',
@@ -1257,7 +1265,15 @@ export default {
     envValue: 'Value',
     selectComponents: 'Select components to install',
     installSuccess: 'Installation successful!',
-    installFailed: 'Installation failed'
+    installFailed: 'Installation failed',
+    viewDetails: 'Details',
+    openRepository: 'Open Repository',
+    sourceLabel: 'Source',
+    authorLabel: 'Author',
+    categoryLabel: 'Category',
+    transportLabel: 'Transport',
+    descriptionLabel: 'Description',
+    skillContentLabel: 'SKILL.md'
   },
 
   // Memory Management System

@@ -66,13 +66,21 @@ function handleMessageFormCancel(formId: string) {
       <div
         v-else-if="entry.type === 'form' && entry.formSchema"
         class="timeline-form"
+        :class="`timeline-form--${entry.formVariant || 'active'}`"
       >
         <div
           class="timeline-form__content"
-          :class="{ 'timeline-form__content--disabled': entry.formDisabled }"
+          :class="{
+            'timeline-form__content--disabled': entry.formDisabled,
+            'timeline-form__content--submitted': entry.formVariant === 'submitted',
+            'timeline-form__content--active': (entry.formVariant || 'active') === 'active'
+          }"
         >
           <DynamicForm
             :schema="entry.formSchema"
+            :initial-values="entry.formInitialValues"
+            :disabled="entry.formDisabled"
+            :variant="entry.formVariant || 'active'"
             @submit="emit('form-submit', entry.id, $event)"
             @cancel="emit('form-cancel', entry.id)"
           />
@@ -92,6 +100,7 @@ function handleMessageFormCancel(formId: string) {
 
 <style scoped>
 .execution-timeline {
+  --timeline-entry-width: var(--timeline-panel-width, min(100%, 29.5rem));
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
@@ -134,6 +143,9 @@ function handleMessageFormCancel(formId: string) {
 }
 
 .timeline-entry {
+  align-self: flex-start;
+  width: var(--timeline-entry-width);
+  max-width: 100%;
   border-radius: 0.95rem;
   border: 1px solid rgba(148, 163, 184, 0.18);
   background: rgba(248, 250, 252, 0.82);
@@ -155,12 +167,22 @@ function handleMessageFormCancel(formId: string) {
 }
 
 .timeline-form__content {
-  width: min(100%, 44rem);
+  width: var(--timeline-entry-width);
+  max-width: 100%;
+  transition: transform 0.18s ease, opacity 0.18s ease, box-shadow 0.18s ease;
+}
+
+.timeline-form__content--active {
+  filter: saturate(1.02);
+}
+
+.timeline-form__content--submitted {
+  opacity: 0.92;
+  transform: none;
 }
 
 .timeline-form__content--disabled {
   opacity: 0.72;
-  pointer-events: none;
 }
 
 [data-theme='dark'] .timeline-message__content {

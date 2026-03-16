@@ -67,7 +67,7 @@ pub struct McpConfigUpdateInput {
 }
 
 /// 根据 CLI 路径获取配置目录和信息
-fn get_cli_config_paths_internal(cli_path: &str) -> Result<CliConfigPaths, String> {
+pub(crate) fn get_cli_config_paths_internal(cli_path: &str) -> Result<CliConfigPaths, String> {
     let home_dir = dirs::home_dir().ok_or_else(|| "Cannot determine home directory".to_string())?;
 
     // 从路径中提取 CLI 名称

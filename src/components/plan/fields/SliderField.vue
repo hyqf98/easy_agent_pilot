@@ -6,6 +6,7 @@ const props = defineProps<{
   field: FormField
   modelValue: number
   error?: string
+  disabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -42,6 +43,7 @@ function onInput(event: Event) {
       :value="modelValue"
       :min="min"
       :max="max"
+      :disabled="disabled"
       class="slider"
       @input="onInput"
     >

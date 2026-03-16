@@ -6,6 +6,8 @@ import { useAgentStore, type AgentConfig } from './agent'
 import { getErrorMessage } from '@/utils/api'
 import { memoryMergeService } from '@/services/memory'
 import type {
+  BatchDeleteRawMemoryRecordsInput,
+  BatchDeleteRawMemoryRecordsResult,
   CaptureUserMessageInput,
   CreateMemoryLibraryInput,
   CreateRawMemoryRecordInput,
@@ -40,6 +42,7 @@ export const useMemoryStore = defineStore('memory', () => {
   const isLoadingMergeRuns = ref(false)
   const isMerging = ref(false)
   const isSavingLibrary = ref(false)
+  const isDeletingRecords = ref(false)
 
   const activeLibrary = computed(() =>
     libraries.value.find((library) => library.id === activeLibraryId.value) ?? null
@@ -252,6 +255,37 @@ export const useMemoryStore = defineStore('memory', () => {
     }
   }
 
+  async function batchDeleteRawRecords(input: Omit<BatchDeleteRawMemoryRecordsInput, keyof ListRawMemoryRecordsQuery>) {
+    isDeletingRecords.value = true
+    const request: BatchDeleteRawMemoryRecordsInput = {
+      ...lastRawQuery.value,
+      ...input
+    }
+
+    try {
+      const result = await invoke<BatchDeleteRawMemoryRecordsResult>('batch_delete_raw_memory_records', {
+        input: request
+      })
+      selectedRecordIds.value = selectedRecordIds.value.filter(recordId => !result.deletedIds.includes(recordId))
+      await loadRawRecords(lastRawQuery.value)
+
+      if (result.deletedCount > 0) {
+        notificationStore.success(`已批量删除 ${result.deletedCount} 条原始记忆`)
+      } else {
+        notificationStore.warning('没有匹配到可删除的原始记忆')
+      }
+
+      return result
+    } catch (error) {
+      notificationStore.databaseError('批量删除原始记忆失败', getErrorMessage(error), async () => {
+        await batchDeleteRawRecords(input)
+      })
+      throw error
+    } finally {
+      isDeletingRecords.value = false
+    }
+  }
+
   async function captureUserMessage(input: CaptureUserMessageInput) {
     try {
       const record = await invoke<RawMemoryRecord>('capture_user_message', { input })
@@ -370,6 +404,7 @@ export const useMemoryStore = defineStore('memory', () => {
     isLoadingMergeRuns,
     isMerging,
     isSavingLibrary,
+    isDeletingRecords,
     initialize,
     loadLibraries,
     loadRawRecords,
@@ -381,6 +416,7 @@ export const useMemoryStore = defineStore('memory', () => {
     createRawRecord,
     updateRawRecord,
     deleteRawRecord,
+    batchDeleteRawRecords,
     captureUserMessage,
     mergeIntoLibrary,
     toggleRecordSelection,

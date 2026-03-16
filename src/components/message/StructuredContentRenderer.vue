@@ -61,6 +61,7 @@ function handleFormCancel(formId: string) {
         </div>
         <DynamicForm
           :schema="block.formSchema"
+          :disabled="!interactiveForms || formDisabled"
           @submit="handleFormSubmit(block.formSchema.formId, $event)"
           @cancel="handleFormCancel(block.formSchema.formId)"
         />
@@ -86,7 +87,6 @@ function handleFormCancel(formId: string) {
 
 .structured-content__form--disabled {
   opacity: 0.78;
-  pointer-events: none;
 }
 
 .structured-content__label {

@@ -7,10 +7,9 @@ import { useProjectStore } from '@/stores/project'
 import TaskSplitPreview from './TaskSplitPreview.vue'
 import TaskResplitModal from './TaskResplitModal.vue'
 import ExecutionTimeline from '@/components/message/ExecutionTimeline.vue'
-import type { AITaskItem, TaskResplitConfig } from '@/types/plan'
+import type { AITaskItem, DynamicFormSchema, TaskResplitConfig } from '@/types/plan'
 import type { TimelineEntry } from '@/types/timeline'
-import { buildToolCallFromLogs, extractDynamicFormSchema } from '@/utils/toolCallLog'
-import { containsFormSchema } from '@/utils/structuredContent'
+import { buildToolCallFromLogs, extractDynamicFormSchema, extractDynamicFormSchemas } from '@/utils/toolCallLog'
 
 const planStore = usePlanStore()
 const taskSplitStore = useTaskSplitStore()
@@ -34,6 +33,23 @@ const showStopButton = computed(() =>
   taskSplitStore.session?.status === 'running' || taskSplitStore.session?.status === 'waiting_input'
 )
 const showLoadingIndicator = computed(() => taskSplitStore.session?.status === 'running')
+const canRetrySplit = computed(() => taskSplitStore.session?.status === 'failed')
+const splitErrorMessage = computed(() =>
+  taskSplitStore.session?.errorMessage?.trim()
+  || taskSplitStore.session?.parseError?.trim()
+  || ''
+)
+const footerHint = computed(() => {
+  if (canRetrySplit.value) {
+    return splitErrorMessage.value || 'AI 响应失败，可点击重试重新发起请求。'
+  }
+
+  if (taskSplitStore.session?.status === 'running') {
+    return '后台正在执行拆分，可关闭弹框稍后回来查看'
+  }
+
+  return '请根据上方 AI 动态表单逐步补充需求'
+})
 
 function scrollMessagesToBottom() {
   const container = messagesContainerRef.value
@@ -42,11 +58,179 @@ function scrollMessagesToBottom() {
   container.scrollTop = container.scrollHeight
 }
 
+function compareTimestamp(left?: string, right?: string) {
+  return new Date(left || 0).getTime() - new Date(right || 0).getTime()
+}
+
+function buildSummaryValueMap(schema: DynamicFormSchema, content: string): Record<string, string> {
+  const labelSet = new Set(schema.fields.map(field => field.label))
+  const valueMap: Record<string, string> = {}
+  let currentLabel = ''
+  let currentValue = ''
+
+  const flushCurrentValue = () => {
+    if (!currentLabel) return
+    valueMap[currentLabel] = currentValue.trim()
+  }
+
+  for (const rawLine of content.split('\n')) {
+    const line = rawLine.trimEnd()
+    const fullWidthSeparatorIndex = line.indexOf('：')
+    const asciiSeparatorIndex = line.indexOf(':')
+    const separatorIndex = fullWidthSeparatorIndex >= 0 ? fullWidthSeparatorIndex : asciiSeparatorIndex
+    const candidateLabel = separatorIndex >= 0 ? line.slice(0, separatorIndex).trim() : ''
+
+    if (candidateLabel && labelSet.has(candidateLabel)) {
+      flushCurrentValue()
+      currentLabel = candidateLabel
+      currentValue = line.slice(separatorIndex + 1).trim()
+      continue
+    }
+
+    if (currentLabel) {
+      currentValue = [currentValue, line.trim()].filter(Boolean).join('\n')
+    }
+  }
+
+  flushCurrentValue()
+  return valueMap
+}
+
+function parseFieldSummaryValue(
+  field: DynamicFormSchema['fields'][number],
+  rawValue?: string
+): unknown {
+  const normalizedValue = rawValue?.trim()
+  if (!normalizedValue || normalizedValue === '-') {
+    if (field.type === 'multiselect') return []
+    if (field.type === 'checkbox') return false
+    return ''
+  }
+
+  const parseOptionValue = (value: string) => {
+    const matchedOption = field.options?.find(option =>
+      String(option.label).trim() === value || String(option.value).trim() === value
+    )
+    return matchedOption ? matchedOption.value : value
+  }
+
+  switch (field.type) {
+    case 'select':
+    case 'radio':
+      return parseOptionValue(normalizedValue)
+    case 'multiselect':
+      return normalizedValue
+        .split('、')
+        .map(item => item.trim())
+        .filter(Boolean)
+        .map(parseOptionValue)
+    case 'number':
+    case 'slider': {
+      const numericValue = Number(normalizedValue)
+      return Number.isFinite(numericValue) ? numericValue : normalizedValue
+    }
+    case 'checkbox':
+      return ['true', '1', 'yes', 'on', '是'].includes(normalizedValue.toLowerCase())
+    default:
+      return normalizedValue
+  }
+}
+
+function buildFormValuesFromMessage(schema: DynamicFormSchema, messageContent: string): Record<string, unknown> {
+  const summaryValueMap = buildSummaryValueMap(schema, messageContent)
+  const values: Record<string, unknown> = {}
+
+  for (const field of schema.fields) {
+    values[field.name] = parseFieldSummaryValue(field, summaryValueMap[field.label])
+  }
+
+  return values
+}
+
+const historicalSubmittedForms = computed(() => {
+  const structuredFormQueue: Array<{ schema: DynamicFormSchema; requestedAt: string }> = []
+  const sortedLogs = [...taskSplitStore.logs].sort((left, right) =>
+    compareTimestamp(left.createdAt, right.createdAt)
+  )
+
+  for (const log of sortedLogs) {
+    let schemas: DynamicFormSchema[] = []
+
+    if (log.type === 'content') {
+      try {
+        schemas = extractDynamicFormSchemas(JSON.parse(log.content) as Record<string, unknown>)
+      } catch {
+        schemas = []
+      }
+    } else {
+      const toolCall = buildToolCallFromLogs(log, taskSplitStore.logs)
+      if (!toolCall) continue
+
+      const isStructuredOutput = toolCall.name.toLowerCase() === 'structuredoutput'
+        || toolCall.name.toLowerCase() === 'structured_output'
+      if (!isStructuredOutput) continue
+
+      schemas = extractDynamicFormSchemas(toolCall.arguments)
+    }
+
+    for (const schema of schemas) {
+      structuredFormQueue.push({
+        schema,
+        requestedAt: log.createdAt
+      })
+    }
+  }
+
+  const derivedSnapshots: Array<{
+    formId: string
+    schema: DynamicFormSchema
+    values: Record<string, unknown>
+    submittedAt: string
+  }> = []
+  const sortedMessages = [...taskSplitStore.messages].sort((left, right) =>
+    compareTimestamp(left.timestamp, right.timestamp)
+  )
+  let formQueueIndex = 0
+
+  for (const message of sortedMessages) {
+    if (message.role !== 'user') continue
+    const pendingForm = structuredFormQueue[formQueueIndex]
+    if (!pendingForm) break
+    if (compareTimestamp(message.timestamp, pendingForm.requestedAt) < 0) {
+      continue
+    }
+
+    derivedSnapshots.push({
+      formId: pendingForm.schema.formId,
+      schema: pendingForm.schema,
+      values: buildFormValuesFromMessage(pendingForm.schema, message.content),
+      submittedAt: message.timestamp
+    })
+    formQueueIndex += 1
+  }
+
+  const mergedSnapshots = new Map<string, typeof derivedSnapshots[number]>()
+
+  for (const snapshot of derivedSnapshots) {
+    mergedSnapshots.set(snapshot.formId, snapshot)
+  }
+
+  for (const snapshot of taskSplitStore.submittedForms) {
+    mergedSnapshots.set(snapshot.formId, snapshot)
+  }
+
+  return Array.from(mergedSnapshots.values()).sort((left, right) =>
+    compareTimestamp(left.submittedAt, right.submittedAt)
+  )
+})
+
 const timelineEntries = computed<TimelineEntry[]>(() => {
   const entries: TimelineEntry[] = []
+  const submittedFormIds = new Set(historicalSubmittedForms.value.map(item => item.formId))
+  const activeFormId = activeFormSchema.value?.formId ?? null
 
   for (const message of taskSplitStore.messages) {
-    if (message.role === 'assistant' && !message.content.trim()) {
+    if (!message.content.trim()) {
       continue
     }
 
@@ -60,26 +244,47 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
   }
 
   for (const log of taskSplitStore.logs) {
-    if (log.type === 'tool_result' || log.type === 'content') {
+    if (!['thinking', 'tool_use', 'error'].includes(log.type)) {
       continue
+    }
+
+    if (log.type === 'thinking') {
+      const lastEntry = entries[entries.length - 1]
+      if (lastEntry?.type === 'thinking') {
+        lastEntry.content = [lastEntry.content, log.content].filter(Boolean).join('\n')
+        lastEntry.timestamp = log.createdAt
+        continue
+      }
     }
 
     if (log.type === 'tool_use') {
       const toolCall = buildToolCallFromLogs(log, taskSplitStore.logs)
       if (!toolCall) continue
 
+      const isStructuredOutput = toolCall.name.toLowerCase() === 'structuredoutput'
+        || toolCall.name.toLowerCase() === 'structured_output'
+
       const fallbackFormSchema = !activeFormSchema.value && !showPreview.value
         ? extractDynamicFormSchema(toolCall.arguments)
         : null
 
-      if (fallbackFormSchema) {
+      if (
+        fallbackFormSchema
+        && fallbackFormSchema.formId !== activeFormId
+        && !submittedFormIds.has(fallbackFormSchema.formId)
+      ) {
         entries.push({
           id: `form-log-${log.id}`,
           type: 'form',
           formSchema: fallbackFormSchema,
           formDisabled: true,
+          formVariant: 'submitted',
           timestamp: log.createdAt
         })
+      }
+
+      if (isStructuredOutput) {
+        continue
       }
 
       entries.push({
@@ -103,20 +308,32 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
     new Date(left.timestamp || 0).getTime() - new Date(right.timestamp || 0).getTime()
   )
 
-  const activeFormAlreadyRendered = Boolean(
-    activeFormSchema.value
-    && taskSplitStore.messages.some(message => containsFormSchema(message.content, activeFormSchema.value?.formId))
-  )
+  for (const submittedForm of historicalSubmittedForms.value) {
+    entries.push({
+      id: `submitted-form-${submittedForm.formId}-${submittedForm.submittedAt}`,
+      type: 'form',
+      formSchema: submittedForm.schema,
+      formInitialValues: submittedForm.values,
+      formDisabled: true,
+      formVariant: 'submitted',
+      timestamp: submittedForm.submittedAt
+    })
+  }
 
-  if (activeFormSchema.value && !showPreview.value && !activeFormAlreadyRendered) {
+  if (activeFormSchema.value && !showPreview.value) {
     entries.push({
       id: `form-${activeFormSchema.value.formId}`,
       type: 'form',
       formSchema: activeFormSchema.value,
       formDisabled: taskSplitStore.isProcessing,
+      formVariant: 'active',
       timestamp: taskSplitStore.session?.updatedAt || new Date().toISOString()
     })
   }
+
+  entries.sort((left, right) =>
+    new Date(left.timestamp || 0).getTime() - new Date(right.timestamp || 0).getTime()
+  )
 
   return entries
 })
@@ -268,6 +485,10 @@ async function stopSplitTask() {
   await taskSplitStore.stop()
 }
 
+async function retrySplitTask() {
+  await taskSplitStore.retry()
+}
+
 // 监听对话框打开
 watch(() => planStore.splitDialogVisible, async (visible) => {
   if (visible) {
@@ -361,34 +582,42 @@ watch(messageRenderState, async () => {
           <!-- 无预览时通过动态表单引导，不展示自由输入 -->
           <div
             v-if="!showPreview"
-            class="idle-area"
+            class="footer-bar"
           >
-            <span class="idle-hint">
-              {{
-                taskSplitStore.session?.status === 'running'
-                  ? '后台正在执行拆分，可关闭弹框稍后回来查看'
-                  : '请根据上方 AI 动态表单逐步补充需求'
-              }}
+            <span
+              class="idle-hint"
+              :class="{ 'idle-hint--error': canRetrySplit }"
+            >
+              {{ footerHint }}
             </span>
-            <button
-              v-if="showStopButton"
-              class="btn btn-danger"
-              @click="stopSplitTask"
-            >
-              停止任务
-            </button>
-            <button
-              class="btn btn-secondary"
-              @click="closeDialog"
-            >
-              关闭
-            </button>
+            <div class="footer-actions">
+              <button
+                v-if="canRetrySplit"
+                class="btn btn-secondary btn-retry"
+                @click="retrySplitTask"
+              >
+                重试
+              </button>
+              <button
+                v-if="showStopButton"
+                class="btn btn-danger"
+                @click="stopSplitTask"
+              >
+                停止任务
+              </button>
+              <button
+                class="btn btn-secondary"
+                @click="closeDialog"
+              >
+                取消
+              </button>
+            </div>
           </div>
 
           <!-- 确认按钮 - 仅在有预览时显示 -->
           <div
             v-else
-            class="confirm-area"
+            class="footer-actions footer-actions--confirm"
           >
             <button
               v-if="showStopButton"
@@ -565,6 +794,7 @@ watch(messageRenderState, async () => {
 }
 
 .messages-container {
+  --timeline-panel-width: min(100%, 29.5rem);
   flex: 1;
   overflow-y: auto;
   padding: var(--spacing-4, 1rem);
@@ -715,11 +945,12 @@ watch(messageRenderState, async () => {
   flex-shrink: 0;
 }
 
-.idle-area {
+.footer-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--spacing-3, 0.75rem);
+  flex-wrap: wrap;
 }
 
 .idle-hint {
@@ -727,10 +958,26 @@ watch(messageRenderState, async () => {
   color: var(--color-text-tertiary, #94a3b8);
 }
 
-.confirm-area {
+.idle-hint--error {
+  color: #dc2626;
+}
+
+.footer-actions {
   display: flex;
-  justify-content: flex-end;
   gap: var(--spacing-3, 0.75rem);
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.footer-actions--confirm {
+  width: 100%;
+}
+
+.btn-retry {
+  border-color: rgba(14, 165, 233, 0.36);
+  color: #0369a1;
+  background: linear-gradient(180deg, #ffffff, #eff8ff);
 }
 
 .split-log-panel {
@@ -861,6 +1108,16 @@ watch(messageRenderState, async () => {
   .preview-pane {
     width: 100%;
     min-height: 16rem;
+  }
+
+  .footer-bar {
+    align-items: flex-start;
+  }
+
+  .footer-actions,
+  .footer-actions--confirm {
+    width: 100%;
+    justify-content: flex-start;
   }
 }
 </style>

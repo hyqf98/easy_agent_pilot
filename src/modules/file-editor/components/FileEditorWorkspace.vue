@@ -25,6 +25,15 @@ const languageNameMap: Record<string, string> = {
 
 const languageName = computed(() => languageNameMap[fileEditorStore.languageId] ?? fileEditorStore.languageId)
 
+const fileSizeLabel = computed(() => {
+  if (!fileEditorStore.hasActiveFile) return ''
+
+  const bytes = fileEditorStore.fileSizeBytes
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+})
+
 const saveStatusText = computed(() => {
   if (fileEditorStore.isLoading) return '正在加载文件...'
   if (fileEditorStore.isSaving) return '正在保存...'
@@ -63,11 +72,19 @@ const handleBack = (): void => {
           <span class="file-editor-workspace__divider">•</span>
           <span class="file-editor-workspace__language">{{ languageName }}</span>
           <span class="file-editor-workspace__divider">•</span>
+          <span class="file-editor-workspace__metrics">{{ fileSizeLabel }} / {{ fileEditorStore.lineCount }} 行</span>
+          <span class="file-editor-workspace__divider">•</span>
           <span
             class="file-editor-workspace__status"
             :class="{ 'file-editor-workspace__status--dirty': fileEditorStore.isDirty }"
           >
             {{ saveStatusText }}
+          </span>
+          <span
+            v-if="fileEditorStore.isLargeFile"
+            class="file-editor-workspace__badge"
+          >
+            大文件模式
           </span>
         </div>
       </div>
@@ -111,6 +128,7 @@ const handleBack = (): void => {
         :tab-size="settingsStore.settings.editorTabSize"
         :word-wrap="settingsStore.settings.editorWordWrap"
         :completions="fileEditorStore.completionEntries"
+        :performance-mode="fileEditorStore.isLargeFile ? 'large' : 'default'"
         :read-only="fileEditorStore.isLoading"
         @update:model-value="fileEditorStore.updateContent"
         @save-shortcut="handleSave"
@@ -181,6 +199,10 @@ const handleBack = (): void => {
   color: var(--color-text-tertiary);
 }
 
+.file-editor-workspace__metrics {
+  color: var(--color-text-tertiary);
+}
+
 .file-editor-workspace__divider {
   color: var(--color-text-tertiary);
 }
@@ -191,6 +213,17 @@ const handleBack = (): void => {
 
 .file-editor-workspace__status--dirty {
   color: var(--color-warning);
+}
+
+.file-editor-workspace__badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+  color: var(--color-warning);
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .file-editor-workspace__error {

@@ -50,6 +50,20 @@ export interface ListRawMemoryRecordsQuery {
   search?: string
 }
 
+export type RawMemoryDeleteOrder = 'oldest' | 'latest'
+
+export interface BatchDeleteRawMemoryRecordsInput extends ListRawMemoryRecordsQuery {
+  startAt?: string
+  endAt?: string
+  limit?: number
+  deleteOrder?: RawMemoryDeleteOrder
+}
+
+export interface BatchDeleteRawMemoryRecordsResult {
+  deletedCount: number
+  deletedIds: string[]
+}
+
 export interface CreateRawMemoryRecordInput {
   sessionId?: string
   projectId?: string

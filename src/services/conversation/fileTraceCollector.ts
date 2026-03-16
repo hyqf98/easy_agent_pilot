@@ -315,7 +315,7 @@ function extractToolFileTarget(
 
 async function safeReadProjectFile(projectPath: string, filePath: string): Promise<string | null> {
   try {
-    return await readProjectFile(projectPath, filePath)
+    return (await readProjectFile(projectPath, filePath)).content
   } catch {
     return null
   }

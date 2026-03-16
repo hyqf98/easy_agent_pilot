@@ -1,109 +1,284 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMarketplaceStore } from '@/stores/marketplace'
-import { EaIcon, EaLoading, EaButton, EaInput } from '@/components/common'
+import { EaButton, EaIcon, EaInput, EaLoading } from '@/components/common'
 import McpMarketCard from './McpMarketCard.vue'
+import McpDetailModal from './McpDetailModal.vue'
 import McpInstallModal from './McpInstallModal.vue'
 import type { McpMarketItem } from '@/types/marketplace'
 
 const { t } = useI18n()
 const marketplaceStore = useMarketplaceStore()
 
+const listRef = ref<HTMLElement | null>(null)
+const loadMoreTriggerRef = ref<HTMLElement | null>(null)
+const scrollContainer = ref<HTMLElement | null>(null)
 const searchQuery = ref('')
-const selectedCategory = ref<string | null>(null)
+const selectedCategorySlug = ref('')
+const showDetailModal = ref(false)
 const showInstallModal = ref(false)
 const selectedMcp = ref<McpMarketItem | null>(null)
 
-// 获取所有分类
-const categories = computed(() => {
-  const cats = new Set<string>()
-  marketplaceStore.mcpMarketItems.forEach(item => {
-    if (item.category) {
-      cats.add(item.category)
-    }
+let loadMoreScheduled = false
+let loadMoreObserver: IntersectionObserver | null = null
+let loadMorePollTimer: number | null = null
+
+const categoryOptions = computed(() => [
+  { value: '', label: t('marketplace.allCategories') },
+  ...marketplaceStore.mcpMarketCategories.map(category => ({
+    value: category.slug || category.value,
+    label: category.label
+  }))
+])
+
+function syncLocalFilters() {
+  searchQuery.value = marketplaceStore.mcpMarketQuery.search || ''
+  selectedCategorySlug.value = marketplaceStore.mcpMarketQuery.category_slug || ''
+}
+
+async function refreshMarket() {
+  await marketplaceStore.fetchMcpMarket({
+    ...marketplaceStore.mcpMarketQuery,
+    page: 1
   })
-  return Array.from(cats).sort()
-})
+}
 
-// 过滤后的列表
-const filteredItems = computed(() => {
-  let items = marketplaceStore.mcpMarketItems
+async function submitSearch() {
+  await marketplaceStore.fetchMcpMarket({
+    page: 1,
+    search: searchQuery.value || null,
+    category: null,
+    category_slug: null
+  })
+}
 
-  // 搜索过滤
-  if (searchQuery.value) {
-    const query = searchQuery.value.toLowerCase()
-    items = items.filter(item =>
-      item.name.toLowerCase().includes(query) ||
-      item.description.toLowerCase().includes(query) ||
-      item.author.toLowerCase().includes(query)
-    )
+async function resetFilters() {
+  searchQuery.value = ''
+  selectedCategorySlug.value = ''
+  await marketplaceStore.fetchMcpMarket({
+    page: 1,
+    search: null,
+    category: null,
+    category_slug: null
+  })
+}
+
+async function handleCategoryChange(event: Event) {
+  const value = (event.target as HTMLSelectElement).value
+  selectedCategorySlug.value = value
+  searchQuery.value = ''
+
+  const selectedCategory = marketplaceStore.mcpMarketCategories.find(category => {
+    const slug = category.slug || category.value
+    return slug === value
+  })
+
+  await marketplaceStore.fetchMcpMarket({
+    page: 1,
+    search: null,
+    category: selectedCategory?.label || null,
+    category_slug: value || null
+  })
+}
+
+async function loadMore() {
+  if (!marketplaceStore.mcpMarketPagination.hasMore || marketplaceStore.isLoadingMcpMarket) {
+    return
   }
 
-  // 分类过滤
-  if (selectedCategory.value) {
-    items = items.filter(item => item.category === selectedCategory.value)
-  }
+  await marketplaceStore.fetchMcpMarket(
+    {
+      ...marketplaceStore.mcpMarketQuery,
+      page: marketplaceStore.mcpMarketPagination.page + 1
+    },
+    { append: true }
+  )
+}
 
-  return items
-})
-
-// 打开安装弹窗
 function openInstallModal(item: McpMarketItem) {
   selectedMcp.value = item
   showInstallModal.value = true
 }
 
-// 关闭安装弹窗
+function openDetailModal(item: McpMarketItem) {
+  selectedMcp.value = item
+  showDetailModal.value = true
+}
+
+function closeDetailModal() {
+  showDetailModal.value = false
+  selectedMcp.value = null
+}
+
 function closeInstallModal() {
   showInstallModal.value = false
   selectedMcp.value = null
 }
 
-// 安装完成
+function openInstallFromDetail(item: McpMarketItem) {
+  selectedMcp.value = item
+  showDetailModal.value = false
+  showInstallModal.value = true
+}
+
 function onInstallComplete() {
   closeInstallModal()
 }
 
-// 刷新市场
-async function refreshMarket() {
-  await marketplaceStore.fetchMcpMarket()
+function isNearBottom() {
+  const container = scrollContainer.value
+  if (!container) {
+    return false
+  }
+
+  const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight
+  return distanceToBottom < 240
 }
 
-onMounted(() => {
-  if (marketplaceStore.mcpMarketItems.length === 0) {
-    marketplaceStore.fetchMcpMarket()
+function scheduleLoadMoreCheck() {
+  if (loadMoreScheduled) {
+    return
   }
+
+  loadMoreScheduled = true
+  window.setTimeout(async () => {
+    loadMoreScheduled = false
+    if (isNearBottom()) {
+      await loadMore()
+    }
+  }, 0)
+}
+
+function handleScroll() {
+  scheduleLoadMoreCheck()
+}
+
+function cleanupLoadMoreObserver() {
+  loadMoreObserver?.disconnect()
+  loadMoreObserver = null
+}
+
+function stopLoadMorePolling() {
+  if (loadMorePollTimer !== null) {
+    window.clearInterval(loadMorePollTimer)
+    loadMorePollTimer = null
+  }
+}
+
+function startLoadMorePolling() {
+  stopLoadMorePolling()
+
+  loadMorePollTimer = window.setInterval(() => {
+    scheduleLoadMoreCheck()
+  }, 1000)
+}
+
+function initLoadMoreObserver() {
+  cleanupLoadMoreObserver()
+
+  if (!scrollContainer.value || !loadMoreTriggerRef.value || !marketplaceStore.mcpMarketPagination.hasMore) {
+    return
+  }
+
+  loadMoreObserver = new IntersectionObserver((entries) => {
+    if (entries.some(entry => entry.isIntersecting)) {
+      scheduleLoadMoreCheck()
+    }
+  }, {
+    root: scrollContainer.value,
+    rootMargin: '0px 0px 320px 0px'
+  })
+
+  loadMoreObserver.observe(loadMoreTriggerRef.value)
+}
+
+watch(
+  () => [marketplaceStore.mcpMarketQuery.search, marketplaceStore.mcpMarketQuery.category_slug],
+  () => syncLocalFilters(),
+  { immediate: true }
+)
+
+watch(
+  () => marketplaceStore.mcpMarketItems.length,
+  async () => {
+    await nextTick()
+    initLoadMoreObserver()
+    scheduleLoadMoreCheck()
+  }
+)
+
+watch(
+  () => marketplaceStore.mcpMarketPagination.hasMore,
+  async () => {
+    await nextTick()
+    initLoadMoreObserver()
+  },
+  { immediate: true }
+)
+
+onMounted(async () => {
+  scrollContainer.value = listRef.value?.closest('.marketplace-page__content') as HTMLElement | null
+  scrollContainer.value?.addEventListener('scroll', handleScroll, { passive: true })
+  startLoadMorePolling()
+
+  if (marketplaceStore.mcpMarketItems.length === 0 && !marketplaceStore.isLoadingMcpMarket) {
+    await marketplaceStore.fetchMcpMarket({ page: 1 })
+  }
+
+  await nextTick()
+  initLoadMoreObserver()
+  scheduleLoadMoreCheck()
+})
+
+onBeforeUnmount(() => {
+  cleanupLoadMoreObserver()
+  stopLoadMorePolling()
+  scrollContainer.value?.removeEventListener('scroll', handleScroll)
 })
 </script>
 
 <template>
-  <div class="mcp-market-list">
-    <!-- 工具栏 -->
+  <div ref="listRef" class="mcp-market-list">
     <div class="mcp-market-list__toolbar">
       <div class="mcp-market-list__search">
         <EaInput
           v-model="searchQuery"
           :placeholder="t('marketplace.search')"
-          icon="search"
-          clearable
+          @keydown.enter="submitSearch"
         />
       </div>
 
       <div class="mcp-market-list__filters">
         <select
-          v-model="selectedCategory"
+          :value="selectedCategorySlug"
           class="mcp-market-list__select"
+          @change="handleCategoryChange"
         >
-          <option :value="null">{{ t('marketplace.allCategories') }}</option>
           <option
-            v-for="cat in categories"
-            :key="cat"
-            :value="cat"
+            v-for="option in categoryOptions"
+            :key="option.value"
+            :value="option.value"
           >
-            {{ cat }}
+            {{ option.label }}
           </option>
         </select>
+
+        <EaButton
+          type="primary"
+          size="small"
+          @click="submitSearch"
+        >
+          {{ t('common.search') }}
+        </EaButton>
+
+        <EaButton
+          type="ghost"
+          size="small"
+          @click="resetFilters"
+        >
+          {{ t('common.clear') }}
+        </EaButton>
 
         <EaButton
           type="ghost"
@@ -115,13 +290,11 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- 加载状态 -->
     <EaLoading
-      v-if="marketplaceStore.isLoadingMcpMarket"
+      v-if="marketplaceStore.isLoadingMcpMarket && marketplaceStore.mcpMarketItems.length === 0"
       :message="t('marketplace.loading')"
     />
 
-    <!-- 错误状态 -->
     <div
       v-else-if="marketplaceStore.mcpMarketError"
       class="mcp-market-list__error"
@@ -136,35 +309,63 @@ onMounted(() => {
       </EaButton>
     </div>
 
-    <!-- 空状态 -->
     <div
-      v-else-if="filteredItems.length === 0"
+      v-else-if="marketplaceStore.mcpMarketItems.length === 0"
       class="mcp-market-list__empty"
     >
       <EaIcon name="package" :size="48" />
       <p>{{ t('marketplace.noResults') }}</p>
     </div>
 
-    <!-- 列表 -->
-    <div
-      v-else
-      class="mcp-market-list__grid"
-    >
-      <McpMarketCard
-        v-for="item in filteredItems"
-        :key="item.id"
-        :item="item"
-        :is-installed="marketplaceStore.installedMcpNames.has(item.name.toLowerCase())"
-        @install="openInstallModal(item)"
-      />
-    </div>
+    <template v-else>
+      <div class="mcp-market-list__grid">
+        <McpMarketCard
+          v-for="item in marketplaceStore.mcpMarketItems"
+          :key="item.id"
+          :item="item"
+          :is-installed="marketplaceStore.installedMcpNames.has(item.slug.toLowerCase())"
+          @view="openDetailModal(item)"
+          @install="openInstallModal(item)"
+        />
+      </div>
 
-    <!-- 安装弹窗 -->
+      <div
+        v-if="marketplaceStore.mcpMarketPagination.hasMore"
+        class="mcp-market-list__load-more"
+      >
+        <div
+          ref="loadMoreTriggerRef"
+          class="mcp-market-list__load-more-sentinel"
+          aria-hidden="true"
+        />
+        <EaLoading
+          v-if="marketplaceStore.isLoadingMcpMarket"
+          size="sm"
+          :message="t('marketplace.loadMore')"
+        />
+        <EaButton
+          v-else
+          type="secondary"
+          size="small"
+          @click="loadMore"
+        >
+          {{ t('marketplace.loadMore') }}
+        </EaButton>
+      </div>
+    </template>
+
     <McpInstallModal
       v-if="showInstallModal && selectedMcp"
       :mcp-item="selectedMcp"
       @close="closeInstallModal"
       @complete="onInstallComplete"
+    />
+
+    <McpDetailModal
+      v-if="showDetailModal && selectedMcp"
+      :mcp-item="selectedMcp"
+      @close="closeDetailModal"
+      @install="openInstallFromDetail"
     />
   </div>
 </template>
@@ -185,14 +386,14 @@ onMounted(() => {
 
 .mcp-market-list__search {
   flex: 1;
-  min-width: 200px;
-  max-width: 400px;
+  min-width: 220px;
 }
 
 .mcp-market-list__filters {
   display: flex;
   gap: var(--spacing-2);
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .mcp-market-list__select {
@@ -200,7 +401,7 @@ onMounted(() => {
   -webkit-appearance: none;
   -moz-appearance: none;
   height: 36px;
-  min-width: 120px;
+  min-width: 140px;
   padding: var(--spacing-2) var(--spacing-8) var(--spacing-2) var(--spacing-3);
   font-size: var(--font-size-sm);
   color: var(--color-text-primary);
@@ -228,6 +429,22 @@ onMounted(() => {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: var(--spacing-4);
+}
+
+.mcp-market-list__load-more {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) 0 var(--spacing-5);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.mcp-market-list__load-more-sentinel {
+  width: 100%;
+  height: 1px;
 }
 
 .mcp-market-list__error,

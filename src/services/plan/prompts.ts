@@ -22,10 +22,14 @@ export function buildPlanSplitSystemPrompt(): string {
 核心规则：
 1. 信息不足时输出 form_request 收集信息，可一次输出多个表单 forms
 2. 每个表单可以包含多个字段，字段类型必须适合收集需求信息
-3. 信息充分后输出 task_split（status=DONE）
-4. 任务需可执行、有明确边界、包含实现/测试步骤和验收标准
-5. 用 dependsOn 指定任务依赖关系
-6. 最终回答内容必须是单个 JSON 对象，不要夹带解释文字
+3. 表单字段类型只能使用 text、textarea、select、multiselect、number、checkbox、radio、date、slider
+4. select / radio / multiselect 的 options 必须输出为 [{ "label": "...", "value": "..." }]
+4.1 所有 select / radio / multiselect 字段都必须允许用户填写“其他”，即使已有固定 options 也要保留开放输入能力
+5. 如需条件显示，仅使用简单 condition: { field, value } 等值判断，保证前端会话面板可以动态渲染并收集数据
+6. 信息充分后输出 task_split（status=DONE）
+7. 任务需可执行、有明确边界、包含实现/测试步骤和验收标准
+8. 用 dependsOn 指定任务依赖关系
+9. 最终回答内容必须是单个 JSON 对象，不要夹带解释文字
 
 禁止事项：
 - 禁止输出 markdown 代码块或额外解释
@@ -275,7 +279,7 @@ function buildCodexPlanSplitJsonSchema(minTaskCount: number) {
   const normalizedMinTaskCount = Math.max(1, Math.floor(minTaskCount || 1))
 
   // Codex 的 response_format schema 不支持 allOf/if/then，使用扁平结构，
-  // 由后端解析器继续校验 form_request / task_split 的语义完整性。
+  // 同时把可选字段显式列出为 null，减少模型漏字段导致前端表单渲染不稳定。
   return {
     type: 'object',
     required: ['type', 'question', 'forms', 'formSchema', 'status', 'tasks'],

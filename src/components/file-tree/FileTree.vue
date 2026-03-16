@@ -63,6 +63,7 @@ const isLoading = ref(false)
 const pendingReload = ref(false)
 const unwatchFileTree = ref<UnwatchFn | null>(null)
 const reloadTimer = ref<ReturnType<typeof setTimeout> | null>(null)
+const directoryChildrenCache = ref<Map<string, FileTreeNode[]>>(new Map())
 
 /// 加载根目录文件树
 const loadTreeData = async () => {
@@ -77,6 +78,7 @@ const loadTreeData = async () => {
       projectPath: props.projectPath
     })
     treeData.value = convertToTreeOptions(result, props.projectId)
+    await restoreExpandedDirectories()
   } catch (error) {
     console.error('Failed to load file tree:', error)
   } finally {
@@ -85,6 +87,30 @@ const loadTreeData = async () => {
     if (pendingReload.value) {
       pendingReload.value = false
       await loadTreeData()
+    }
+  }
+}
+
+const getPathDepth = (path: string): number => path.split(/[\\/]/).filter(Boolean).length
+
+const restoreExpandedDirectories = async () => {
+  if (expandedKeys.value.length === 0) {
+    return
+  }
+
+  // 文件树重载后需要恢复用户已展开的目录，否则大项目里每次刷新都会丢失上下文。
+  const sortedExpandedKeys = [...expandedKeys.value].sort((left, right) => getPathDepth(left) - getPathDepth(right))
+
+  for (const key of sortedExpandedKeys) {
+    const node = findTreeNodeByKey(treeData.value, key)
+    if (!node || (node.nodeType !== 'directory' && node.isLeaf !== false)) {
+      continue
+    }
+
+    try {
+      await loadChildrenForNode(node)
+    } catch (error) {
+      console.error('Failed to restore expanded directory:', error)
     }
   }
 }
@@ -99,6 +125,11 @@ const scheduleTreeReload = () => {
     void loadTreeData()
   }, 250)
 }
+
+const cloneTreeNodes = (nodes: FileTreeNode[]): FileTreeNode[] => nodes.map(node => ({
+  ...node,
+  children: node.children ? cloneTreeNodes(node.children) : undefined
+}))
 
 const stopFileWatcher = () => {
   if (reloadTimer.value) {
@@ -144,8 +175,11 @@ const convertToTreeOptions = (nodes: FileTreeNode[], projectId: string): TreeOpt
       projectId
     }
     if (!isFile) {
-      // 目录节点默认给空 children，避免 Tree 组件进入无 on-load 的加载态
-      option.children = []
+      // 先复用缓存子树，让监听刷新时的展开目录不至于闪回空数组。
+      const cachedChildren = directoryChildrenCache.value.get(node.path)
+      option.children = cachedChildren
+        ? convertToTreeOptions(cachedChildren, projectId)
+        : []
     }
     return option as TreeOption
   })
@@ -166,11 +200,20 @@ const findTreeNodeByKey = (nodes: TreeOption[], key: string): (TreeOption & { no
   return null
 }
 
-const loadChildrenForNode = async (node: TreeOption): Promise<void> => {
+const loadChildrenForNode = async (node: TreeOption, forceRefresh = true): Promise<void> => {
   const nodePath = node.key as string
-  const children = await invoke<FileTreeNode[]>('load_directory_children', {
-    dirPath: nodePath
-  })
+  const cachedChildren = directoryChildrenCache.value.get(nodePath)
+  const children = !forceRefresh && cachedChildren
+    ? cachedChildren
+    : await invoke<FileTreeNode[]>('load_directory_children', {
+        dirPath: nodePath
+      })
+
+  if (forceRefresh || !cachedChildren) {
+    const nextCache = new Map(directoryChildrenCache.value)
+    nextCache.set(nodePath, cloneTreeNodes(children))
+    directoryChildrenCache.value = nextCache
+  }
 
   const newChildren = children.map(child => {
     const isFile = child.nodeType === 'file'
@@ -388,6 +431,7 @@ watch(() => props.projectPath, async (newPath, oldPath) => {
     return
   }
 
+  directoryChildrenCache.value = new Map()
   await loadTreeData()
   await startFileWatcher(newPath)
 })
@@ -430,6 +474,7 @@ watch(() => props.projectPath, async (newPath, oldPath) => {
       :expanded-keys="expandedKeys"
       :checked-keys="checkedKeys"
       :selected-keys="selectedKey ? [selectedKey] : []"
+      virtual-scroll
       draggable
       checkable
       selectable

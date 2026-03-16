@@ -1,97 +1,22 @@
 use anyhow::Result;
-use rusqlite::Connection;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::io::{Cursor, Read};
+use std::path::{Component, Path, PathBuf};
+use tauri::AppHandle;
+use zip::ZipArchive;
 
-/// Skills market item category
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-#[allow(dead_code)]
-pub enum SkillCategory {
-    CodeGeneration,
-    Debugging,
-    Documentation,
-    Testing,
-    Other,
-}
+use crate::commands::mcpmarket_source::{
+    get_marketplace_source_strategy, MarketListResponse, MarketplaceSourceQuery, SkillArchivePayload,
+    SkillSourceDetail, SkillSourceListItem,
+};
 
-impl From<&str> for SkillCategory {
-    fn from(s: &str) -> Self {
-        match s {
-            "code_generation" => SkillCategory::CodeGeneration,
-            "debugging" => SkillCategory::Debugging,
-            "documentation" => SkillCategory::Documentation,
-            "testing" => SkillCategory::Testing,
-            _ => SkillCategory::Other,
-        }
-    }
-}
-
-impl std::fmt::Display for SkillCategory {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SkillCategory::CodeGeneration => write!(f, "code_generation"),
-            SkillCategory::Debugging => write!(f, "debugging"),
-            SkillCategory::Documentation => write!(f, "documentation"),
-            SkillCategory::Testing => write!(f, "testing"),
-            SkillCategory::Other => write!(f, "other"),
-        }
-    }
-}
-
-/// Skills market item from a marketplace
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SkillMarketItem {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub trigger_scenario: String,
-    pub source_market: String,
-    pub category: String,
-    pub tags: Vec<String>,
-    pub repository_url: Option<String>,
-    pub author: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-/// Skills market list response
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SkillMarketListResponse {
-    pub items: Vec<SkillMarketItem>,
-    pub total: u64,
-}
-
-/// Skills market query parameters
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SkillMarketQuery {
-    pub category: Option<String>,
-    pub search: Option<String>,
-}
-
-/// Skill market detail (full information)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SkillMarketDetail {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub full_description: String,
-    pub trigger_scenario: String,
-    pub usage_examples: Vec<String>,
-    pub source_market: String,
-    pub category: String,
-    pub tags: Vec<String>,
-    pub author: Option<String>,
-    pub author_url: Option<String>,
-    pub license: Option<String>,
-    pub homepage_url: Option<String>,
-    pub repository_url: Option<String>,
-    pub skill_content: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
-}
+pub type SkillMarketItem = SkillSourceListItem;
+pub type SkillMarketDetail = SkillSourceDetail;
+pub type SkillMarketListResponse = MarketListResponse<SkillMarketItem>;
+pub type SkillMarketQuery = MarketplaceSourceQuery;
 
 /// Skill install input
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,6 +26,7 @@ pub struct SkillInstallInput {
     pub cli_type: String,
     pub scope: String,
     pub project_path: Option<String>,
+    pub source_market: Option<String>,
 }
 
 /// Skill install result
@@ -112,7 +38,7 @@ pub struct SkillInstallResult {
     pub backup_path: Option<String>,
 }
 
-/// Installed skill from CLI skills directory
+/// Installed skill from native CLI skills directory
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledSkill {
     pub name: String,
@@ -127,633 +53,463 @@ pub struct InstalledSkill {
     pub triggers: Vec<String>,
 }
 
-/// Get database connection
-fn get_db_connection() -> Result<Connection, String> {
-    crate::commands::market_source_support::open_market_db_connection()
-}
-
-/// Market source response structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct MarketSourceResponse {
-    skills: Vec<SkillMarketItem>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct SkillMarketSourceBundle {
-    #[serde(default)]
-    skills: Vec<SkillMarketItem>,
-    #[serde(default)]
-    skill_details: Vec<SkillMarketDetail>,
-}
-
-/// Fetch skills from all enabled market sources in parallel
+/// Fetch skills from the active marketplace source.
 #[tauri::command]
 pub async fn fetch_skills_market(
+    app: AppHandle,
     query: SkillMarketQuery,
 ) -> Result<SkillMarketListResponse, String> {
-    let conn = get_db_connection()?;
-    let sources = get_enabled_skill_sources(&conn)?;
-
-    if sources.is_empty() {
-        return Ok(SkillMarketListResponse {
-            items: Vec::new(),
-            total: 0,
-        });
-    }
-
-    let client = crate::commands::market_source_support::build_market_http_client()?;
-
-    let mut all_items: Vec<SkillMarketItem> = Vec::new();
-    let mut seen_ids: HashSet<String> = HashSet::new();
-
-    // Fetch from each source
-    for source in sources {
-        match fetch_skills_from_source(&client, &source.url_or_path, &source.name).await {
-            Ok(items) => {
-                // Merge and dedupe
-                for item in items {
-                    if !seen_ids.contains(&item.id) {
-                        seen_ids.insert(item.id.clone());
-                        all_items.push(item);
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("Failed to fetch from source {}: {}", source.name, e);
-            }
-        }
-    }
-
-    let mut filtered_items = all_items;
-
-    // Filter by category
-    if let Some(category) = &query.category {
-        if !category.is_empty() && category != "all" {
-            filtered_items = filtered_items
-                .into_iter()
-                .filter(|item| &item.category == category)
-                .collect();
-        }
-    }
-
-    // Filter by search
-    if let Some(search) = &query.search {
-        if !search.is_empty() {
-            let search_lower = search.to_lowercase();
-            filtered_items = filtered_items
-                .into_iter()
-                .filter(|item| {
-                    item.name.to_lowercase().contains(&search_lower)
-                        || item.description.to_lowercase().contains(&search_lower)
-                        || item.trigger_scenario.to_lowercase().contains(&search_lower)
-                        || item
-                            .tags
-                            .iter()
-                            .any(|t| t.to_lowercase().contains(&search_lower))
-                })
-                .collect();
-        }
-    }
-
-    let total = filtered_items.len() as u64;
-
-    Ok(SkillMarketListResponse {
-        items: filtered_items,
-        total,
-    })
+    let strategy = get_marketplace_source_strategy(query.source_market.as_deref())?;
+    strategy.fetch_skill_list(&app, &query).await
 }
 
-/// Skill source from database
-struct SkillSource {
-    name: String,
-    url_or_path: String,
-}
-
-/// Get enabled skill sources from database
-fn get_enabled_skill_sources(conn: &Connection) -> Result<Vec<SkillSource>, String> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT name, url_or_path FROM market_sources WHERE enabled = 1 ORDER BY created_at DESC"
-        )
-        .map_err(|e| e.to_string())?;
-
-    let sources = stmt
-        .query_map([], |row| {
-            Ok(SkillSource {
-                name: row.get(0)?,
-                url_or_path: row.get(1)?,
-            })
-        })
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-
-    Ok(sources)
-}
-
-/// Fetch skills from a single source URL
-async fn fetch_skills_from_source(
-    client: &reqwest::Client,
-    url: &str,
-    source_name: &str,
-) -> Result<Vec<SkillMarketItem>, String> {
-    let text = crate::commands::market_source_support::read_market_source_payload(
-        client,
-        url,
-        "skills.json",
-    )
-    .await?;
-    let bundle = parse_skill_market_payload(&text, source_name)?;
-    Ok(bundle.skills)
-}
-
-fn parse_skill_market_payload(
-    text: &str,
-    source_name: &str,
-) -> Result<SkillMarketSourceBundle, String> {
-    if let Ok(mut bundle) = serde_json::from_str::<SkillMarketSourceBundle>(text) {
-        for item in &mut bundle.skills {
-            item.source_market = source_name.to_string();
-        }
-        for detail in &mut bundle.skill_details {
-            detail.source_market = source_name.to_string();
-        }
-        return Ok(bundle);
-    }
-
-    if let Ok(market_response) = serde_json::from_str::<MarketSourceResponse>(text) {
-        let skills = market_response
-            .skills
-            .into_iter()
-            .map(|mut item| {
-                item.source_market = source_name.to_string();
-                item
-            })
-            .collect();
-
-        return Ok(SkillMarketSourceBundle {
-            skills,
-            ..SkillMarketSourceBundle::default()
-        });
-    }
-
-    if let Ok(items) = serde_json::from_str::<Vec<SkillMarketItem>>(text) {
-        let skills = items
-            .into_iter()
-            .map(|mut item| {
-                item.source_market = source_name.to_string();
-                item
-            })
-            .collect();
-
-        return Ok(SkillMarketSourceBundle {
-            skills,
-            ..SkillMarketSourceBundle::default()
-        });
-    }
-
-    Err("Failed to parse skill market payload".to_string())
-}
-
-fn synthesize_skill_detail(item: SkillMarketItem) -> SkillMarketDetail {
-    SkillMarketDetail {
-        id: item.id,
-        name: item.name,
-        description: item.description.clone(),
-        full_description: item.description,
-        trigger_scenario: item.trigger_scenario,
-        usage_examples: Vec::new(),
-        source_market: item.source_market,
-        category: item.category,
-        tags: item.tags,
-        author: item.author,
-        author_url: None,
-        license: None,
-        homepage_url: None,
-        repository_url: item.repository_url,
-        skill_content: None,
-        created_at: item.created_at,
-        updated_at: item.updated_at,
-    }
-}
-
-async fn load_skill_detail_from_sources(skill_id: &str) -> Result<SkillMarketDetail, String> {
-    let conn = get_db_connection()?;
-    let sources = get_enabled_skill_sources(&conn)?;
-    if sources.is_empty() {
-        return Err("No skill market source configured".to_string());
-    }
-
-    let client = crate::commands::market_source_support::build_market_http_client()?;
-
-    for source in sources {
-        let payload = match crate::commands::market_source_support::read_market_source_payload(
-            &client,
-            &source.url_or_path,
-            "skills.json",
-        )
-        .await
-        {
-            Ok(payload) => payload,
-            Err(error) => {
-                eprintln!("Failed to read skill source {}: {}", source.name, error);
-                continue;
-            }
-        };
-
-        let bundle = match parse_skill_market_payload(&payload, &source.name) {
-            Ok(bundle) => bundle,
-            Err(error) => {
-                eprintln!("Failed to parse skill source {}: {}", source.name, error);
-                continue;
-            }
-        };
-
-        if let Some(detail) = bundle
-            .skill_details
-            .into_iter()
-            .find(|item| item.id == skill_id)
-        {
-            return Ok(detail);
-        }
-    }
-
-    Err(format!(
-        "Skill {} was not found in configured skill market sources",
-        skill_id
-    ))
-}
-
-/// Fetch detailed skill information by ID
+/// Fetch detailed skill information by slug.
 #[tauri::command]
-pub async fn fetch_skill_market_detail(skill_id: String) -> Result<SkillMarketDetail, String> {
-    let conn = get_db_connection()?;
-    let sources = get_enabled_skill_sources(&conn)?;
-    if sources.is_empty() {
-        return Err("No skill market source configured".to_string());
-    }
-
-    let client = crate::commands::market_source_support::build_market_http_client()?;
-
-    for source in sources {
-        let payload = match crate::commands::market_source_support::read_market_source_payload(
-            &client,
-            &source.url_or_path,
-            "skills.json",
-        )
-        .await
-        {
-            Ok(payload) => payload,
-            Err(error) => {
-                eprintln!("Failed to read skill source {}: {}", source.name, error);
-                continue;
-            }
-        };
-
-        let bundle = match parse_skill_market_payload(&payload, &source.name) {
-            Ok(bundle) => bundle,
-            Err(error) => {
-                eprintln!("Failed to parse skill source {}: {}", source.name, error);
-                continue;
-            }
-        };
-
-        if let Some(detail) = bundle
-            .skill_details
-            .into_iter()
-            .find(|item| item.id == skill_id)
-        {
-            return Ok(detail);
-        }
-
-        if let Some(item) = bundle.skills.into_iter().find(|item| item.id == skill_id) {
-            return Ok(synthesize_skill_detail(item));
-        }
-    }
-
-    Err(format!(
-        "Skill not found in configured sources: {}",
-        skill_id
-    ))
+pub async fn fetch_skill_market_detail(
+    app: AppHandle,
+    skill_id: String,
+    source_market: Option<String>,
+) -> Result<SkillMarketDetail, String> {
+    let strategy = get_marketplace_source_strategy(source_market.as_deref())?;
+    strategy.fetch_skill_detail(&app, &skill_id).await
 }
 
-fn get_cli_skills_dir(
-    cli_type: &str,
-    scope: &str,
-    project_path: Option<&str>,
-) -> Result<PathBuf, String> {
-    let home_dir = dirs::home_dir().ok_or_else(|| "Cannot determine home directory".to_string())?;
+fn slugify_skill_name(name: &str) -> String {
+    let value = name
+        .trim()
+        .replace(' ', "-")
+        .replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "")
+        .to_lowercase();
 
-    let base_path = match scope {
-        "project" => {
-            let project_root = project_path
-                .ok_or_else(|| "Project path required for project scope".to_string())?;
-            PathBuf::from(project_root)
-        }
-        _ => home_dir,
-    };
+    if value.is_empty() {
+        "skill".to_string()
+    } else {
+        value
+    }
+}
+
+fn get_cli_skills_dir(cli_type: &str) -> Result<PathBuf, String> {
+    let home_dir = dirs::home_dir().ok_or_else(|| "Cannot determine home directory".to_string())?;
 
     match cli_type.to_lowercase().as_str() {
-        "claude" => Ok(base_path.join(".claude").join("commands")),
-        "cursor" => Ok(base_path.join(".cursor").join("commands")),
-        "aider" => Ok(base_path.join(".aider").join("commands")),
-        "windsurf" => Ok(base_path.join(".windsurf").join("commands")),
-        other => Err(format!("Unsupported CLI type: {}", other)),
+        "claude" => Ok(home_dir.join(".claude").join("skills")),
+        "codex" => Ok(home_dir.join(".codex").join("skills")),
+        other => Err(format!("Unsupported CLI type for skills: {}", other)),
     }
 }
 
-#[tauri::command]
-pub async fn list_installed_skills() -> Result<Vec<InstalledSkill>, String> {
-    let home_dir = dirs::home_dir().ok_or_else(|| "Cannot determine home directory".to_string())?;
-    let cli_configs = vec![
-        ("claude", home_dir.join(".claude").join("commands")),
-        ("cursor", home_dir.join(".cursor").join("commands")),
-        ("aider", home_dir.join(".aider").join("commands")),
-        ("windsurf", home_dir.join(".windsurf").join("commands")),
-    ];
+fn build_dir_backup_path(skill_dir: &Path) -> PathBuf {
+    let backup_name = format!(
+        "{}.backup",
+        skill_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("skill")
+    );
+    skill_dir.with_file_name(backup_name)
+}
 
-    let mut installed_skills = Vec::new();
+fn move_dir_with_overwrite(source: &Path, target: &Path) -> Result<(), String> {
+    if target.exists() {
+        fs::remove_dir_all(target).map_err(|e| format!("Failed to clear target dir: {}", e))?;
+    }
 
-    for (cli_type, skills_dir) in cli_configs {
-        if !skills_dir.exists() {
+    fs::rename(source, target).map_err(|e| format!("Failed to move skill directory: {}", e))
+}
+
+fn create_skill_backup(skill_dir: &Path) -> Result<Option<String>, String> {
+    if !skill_dir.exists() {
+        return Ok(None);
+    }
+
+    let backup_path = build_dir_backup_path(skill_dir);
+    move_dir_with_overwrite(skill_dir, &backup_path)?;
+    Ok(Some(backup_path.to_string_lossy().to_string()))
+}
+
+fn restore_skill_backup(skill_dir: &Path, backup_path: &Option<String>) -> Result<(), String> {
+    if skill_dir.exists() {
+        fs::remove_dir_all(skill_dir).map_err(|e| format!("Failed to clear skill dir: {}", e))?;
+    }
+
+    if let Some(backup) = backup_path {
+        let backup_path = PathBuf::from(backup);
+        if backup_path.exists() {
+            fs::rename(&backup_path, skill_dir)
+                .map_err(|e| format!("Failed to restore skill backup: {}", e))?;
+        }
+    }
+
+    Ok(())
+}
+
+fn finalize_skill_backup(backup_path: &Option<String>) {
+    if let Some(backup) = backup_path {
+        let backup_path = PathBuf::from(backup);
+        if backup_path.exists() {
+            let _ = fs::remove_dir_all(backup_path);
+        }
+    }
+}
+
+fn decode_archive(payload: &SkillArchivePayload) -> Result<Vec<u8>, String> {
+    base64::engine::general_purpose::STANDARD
+        .decode(payload.zip_base64.as_bytes())
+        .map_err(|e| format!("Failed to decode skill archive: {}", e))
+}
+
+fn detect_common_prefix(entries: &[String]) -> Option<String> {
+    let mut prefixes = entries
+        .iter()
+        .filter_map(|name| {
+            Path::new(name)
+                .components()
+                .next()
+                .and_then(|component| match component {
+                    Component::Normal(value) => value.to_str().map(|value| value.to_string()),
+                    _ => None,
+                })
+        })
+        .collect::<Vec<_>>();
+
+    prefixes.sort();
+    prefixes.dedup();
+
+    (prefixes.len() == 1).then(|| prefixes.remove(0))
+}
+
+fn unzip_skill_archive(zip_bytes: &[u8], target_dir: &Path) -> Result<(), String> {
+    let mut archive =
+        ZipArchive::new(Cursor::new(zip_bytes)).map_err(|e| format!("Failed to open zip: {}", e))?;
+
+    let entry_names = (0..archive.len())
+        .filter_map(|index| archive.by_index(index).ok().map(|file| file.name().to_string()))
+        .collect::<Vec<_>>();
+    let common_prefix = detect_common_prefix(&entry_names);
+
+    fs::create_dir_all(target_dir).map_err(|e| format!("Failed to create skill dir: {}", e))?;
+
+    for index in 0..archive.len() {
+        let mut file = archive
+            .by_index(index)
+            .map_err(|e| format!("Failed to read zip entry: {}", e))?;
+        let raw_name = file.name().to_string();
+        let normalized = if let Some(prefix) = &common_prefix {
+            raw_name
+                .strip_prefix(prefix)
+                .and_then(|value| value.strip_prefix('/'))
+                .map(|value| value.to_string())
+                .unwrap_or(raw_name.clone())
+        } else {
+            raw_name.clone()
+        };
+
+        if normalized.is_empty() {
             continue;
         }
 
-        let entries = match fs::read_dir(&skills_dir) {
-            Ok(entries) => entries,
-            Err(error) => {
-                eprintln!("Failed to read skills dir {:?}: {}", skills_dir, error);
-                continue;
-            }
-        };
+        let out_path = target_dir.join(&normalized);
+        if !out_path.starts_with(target_dir) {
+            return Err("Invalid zip archive path".to_string());
+        }
 
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let file_name = match path.file_name().and_then(|name| name.to_str()) {
-                Some(name) if name.ends_with(".md") => name.to_string(),
-                _ => continue,
-            };
+        if file.is_dir() {
+            fs::create_dir_all(&out_path)
+                .map_err(|e| format!("Failed to create extracted directory: {}", e))?;
+            continue;
+        }
 
-            let disabled = file_name.ends_with(".disabled.md");
-            let name = if disabled {
-                file_name.trim_end_matches(".disabled.md").to_string()
-            } else {
-                path.file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .unwrap_or_default()
-                    .to_string()
-            };
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create extracted parent dir: {}", e))?;
+        }
 
-            let (description, triggers) = fs::read_to_string(&path)
-                .ok()
-                .map(|content| extract_skill_metadata(&content))
-                .unwrap_or((None, Vec::new()));
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer)
+            .map_err(|e| format!("Failed to read extracted file: {}", e))?;
+        fs::write(&out_path, buffer).map_err(|e| format!("Failed to write extracted file: {}", e))?;
+    }
 
-            let installed_at = entry
-                .metadata()
-                .ok()
-                .and_then(|meta| meta.modified().ok())
-                .map(|time| {
-                    let datetime: chrono::DateTime<chrono::Utc> = time.into();
-                    datetime.to_rfc3339()
-                });
+    Ok(())
+}
 
-            installed_skills.push(InstalledSkill {
-                name,
-                file_name,
-                path: path.to_string_lossy().to_string(),
-                disabled,
-                source_cli: cli_type.to_string(),
-                source_cli_path: skills_dir.to_string_lossy().to_string(),
-                scope: "global".to_string(),
-                description,
-                installed_at,
-                triggers,
-            });
+fn parse_skill_metadata(skill_dir: &Path) -> Result<(Option<String>, Option<String>, Vec<String>), String> {
+    let skill_md_path = skill_dir.join("SKILL.md");
+    if !skill_md_path.exists() {
+        return Ok((None, None, Vec::new()));
+    }
+
+    let content =
+        fs::read_to_string(&skill_md_path).map_err(|e| format!("Failed to read SKILL.md: {}", e))?;
+    let map = extract_frontmatter_map(&content);
+    let name = map.get("name").cloned();
+    let description = map.get("description").cloned();
+    let triggers = extract_skill_triggers(&content);
+
+    Ok((name, description, triggers))
+}
+
+fn extract_frontmatter_map(content: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    let mut lines = content.lines();
+    if lines.next().map(str::trim) != Some("---") {
+        return map;
+    }
+
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed == "---" {
+            break;
+        }
+
+        if let Some((key, value)) = trimmed.split_once(':') {
+            map.insert(key.trim().to_string(), value.trim().trim_matches('"').to_string());
         }
     }
 
-    Ok(installed_skills)
+    map
 }
 
-fn extract_skill_metadata(content: &str) -> (Option<String>, Vec<String>) {
-    let description = content
+fn extract_skill_triggers(content: &str) -> Vec<String> {
+    let direct = content
         .lines()
-        .find(|line| line.starts_with("description:"))
-        .map(|line| line.replace("description:", "").trim().to_string())
-        .or_else(|| {
-            content
-                .lines()
-                .find(|line| {
-                    !line.starts_with('#') && !line.trim().is_empty() && !line.starts_with("---")
-                })
-                .map(|line| line.to_string())
+        .find_map(|line| {
+            let trimmed = line.trim();
+            trimmed
+                .starts_with("triggers:")
+                .then(|| trimmed.trim_start_matches("triggers:").trim().to_string())
+        })
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            value
+                .split(',')
+                .map(|item| item.trim().trim_matches('"').to_string())
+                .filter(|item| !item.is_empty())
+                .collect::<Vec<_>>()
         });
 
-    let triggers = content
-        .lines()
-        .find(|line| line.trim().starts_with("triggers:"))
-        .map(|line| {
-            let trigger_line = line.trim().strip_prefix("triggers:").unwrap_or("").trim();
-            if trigger_line.is_empty() {
-                let mut values = Vec::new();
-                let mut in_triggers = false;
+    if let Some(values) = direct {
+        return values;
+    }
 
-                for current in content.lines() {
-                    let trimmed = current.trim();
-                    if trimmed.starts_with("triggers:") {
-                        in_triggers = true;
-                        continue;
-                    }
-                    if !in_triggers {
-                        continue;
-                    }
-                    if trimmed.starts_with('-') {
-                        values.push(trimmed.trim_start_matches('-').trim().to_string());
-                        continue;
-                    }
-                    if !trimmed.is_empty() && !trimmed.starts_with('#') {
-                        break;
-                    }
-                }
-
-                values
-            } else {
-                trigger_line
-                    .split(',')
-                    .map(|value| value.trim().to_string())
-                    .filter(|value| !value.is_empty())
-                    .collect()
+    let mut triggers = Vec::new();
+    let mut in_section = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed == "triggers:" {
+            in_section = true;
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        if let Some(value) = trimmed.strip_prefix('-') {
+            let value = value.trim().trim_matches('"');
+            if !value.is_empty() {
+                triggers.push(value.to_string());
             }
-        })
-        .unwrap_or_default();
+            continue;
+        }
+        if !trimmed.is_empty() {
+            break;
+        }
+    }
 
-    (description, triggers)
+    triggers
 }
 
-/// Install a skill to CLI skills directory
-#[tauri::command]
-pub async fn install_skill_to_cli(input: SkillInstallInput) -> Result<SkillInstallResult, String> {
-    let detail = load_skill_detail_from_sources(&input.skill_id).await?;
-
-    let skill_content = detail
-        .skill_content
-        .clone()
-        .ok_or_else(|| "Skill content not available".to_string())?;
-
-    // Get target skills directory
-    let skills_dir =
-        get_cli_skills_dir(&input.cli_type, &input.scope, input.project_path.as_deref())?;
-
-    // Create directory if not exists
-    fs::create_dir_all(&skills_dir)
-        .map_err(|e| format!("Failed to create skills directory: {}", e))?;
-
-    // Create skill file name
-    let skill_file_name = format!("{}.md", input.skill_name.to_lowercase().replace(" ", "-"));
-    let skill_path = skills_dir.join(&skill_file_name);
-
-    // Check if file already exists and backup
-    let backup_path = if skill_path.exists() {
-        let backup = skill_path.with_extension("md.backup");
-        fs::copy(&skill_path, &backup)
-            .map_err(|e| format!("Failed to backup skill file: {}", e))?;
-        Some(backup.to_string_lossy().to_string())
-    } else {
-        None
-    };
-
-    // Write skill content
-    fs::write(&skill_path, &skill_content)
-        .map_err(|e| format!("Failed to write skill file: {}", e))?;
-
-    // Save to database
-    let skill_path_str = skill_path.to_string_lossy().to_string();
-    let now = chrono::Utc::now().to_rfc3339();
-    let db_id = uuid::Uuid::new_v4().to_string();
-
-    {
-        let conn = get_db_connection()?;
-        conn.execute(
-            "INSERT OR REPLACE INTO skills (id, skill_id, name, description, file_name, path, source_market, cli_type, scope, project_path, disabled, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12)",
-            [
-                &db_id,
-                &input.skill_id,
-                &input.skill_name,
-                &detail.description,
-                &skill_file_name,
-                &skill_path_str,
-                &detail.source_market,
-                &input.cli_type,
-                &input.scope,
-                &input.project_path.clone().unwrap_or_default(),
-                &now,
-                &now,
-            ],
-        ).map_err(|e| format!("Failed to save skill to database: {}", e))?;
+fn list_skill_dirs(base_dir: &Path, cli_type: &str) -> Result<Vec<InstalledSkill>, String> {
+    if !base_dir.exists() {
+        return Ok(Vec::new());
     }
+
+    let mut installed = Vec::new();
+    let entries = fs::read_dir(base_dir).map_err(|e| format!("Failed to read skills dir: {}", e))?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let dir_name = match path.file_name().and_then(|name| name.to_str()) {
+            Some(name) => name.to_string(),
+            None => continue,
+        };
+        let disabled = dir_name.ends_with(".disabled");
+        let real_path = if disabled { path.clone() } else { path.clone() };
+        let has_skill = real_path.join("SKILL.md").exists();
+        if !has_skill {
+            continue;
+        }
+
+        let installed_at = entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .map(|time| {
+                let datetime: chrono::DateTime<chrono::Utc> = time.into();
+                datetime.to_rfc3339()
+            });
+
+        let clean_name = dir_name.trim_end_matches(".disabled").to_string();
+        let (display_name, description, triggers) =
+            parse_skill_metadata(&path).unwrap_or((None, None, Vec::new()));
+
+        installed.push(InstalledSkill {
+            name: display_name.unwrap_or_else(|| clean_name.clone()),
+            file_name: clean_name,
+            path: path.to_string_lossy().to_string(),
+            disabled,
+            source_cli: cli_type.to_string(),
+            source_cli_path: base_dir.to_string_lossy().to_string(),
+            scope: "global".to_string(),
+            description,
+            installed_at,
+            triggers,
+        });
+    }
+
+    installed.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(installed)
+}
+
+async fn download_skill_payload(
+    app: &AppHandle,
+    skill_id: &str,
+    source_market: Option<&str>,
+) -> Result<SkillArchivePayload, String> {
+    let strategy = get_marketplace_source_strategy(source_market)?;
+    strategy.download_skill_archive(app, skill_id).await
+}
+
+/// Install a skill to the target CLI native skills directory.
+#[tauri::command]
+pub async fn install_skill_to_cli(
+    app: AppHandle,
+    input: SkillInstallInput,
+) -> Result<SkillInstallResult, String> {
+    if input.scope == "project" {
+        return Err("当前版本的市场技能安装仅支持全局目录".to_string());
+    }
+
+    let archive = download_skill_payload(&app, &input.skill_id, input.source_market.as_deref()).await?;
+    let zip_bytes = decode_archive(&archive)?;
+    let skills_dir = get_cli_skills_dir(&input.cli_type)?;
+    fs::create_dir_all(&skills_dir).map_err(|e| format!("Failed to create skills dir: {}", e))?;
+
+    let skill_dir_name = slugify_skill_name(&archive.slug);
+    let skill_dir = skills_dir.join(&skill_dir_name);
+    let backup_path = create_skill_backup(&skill_dir)?;
+
+    if let Err(error) = unzip_skill_archive(&zip_bytes, &skill_dir) {
+        restore_skill_backup(&skill_dir, &backup_path)?;
+        return Ok(SkillInstallResult {
+            success: false,
+            message: error,
+            skill_path: Some(skill_dir.to_string_lossy().to_string()),
+            backup_path: None,
+        });
+    }
+
+    if !skill_dir.join("SKILL.md").exists() {
+        restore_skill_backup(&skill_dir, &backup_path)?;
+        return Ok(SkillInstallResult {
+            success: false,
+            message: "下载的技能包中未找到 SKILL.md".to_string(),
+            skill_path: Some(skill_dir.to_string_lossy().to_string()),
+            backup_path: None,
+        });
+    }
+
+    finalize_skill_backup(&backup_path);
 
     Ok(SkillInstallResult {
         success: true,
-        message: format!(
-            "Skill '{}' installed successfully to {}",
-            input.skill_name,
-            skills_dir.display()
-        ),
-        skill_path: Some(skill_path_str),
+        message: format!("Skill '{}' installed successfully", input.skill_name),
+        skill_path: Some(skill_dir.to_string_lossy().to_string()),
         backup_path,
     })
 }
 
-/// Toggle installed skill (enable/disable)
+/// List installed skills from Claude/Codex native skills directories.
+#[tauri::command]
+pub async fn list_installed_skills() -> Result<Vec<InstalledSkill>, String> {
+    let mut installed = Vec::new();
+    for cli_type in ["claude", "codex"] {
+        let dir = get_cli_skills_dir(cli_type)?;
+        installed.extend(list_skill_dirs(&dir, cli_type)?);
+    }
+    Ok(installed)
+}
+
+/// Toggle installed skill (enable/disable) by renaming the skill directory.
 #[tauri::command]
 pub async fn toggle_installed_skill(
     skill_path: String,
     disable: bool,
 ) -> Result<SkillInstallResult, String> {
     let path = PathBuf::from(&skill_path);
-
     if !path.exists() {
-        return Err(format!("Skill file not found: {}", skill_path));
+        return Err(format!("Skill directory not found: {}", skill_path));
     }
 
-    let new_path = if disable {
-        // Add .disabled suffix
-        let stem = path
-            .file_stem()
-            .and_then(|n| n.to_str())
-            .ok_or("Invalid file name")?;
-        path.with_file_name(format!("{}.disabled.md", stem))
-    } else {
-        // Remove .disabled suffix
-        let file_name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or("Invalid file name")?;
-        if file_name.ends_with(".disabled.md") {
-            let new_name = file_name.replace(".disabled.md", ".md");
-            path.with_file_name(new_name)
-        } else {
+    let dir_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "Invalid skill directory name".to_string())?;
+
+    let target_path = if disable {
+        if dir_name.ends_with(".disabled") {
             return Ok(SkillInstallResult {
                 success: true,
-                message: "Skill is already enabled".to_string(),
+                message: "Skill is already disabled".to_string(),
                 skill_path: Some(skill_path),
                 backup_path: None,
             });
         }
+        path.with_file_name(format!("{}.disabled", dir_name))
+    } else if dir_name.ends_with(".disabled") {
+        path.with_file_name(dir_name.trim_end_matches(".disabled"))
+    } else {
+        return Ok(SkillInstallResult {
+            success: true,
+            message: "Skill is already enabled".to_string(),
+            skill_path: Some(skill_path),
+            backup_path: None,
+        });
     };
 
-    // Rename file
-    fs::rename(&path, &new_path).map_err(|e| format!("Failed to rename skill file: {}", e))?;
+    fs::rename(&path, &target_path).map_err(|e| format!("Failed to rename skill dir: {}", e))?;
 
-    // Update database - update path and disabled status
-    let new_path_str = new_path.to_string_lossy().to_string();
-    {
-        let conn = get_db_connection()?;
-        conn.execute(
-            "UPDATE skills SET path = ?1, disabled = ?2, updated_at = ?3 WHERE path = ?4",
-            rusqlite::params![
-                &new_path_str,
-                disable as i32,
-                chrono::Utc::now().to_rfc3339(),
-                &skill_path
-            ],
-        )
-        .map_err(|e| format!("Failed to update skill in database: {}", e))?;
-    }
-
-    let action = if disable { "disabled" } else { "enabled" };
     Ok(SkillInstallResult {
         success: true,
-        message: format!("Skill {} successfully", action),
-        skill_path: Some(new_path_str),
+        message: if disable {
+            "Skill disabled successfully".to_string()
+        } else {
+            "Skill enabled successfully".to_string()
+        },
+        skill_path: Some(target_path.to_string_lossy().to_string()),
         backup_path: None,
     })
 }
 
-/// Uninstall a skill (delete file)
+/// Uninstall a skill by removing its directory after making a deleted backup copy.
 #[tauri::command]
 pub async fn uninstall_skill(skill_path: String) -> Result<SkillInstallResult, String> {
     let path = PathBuf::from(&skill_path);
-
     if !path.exists() {
-        return Err(format!("Skill file not found: {}", skill_path));
+        return Err(format!("Skill directory not found: {}", skill_path));
     }
 
-    // Create backup before deletion
-    let backup_path = path.with_extension("md.deleted");
-    fs::copy(&path, &backup_path).map_err(|e| format!("Failed to backup skill file: {}", e))?;
+    let backup_path = path.with_file_name(format!(
+        "{}.deleted",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("skill")
+    ));
 
-    // Delete file
-    fs::remove_file(&path).map_err(|e| format!("Failed to delete skill file: {}", e))?;
-
-    // Delete from database
-    {
-        let conn = get_db_connection()?;
-        conn.execute("DELETE FROM skills WHERE path = ?1", [&skill_path])
-            .map_err(|e| format!("Failed to delete skill from database: {}", e))?;
-    }
+    move_dir_with_overwrite(&path, &backup_path)?;
 
     Ok(SkillInstallResult {
         success: true,
@@ -761,25 +517,6 @@ pub async fn uninstall_skill(skill_path: String) -> Result<SkillInstallResult, S
         skill_path: None,
         backup_path: Some(backup_path.to_string_lossy().to_string()),
     })
-}
-
-/// Check for skill updates
-#[tauri::command]
-pub async fn check_skill_updates(
-    skill_names: Vec<String>,
-) -> Result<Vec<SkillUpdateCheckResult>, String> {
-    let results: Vec<SkillUpdateCheckResult> = skill_names
-        .into_iter()
-        .map(|name| SkillUpdateCheckResult {
-            skill_name: name.clone(),
-            has_update: false,
-            current_version: None,
-            latest_version: None,
-            update_notes: Some("Market sources do not expose version metadata".to_string()),
-        })
-        .collect();
-
-    Ok(results)
 }
 
 /// Skill update check result
@@ -792,6 +529,23 @@ pub struct SkillUpdateCheckResult {
     pub update_notes: Option<String>,
 }
 
+/// Check for skill updates.
+#[tauri::command]
+pub async fn check_skill_updates(
+    skill_names: Vec<String>,
+) -> Result<Vec<SkillUpdateCheckResult>, String> {
+    Ok(skill_names
+        .into_iter()
+        .map(|skill_name| SkillUpdateCheckResult {
+            skill_name,
+            has_update: false,
+            current_version: None,
+            latest_version: None,
+            update_notes: Some("MCP Market 技能包未暴露版本元数据".to_string()),
+        })
+        .collect())
+}
+
 /// Skill update input
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillUpdateInput {
@@ -800,44 +554,38 @@ pub struct SkillUpdateInput {
     pub skill_name: String,
 }
 
-/// Update a skill to the latest version
+fn infer_cli_type_from_skill_path(skill_path: &Path) -> Result<String, String> {
+    let path = skill_path.to_string_lossy();
+    if path.contains("/.claude/skills/") {
+        Ok("claude".to_string())
+    } else if path.contains("/.codex/skills/") {
+        Ok("codex".to_string())
+    } else {
+        Err(format!("Unsupported skill path: {}", path))
+    }
+}
+
+/// Update a skill to the latest archive from MCP Market.
 #[tauri::command]
-pub async fn update_skill(input: SkillUpdateInput) -> Result<SkillInstallResult, String> {
-    let detail = load_skill_detail_from_sources(&input.skill_id).await?;
-
-    let skill_content = detail
-        .skill_content
-        .clone()
-        .ok_or_else(|| "Skill content not available".to_string())?;
-
-    let path = PathBuf::from(&input.skill_path);
-
-    if !path.exists() {
-        return Err(format!("Skill file not found: {}", input.skill_path));
+pub async fn update_skill(app: AppHandle, input: SkillUpdateInput) -> Result<SkillInstallResult, String> {
+    let skill_dir = PathBuf::from(&input.skill_path);
+    if !skill_dir.exists() {
+        return Err(format!("Skill directory not found: {}", input.skill_path));
     }
 
-    // Create backup before update
-    let backup_path = path.with_extension("md.backup");
-    fs::copy(&path, &backup_path).map_err(|e| format!("Failed to backup skill file: {}", e))?;
+    let cli_type = infer_cli_type_from_skill_path(&skill_dir)?;
+    let result = install_skill_to_cli(
+        app,
+        SkillInstallInput {
+            skill_id: input.skill_id,
+            skill_name: input.skill_name,
+            cli_type,
+            scope: "global".to_string(),
+            project_path: None,
+            source_market: None,
+        },
+    )
+    .await?;
 
-    // Write updated content
-    fs::write(&path, &skill_content).map_err(|e| format!("Failed to write skill file: {}", e))?;
-
-    // Update database
-    let now = chrono::Utc::now().to_rfc3339();
-    {
-        let conn = get_db_connection()?;
-        conn.execute(
-            "UPDATE skills SET description = ?1, updated_at = ?2 WHERE path = ?3",
-            rusqlite::params![&detail.description, &now, &input.skill_path],
-        )
-        .map_err(|e| format!("Failed to update skill in database: {}", e))?;
-    }
-
-    Ok(SkillInstallResult {
-        success: true,
-        message: format!("Skill '{}' updated successfully", input.skill_name),
-        skill_path: Some(input.skill_path),
-        backup_path: Some(backup_path.to_string_lossy().to_string()),
-    })
+    Ok(result)
 }

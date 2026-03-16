@@ -12,6 +12,7 @@ const props = defineProps<Props>()
 
 const emit = defineEmits<{
   install: [item: SkillMarketItem]
+  view: [item: SkillMarketItem]
 }>()
 
 const { t } = useI18n()
@@ -19,10 +20,27 @@ const { t } = useI18n()
 function handleInstall() {
   emit('install', props.item)
 }
+
+function handleView() {
+  emit('view', props.item)
+}
+
+function handleCardKeydown(event: KeyboardEvent) {
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault()
+    handleView()
+  }
+}
 </script>
 
 <template>
-  <div class="skill-market-card">
+  <div
+    class="skill-market-card"
+    role="button"
+    tabindex="0"
+    @click="handleView"
+    @keydown="handleCardKeydown"
+  >
     <div class="skill-market-card__header">
       <div class="skill-market-card__icon">
         <EaIcon name="sparkles" :size="24" />
@@ -39,7 +57,7 @@ function handleInstall() {
           </EaTag>
         </h3>
         <p class="skill-market-card__category">
-          {{ item.category }}
+          {{ item.author || item.category || item.source_market || 'MCP Market' }}
         </p>
       </div>
     </div>
@@ -65,11 +83,18 @@ function handleInstall() {
     <div class="skill-market-card__footer">
       <div class="skill-market-card__stats">
         <span
-          v-if="item.downloads"
+          v-if="item.stars"
           class="skill-market-card__stat"
         >
-          <EaIcon name="download" :size="14" />
-          {{ item.downloads.toLocaleString() }}
+          <EaIcon name="star" :size="14" />
+          {{ item.stars.toLocaleString() }}
+        </span>
+        <span
+          v-if="item.category"
+          class="skill-market-card__stat"
+        >
+          <EaIcon name="tag" :size="14" />
+          {{ item.category }}
         </span>
       </div>
 
@@ -78,7 +103,7 @@ function handleInstall() {
         size="small"
         class="skill-market-card__action"
         :class="{ 'skill-market-card__action--installed': isInstalled }"
-        @click="handleInstall"
+        @click.stop="handleInstall"
       >
         <EaIcon
           :name="isInstalled ? 'refresh-cw' : 'download'"
@@ -99,12 +124,18 @@ function handleInstall() {
   background-color: var(--color-bg-secondary);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
+  cursor: pointer;
   transition: all var(--transition-fast) var(--easing-default);
 }
 
 .skill-market-card:hover {
   border-color: var(--color-primary);
   box-shadow: var(--shadow-sm);
+}
+
+.skill-market-card:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
 }
 
 .skill-market-card__header {

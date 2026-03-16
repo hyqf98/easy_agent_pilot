@@ -11,6 +11,14 @@ pub struct DetectedLanguage {
     pub strategy_id: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectFileContent {
+    pub content: String,
+    pub size_bytes: u64,
+    pub line_count: usize,
+}
+
 fn resolve_path(path: &str) -> Result<PathBuf, String> {
     if path.starts_with('~') {
         let home = dirs::home_dir().ok_or_else(|| "无法获取用户主目录".to_string())?;
@@ -166,7 +174,7 @@ fn detect_language_from_path(path: &str) -> DetectedLanguage {
 }
 
 #[tauri::command]
-pub fn read_project_file(project_path: String, file_path: String) -> Result<String, String> {
+pub fn read_project_file(project_path: String, file_path: String) -> Result<ProjectFileContent, String> {
     let path = validate_project_file(&project_path, &file_path)?;
     let metadata = fs::metadata(&path).map_err(|e| format!("读取文件元信息失败: {}", e))?;
 
@@ -178,7 +186,14 @@ pub fn read_project_file(project_path: String, file_path: String) -> Result<Stri
         ));
     }
 
-    fs::read_to_string(&path).map_err(|e| format!("读取文件失败（仅支持 UTF-8 文本文件）: {}", e))
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("读取文件失败（仅支持 UTF-8 文本文件）: {}", e))?;
+
+    Ok(ProjectFileContent {
+        line_count: content.lines().count(),
+        size_bytes: metadata.len(),
+        content,
+    })
 }
 
 #[tauri::command]

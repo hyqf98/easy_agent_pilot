@@ -1,74 +1,87 @@
+import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import type {
-  McpMarketItem,
-  McpMarketDetail,
-  SkillMarketItem,
-  SkillMarketDetail,
-  PluginMarketItem,
-  PluginMarketDetail,
+  MarketCategory,
+  MarketListResponse,
   MarketQuery,
-  MarketListResponse
+  MarketplaceSourceId,
+  MarketplaceSourceOption,
+  McpMarketDetail,
+  McpMarketItem,
+  PluginMarketDetail,
+  PluginMarketItem,
+  SkillMarketDetail,
+  SkillMarketItem
 } from '@/types/marketplace'
 
-// MCP安装输入
 export interface McpInstallInput {
   mcp_id: string
   mcp_name: string
   cli_path: string
   command: string
-  args: string | null
-  env: Record<string, string> | null
+  args: string[]
+  env: Record<string, string>
   scope: 'global' | 'project'
   project_path: string | null
 }
 
-// MCP安装结果
 export interface McpInstallResult {
   success: boolean
   message: string
   config_path: string | null
-  mcp_name: string
+  backup_path?: string | null
+  rollback_performed?: boolean
+  rollback_message?: string | null
 }
 
-// 已安装的MCP
 export interface InstalledMcp {
   name: string
   config_path: string
   command: string
-  args: string | null
-  env: Record<string, string> | null
-  enabled: boolean
+  args: string[]
+  env: Record<string, string>
+  disabled: boolean
+  source_cli: string
+  source_cli_path: string
+  scope: string
 }
 
-// Skill安装输入
 export interface SkillInstallInput {
   skill_id: string
   skill_name: string
-  cli_path: string
+  cli_type: 'claude' | 'codex'
   scope: 'global' | 'project'
   project_path: string | null
+  source_market?: MarketplaceSourceId | null
 }
 
-// Skill安装结果
+interface MarketPagination {
+  page: number
+  total: number
+  hasMore: boolean
+}
+
 export interface SkillInstallResult {
   success: boolean
   message: string
   skill_path: string | null
-  skill_name: string
+  backup_path: string | null
 }
 
-// 已安装的Skill
 export interface InstalledSkill {
   name: string
+  file_name: string
   path: string
-  description: string
-  enabled: boolean
-  source_market: string
+  description?: string | null
+  disabled: boolean
+  source_cli: string
+  source_cli_path: string
+  scope: string
+  installed_at?: string | null
+  triggers: string[]
 }
 
-// Plugin安装输入
 export interface PluginInstallInput {
   plugin_id: string
   plugin_name: string
@@ -80,7 +93,6 @@ export interface PluginInstallInput {
   config_values: Record<string, string>
 }
 
-// Plugin安装结果
 export interface PluginInstallResult {
   success: boolean
   message: string
@@ -94,7 +106,6 @@ export interface PluginInstallResult {
   plugins_json_path: string | null
 }
 
-// 已安装的Plugin
 export interface InstalledPlugin {
   id: string
   name: string
@@ -113,9 +124,46 @@ export interface InstalledPlugin {
   config_values: Record<string, string>
 }
 
+const DEFAULT_MARKET_SOURCE = 'mcpmarket'
+const DEFAULT_MARKETPLACE_SOURCES: MarketplaceSourceOption[] = [
+  {
+    id: 'mcpmarket',
+    label: 'MCP Market',
+    supported_resources: ['mcp', 'skills']
+  },
+  {
+    id: 'modelscope',
+    label: 'ModelScope MCP',
+    supported_resources: ['mcp']
+  }
+]
+const DEFAULT_MCP_QUERY: MarketQuery = {
+  page: 1,
+  search: null,
+  category: null,
+  category_slug: null,
+  source_market: DEFAULT_MARKET_SOURCE
+}
+const DEFAULT_SKILLS_QUERY: MarketQuery = {
+  page: 1,
+  search: null,
+  category: null,
+  category_slug: null,
+  source_market: DEFAULT_MARKET_SOURCE
+}
+
 export const useMarketplaceStore = defineStore('marketplace', () => {
-  // ========== MCP Market State ==========
+  const activeMarketSource = ref<MarketplaceSourceId>(DEFAULT_MARKET_SOURCE)
+  const marketplaceSources = ref<MarketplaceSourceOption[]>([])
+
   const mcpMarketItems = ref<McpMarketItem[]>([])
+  const mcpMarketQuery = ref<MarketQuery>({ ...DEFAULT_MCP_QUERY })
+  const mcpMarketCategories = ref<MarketCategory[]>([])
+  const mcpMarketPagination = ref<MarketPagination>({
+    page: 1,
+    total: 0,
+    hasMore: false
+  })
   const isLoadingMcpMarket = ref(false)
   const mcpMarketError = ref<string | null>(null)
   const selectedMcpDetail = ref<McpMarketDetail | null>(null)
@@ -126,8 +174,14 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
   const isInstallingMcp = ref(false)
   const mcpInstallError = ref<string | null>(null)
 
-  // ========== Skills Market State ==========
   const skillsMarketItems = ref<SkillMarketItem[]>([])
+  const skillsMarketQuery = ref<MarketQuery>({ ...DEFAULT_SKILLS_QUERY })
+  const skillsMarketCategories = ref<MarketCategory[]>([])
+  const skillsMarketPagination = ref<MarketPagination>({
+    page: 1,
+    total: 0,
+    hasMore: false
+  })
   const isLoadingSkillsMarket = ref(false)
   const skillsMarketError = ref<string | null>(null)
   const selectedSkillDetail = ref<SkillMarketDetail | null>(null)
@@ -138,7 +192,6 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
   const isInstallingSkill = ref(false)
   const skillInstallError = ref<string | null>(null)
 
-  // ========== Plugins Market State ==========
   const pluginsMarketItems = ref<PluginMarketItem[]>([])
   const isLoadingPluginsMarket = ref(false)
   const pluginsMarketError = ref<string | null>(null)
@@ -150,30 +203,137 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
   const isInstallingPlugin = ref(false)
   const pluginInstallError = ref<string | null>(null)
 
-  // ========== Current Active Tab ==========
   const activeMarketTab = ref<'mcp' | 'skills' | 'plugins'>('mcp')
 
-  // ========== Getters ==========
   const installedMcpNames = computed(() =>
-    new Set(installedMcps.value.map(m => m.name.toLowerCase()))
+    new Set(installedMcps.value.map(item => item.name.toLowerCase()))
   )
 
   const installedSkillNames = computed(() =>
-    new Set(installedSkills.value.map(s => s.name.toLowerCase()))
+    new Set(
+      installedSkills.value.flatMap(item => [
+        item.name.toLowerCase(),
+        item.file_name.toLowerCase()
+      ])
+    )
   )
 
   const installedPluginIds = computed(() =>
-    new Set(installedPlugins.value.map(p => p.id))
+    new Set(installedPlugins.value.map(item => item.id))
   )
 
-  // ========== MCP Market Actions ==========
-  async function fetchMcpMarket(query: MarketQuery = {}) {
+  const marketplaceSourceOptions = computed(() =>
+    marketplaceSources.value.map(source => ({
+      value: source.id,
+      label: source.label
+    }))
+  )
+
+  const activeMarketSupportedResources = computed<Array<'mcp' | 'skills' | 'plugins'>>(() => {
+    const activeSource = marketplaceSources.value.find(source => source.id === activeMarketSource.value)
+    return activeSource?.supported_resources ?? ['mcp', 'skills']
+  })
+
+  function withSource(query: MarketQuery = {}): MarketQuery {
+    return {
+      ...query,
+      source_market: query.source_market ?? activeMarketSource.value
+    }
+  }
+
+  function normalizeSkillsQuery(query: MarketQuery = {}): MarketQuery {
+    const normalizedSearch = query.search?.trim() || null
+    const normalizedCategorySlug = normalizedSearch ? null : (query.category_slug?.trim() || null)
+    const normalizedCategory = normalizedSearch ? null : (query.category?.trim() || null)
+
+    return {
+      ...DEFAULT_SKILLS_QUERY,
+      ...query,
+      page: Math.max(1, query.page ?? skillsMarketQuery.value.page ?? 1),
+      search: normalizedSearch,
+      category: normalizedCategory,
+      category_slug: normalizedCategorySlug,
+      source_market: query.source_market ?? activeMarketSource.value
+    }
+  }
+
+  function normalizeMcpQuery(query: MarketQuery = {}): MarketQuery {
+    const normalizedSearch = query.search?.trim() || null
+    const normalizedCategorySlug = normalizedSearch ? null : (query.category_slug?.trim() || null)
+    const normalizedCategory = normalizedSearch ? null : (query.category?.trim() || null)
+
+    return {
+      ...DEFAULT_MCP_QUERY,
+      ...query,
+      page: Math.max(1, query.page ?? mcpMarketQuery.value.page ?? 1),
+      search: normalizedSearch,
+      category: normalizedCategory,
+      category_slug: normalizedCategorySlug,
+      source_market: query.source_market ?? activeMarketSource.value
+    }
+  }
+
+  async function loadMarketplaceSources() {
+    try {
+      marketplaceSources.value = await invoke<MarketplaceSourceOption[]>('list_marketplace_source_options')
+      if (
+        marketplaceSources.value.length > 0 &&
+        !marketplaceSources.value.some(source => source.id === activeMarketSource.value)
+      ) {
+        activeMarketSource.value = marketplaceSources.value[0].id
+      }
+    } catch (error) {
+      console.error('Failed to load marketplace sources:', error)
+      marketplaceSources.value = [...DEFAULT_MARKETPLACE_SOURCES]
+    }
+  }
+
+  function sourceSupportsResource(
+    source: MarketplaceSourceId,
+    resource: 'mcp' | 'skills' | 'plugins'
+  ): boolean {
+    const sourceOption = marketplaceSources.value.find(item => item.id === source)
+    return sourceOption?.supported_resources.includes(resource) ?? resource !== 'plugins'
+  }
+
+  function resolveSupportedTab(
+    source: MarketplaceSourceId,
+    fallback: 'mcp' | 'skills' | 'plugins' = 'mcp'
+  ): 'mcp' | 'skills' | 'plugins' {
+    if (sourceSupportsResource(source, fallback)) {
+      return fallback
+    }
+
+    const sourceOption = marketplaceSources.value.find(item => item.id === source)
+    return (sourceOption?.supported_resources[0] ?? 'mcp') as 'mcp' | 'skills' | 'plugins'
+  }
+
+  async function fetchMcpMarket(query: MarketQuery = {}, options: { append?: boolean } = {}) {
     isLoadingMcpMarket.value = true
     mcpMarketError.value = null
 
     try {
-      const response = await invoke<MarketListResponse<McpMarketItem>>('fetch_mcp_market', { query })
-      mcpMarketItems.value = response.items
+      const nextQuery = normalizeMcpQuery({
+        ...mcpMarketQuery.value,
+        ...query
+      })
+      const response = await invoke<MarketListResponse<McpMarketItem>>('fetch_mcp_market', {
+        query: withSource(nextQuery)
+      })
+      const nextPage = response.page ?? nextQuery.page ?? 1
+      mcpMarketItems.value = options.append
+        ? [...mcpMarketItems.value, ...response.items]
+        : response.items
+      mcpMarketQuery.value = {
+        ...nextQuery,
+        page: nextPage
+      }
+      mcpMarketPagination.value = {
+        page: nextPage,
+        total: response.total,
+        hasMore: response.has_more ?? false
+      }
+      mcpMarketCategories.value = response.categories ?? []
     } catch (error) {
       console.error('Failed to fetch MCP market:', error)
       mcpMarketError.value = error instanceof Error ? error.message : '获取 MCP 市场数据失败'
@@ -184,15 +344,25 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
 
   function clearMcpMarket() {
     mcpMarketItems.value = []
+    mcpMarketQuery.value = { ...DEFAULT_MCP_QUERY, source_market: activeMarketSource.value }
+    mcpMarketCategories.value = []
+    mcpMarketPagination.value = {
+      page: 1,
+      total: 0,
+      hasMore: false
+    }
     mcpMarketError.value = null
   }
 
-  async function fetchMcpDetail(mcpId: string) {
+  async function fetchMcpDetail(mcpId: string, sourceMarket: MarketplaceSourceId = activeMarketSource.value) {
     isLoadingMcpDetail.value = true
     mcpDetailError.value = null
 
     try {
-      const detail = await invoke<McpMarketDetail>('fetch_mcp_market_detail', { mcpId })
+      const detail = await invoke<McpMarketDetail>('fetch_mcp_market_detail', {
+        mcpId,
+        sourceMarket
+      })
       selectedMcpDetail.value = detail
     } catch (error) {
       console.error('Failed to fetch MCP detail:', error)
@@ -210,8 +380,7 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
   async function loadInstalledMcps() {
     isLoadingInstalledMcps.value = true
     try {
-      const mcps = await invoke<InstalledMcp[]>('list_installed_mcps')
-      installedMcps.value = mcps
+      installedMcps.value = await invoke<InstalledMcp[]>('list_installed_mcps')
     } catch (error) {
       console.error('Failed to load installed MCPs:', error)
     } finally {
@@ -231,22 +400,23 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
       return result
     } catch (error) {
       console.error('Failed to install MCP:', error)
-      const errorMsg = error instanceof Error ? error.message : '安装 MCP 失败'
-      mcpInstallError.value = errorMsg
+      const message = error instanceof Error ? error.message : '安装 MCP 失败'
+      mcpInstallError.value = message
       throw error
     } finally {
       isInstallingMcp.value = false
     }
   }
 
-  async function toggleMcp(configPath: string, enabled: boolean): Promise<InstalledMcp> {
+  async function toggleMcp(configPath: string, mcpName: string, disabled: boolean) {
     try {
-      const mcp = await invoke<InstalledMcp>('toggle_installed_mcp', { configPath, enabled })
-      const localMcp = installedMcps.value.find(m => m.config_path === configPath)
-      if (localMcp) {
-        localMcp.enabled = enabled
+      await invoke('toggle_installed_mcp', { configPath, mcpName, disabled })
+      const localItem = installedMcps.value.find(
+        item => item.config_path === configPath && item.name === mcpName
+      )
+      if (localItem) {
+        localItem.disabled = disabled
       }
-      return mcp
     } catch (error) {
       console.error('Failed to toggle MCP:', error)
       throw error
@@ -257,7 +427,9 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
     try {
       const result = await invoke<McpInstallResult>('uninstall_mcp', { configPath, mcpName })
       if (result.success) {
-        installedMcps.value = installedMcps.value.filter(m => m.config_path !== configPath)
+        installedMcps.value = installedMcps.value.filter(
+          item => !(item.config_path === configPath && item.name === mcpName)
+        )
       }
       return result
     } catch (error) {
@@ -266,14 +438,32 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
     }
   }
 
-  // ========== Skills Market Actions ==========
-  async function fetchSkillsMarket(query: MarketQuery = {}) {
+  async function fetchSkillsMarket(query: MarketQuery = {}, options: { append?: boolean } = {}) {
     isLoadingSkillsMarket.value = true
     skillsMarketError.value = null
 
     try {
-      const response = await invoke<MarketListResponse<SkillMarketItem>>('fetch_skills_market', { query })
-      skillsMarketItems.value = response.items
+      const nextQuery = normalizeSkillsQuery({
+        ...skillsMarketQuery.value,
+        ...query
+      })
+      const response = await invoke<MarketListResponse<SkillMarketItem>>('fetch_skills_market', {
+        query: withSource(nextQuery)
+      })
+      const nextPage = response.page ?? nextQuery.page ?? 1
+      skillsMarketItems.value = options.append
+        ? [...skillsMarketItems.value, ...response.items]
+        : response.items
+      skillsMarketQuery.value = {
+        ...nextQuery,
+        page: nextPage
+      }
+      skillsMarketPagination.value = {
+        page: nextPage,
+        total: response.total,
+        hasMore: response.has_more ?? false
+      }
+      skillsMarketCategories.value = response.categories ?? []
     } catch (error) {
       console.error('Failed to fetch Skills market:', error)
       skillsMarketError.value = error instanceof Error ? error.message : '获取 Skills 市场数据失败'
@@ -284,15 +474,25 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
 
   function clearSkillsMarket() {
     skillsMarketItems.value = []
+    skillsMarketQuery.value = { ...DEFAULT_SKILLS_QUERY, source_market: activeMarketSource.value }
+    skillsMarketCategories.value = []
+    skillsMarketPagination.value = {
+      page: 1,
+      total: 0,
+      hasMore: false
+    }
     skillsMarketError.value = null
   }
 
-  async function fetchSkillDetail(skillId: string) {
+  async function fetchSkillDetail(skillId: string, sourceMarket: MarketplaceSourceId = activeMarketSource.value) {
     isLoadingSkillDetail.value = true
     skillDetailError.value = null
 
     try {
-      const detail = await invoke<SkillMarketDetail>('fetch_skill_market_detail', { skillId })
+      const detail = await invoke<SkillMarketDetail>('fetch_skill_market_detail', {
+        skillId,
+        sourceMarket
+      })
       selectedSkillDetail.value = detail
     } catch (error) {
       console.error('Failed to fetch skill detail:', error)
@@ -310,8 +510,7 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
   async function loadInstalledSkills() {
     isLoadingInstalledSkills.value = true
     try {
-      const skills = await invoke<InstalledSkill[]>('list_installed_skills')
-      installedSkills.value = skills
+      installedSkills.value = await invoke<InstalledSkill[]>('list_installed_skills')
     } catch (error) {
       console.error('Failed to load installed skills:', error)
     } finally {
@@ -331,22 +530,21 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
       return result
     } catch (error) {
       console.error('Failed to install skill:', error)
-      const errorMsg = error instanceof Error ? error.message : '安装 Skill 失败'
-      skillInstallError.value = errorMsg
+      const message = error instanceof Error ? error.message : '安装 Skill 失败'
+      skillInstallError.value = message
       throw error
     } finally {
       isInstallingSkill.value = false
     }
   }
 
-  async function toggleSkill(skillPath: string, enabled: boolean): Promise<InstalledSkill> {
+  async function toggleSkill(skillPath: string, disable: boolean): Promise<SkillInstallResult> {
     try {
-      const skill = await invoke<InstalledSkill>('toggle_installed_skill', { skillPath, enabled })
-      const localSkill = installedSkills.value.find(s => s.path === skillPath)
-      if (localSkill) {
-        localSkill.enabled = enabled
+      const result = await invoke<SkillInstallResult>('toggle_installed_skill', { skillPath, disable })
+      if (result.success) {
+        await loadInstalledSkills()
       }
-      return skill
+      return result
     } catch (error) {
       console.error('Failed to toggle skill:', error)
       throw error
@@ -357,7 +555,7 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
     try {
       const result = await invoke<SkillInstallResult>('uninstall_skill', { skillPath })
       if (result.success) {
-        installedSkills.value = installedSkills.value.filter(s => s.path !== skillPath)
+        installedSkills.value = installedSkills.value.filter(item => item.path !== skillPath)
       }
       return result
     } catch (error) {
@@ -366,7 +564,6 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
     }
   }
 
-  // ========== Plugins Market Actions ==========
   async function fetchPluginsMarket(query: MarketQuery = {}) {
     isLoadingPluginsMarket.value = true
     pluginsMarketError.value = null
@@ -410,8 +607,7 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
   async function loadInstalledPlugins() {
     isLoadingInstalledPlugins.value = true
     try {
-      const plugins = await invoke<InstalledPlugin[]>('list_installed_plugins')
-      installedPlugins.value = plugins
+      installedPlugins.value = await invoke<InstalledPlugin[]>('list_installed_plugins')
     } catch (error) {
       console.error('Failed to load installed plugins:', error)
     } finally {
@@ -431,20 +627,20 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
       return result
     } catch (error) {
       console.error('Failed to install plugin:', error)
-      const errorMsg = error instanceof Error ? error.message : '安装 Plugin 失败'
-      pluginInstallError.value = errorMsg
+      const message = error instanceof Error ? error.message : '安装 Plugin 失败'
+      pluginInstallError.value = message
       throw error
     } finally {
       isInstallingPlugin.value = false
     }
   }
 
-  async function togglePlugin(pluginId: string, enabled: boolean): Promise<InstalledPlugin> {
+  async function togglePlugin(pluginId: string, enabled: boolean) {
     try {
       const plugin = await invoke<InstalledPlugin>('toggle_plugin', { pluginId, enabled })
-      const localPlugin = installedPlugins.value.find(p => p.id === pluginId)
-      if (localPlugin) {
-        localPlugin.enabled = enabled
+      const localItem = installedPlugins.value.find(item => item.id === pluginId)
+      if (localItem) {
+        localItem.enabled = plugin.enabled
       }
       return plugin
     } catch (error) {
@@ -457,7 +653,7 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
     try {
       const result = await invoke<PluginInstallResult>('uninstall_plugin', { pluginId })
       if (result.success) {
-        installedPlugins.value = installedPlugins.value.filter(p => p.id !== pluginId)
+        installedPlugins.value = installedPlugins.value.filter(item => item.id !== pluginId)
       }
       return result
     } catch (error) {
@@ -466,9 +662,17 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
     }
   }
 
-  // ========== Common Actions ==========
   function setActiveMarketTab(tab: 'mcp' | 'skills' | 'plugins') {
-    activeMarketTab.value = tab
+    activeMarketTab.value = resolveSupportedTab(activeMarketSource.value, tab)
+  }
+
+  function setActiveMarketSource(source: MarketplaceSourceId) {
+    activeMarketSource.value = source
+    activeMarketTab.value = resolveSupportedTab(source, activeMarketTab.value)
+    clearMcpMarket()
+    clearSkillsMarket()
+    clearMcpDetail()
+    clearSkillDetail()
   }
 
   async function loadAllInstalled() {
@@ -480,14 +684,17 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
   }
 
   async function refreshCurrentMarket() {
-    const tab = activeMarketTab.value
-    if (tab === 'mcp') {
+    if (activeMarketTab.value === 'mcp') {
       await fetchMcpMarket()
-    } else if (tab === 'skills') {
-      await fetchSkillsMarket()
-    } else {
-      await fetchPluginsMarket()
+      return
     }
+
+    if (activeMarketTab.value === 'skills') {
+      await fetchSkillsMarket({ ...skillsMarketQuery.value, page: 1 })
+      return
+    }
+
+    await fetchPluginsMarket()
   }
 
   function clearAllErrors() {
@@ -503,10 +710,15 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
   }
 
   return {
-    // State
+    activeMarketSource,
+    marketplaceSources,
+    marketplaceSourceOptions,
+    activeMarketSupportedResources,
     activeMarketTab,
-    // MCP
     mcpMarketItems,
+    mcpMarketQuery,
+    mcpMarketCategories,
+    mcpMarketPagination,
     isLoadingMcpMarket,
     mcpMarketError,
     selectedMcpDetail,
@@ -516,8 +728,10 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
     isLoadingInstalledMcps,
     isInstallingMcp,
     mcpInstallError,
-    // Skills
     skillsMarketItems,
+    skillsMarketQuery,
+    skillsMarketCategories,
+    skillsMarketPagination,
     isLoadingSkillsMarket,
     skillsMarketError,
     selectedSkillDetail,
@@ -527,7 +741,6 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
     isLoadingInstalledSkills,
     isInstallingSkill,
     skillInstallError,
-    // Plugins
     pluginsMarketItems,
     isLoadingPluginsMarket,
     pluginsMarketError,
@@ -538,13 +751,13 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
     isLoadingInstalledPlugins,
     isInstallingPlugin,
     pluginInstallError,
-    // Getters
     installedMcpNames,
     installedSkillNames,
     installedPluginIds,
-    // Actions
+    loadMarketplaceSources,
+    sourceSupportsResource,
     setActiveMarketTab,
-    // MCP Actions
+    setActiveMarketSource,
     fetchMcpMarket,
     clearMcpMarket,
     fetchMcpDetail,
@@ -553,7 +766,6 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
     installMcp,
     toggleMcp,
     uninstallMcp,
-    // Skills Actions
     fetchSkillsMarket,
     clearSkillsMarket,
     fetchSkillDetail,
@@ -562,7 +774,6 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
     installSkill,
     toggleSkill,
     uninstallSkill,
-    // Plugins Actions
     fetchPluginsMarket,
     clearPluginsMarket,
     fetchPluginDetail,
@@ -571,7 +782,6 @@ export const useMarketplaceStore = defineStore('marketplace', () => {
     installPlugin,
     togglePlugin,
     uninstallPlugin,
-    // Common Actions
     loadAllInstalled,
     refreshCurrentMarket,
     clearAllErrors

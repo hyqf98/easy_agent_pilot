@@ -114,6 +114,9 @@ function dedupeMessagesById(items: Message[]): Message[] {
   return Array.from(map.values())
 }
 
+const EMPTY_MESSAGES: Message[] = []
+const EMPTY_TRACE_MAP = new Map<string, { traceId: string, messageId: string, timestamp: string }>()
+
 interface CreateMessageInput {
   session_id: string
   role: string
@@ -222,12 +225,61 @@ export const useMessageStore = defineStore('message', () => {
   const PAGE_SIZE = 20
 
   // Getters
-  const messagesBySession = computed(() => {
-    return (sessionId: string) =>
-      messages.value
-        .filter(m => m.sessionId === sessionId)
-        .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+  const messagesBySessionMap = computed(() => {
+    const grouped = new Map<string, Message[]>()
+
+    for (const message of messages.value) {
+      const sessionMessages = grouped.get(message.sessionId)
+      if (sessionMessages) {
+        sessionMessages.push(message)
+      } else {
+        grouped.set(message.sessionId, [message])
+      }
+    }
+
+    for (const sessionMessages of grouped.values()) {
+      sessionMessages.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+    }
+
+    return grouped
   })
+
+  const latestAssistantTraceBySession = computed(() => {
+    const grouped = new Map<string, Map<string, { traceId: string, messageId: string, timestamp: string }>>()
+
+    for (const [sessionId, sessionMessages] of messagesBySessionMap.value.entries()) {
+      const traceMap = new Map<string, { traceId: string, messageId: string, timestamp: string }>()
+
+      for (const message of sessionMessages) {
+        if (message.role !== 'assistant' || !message.editTraces?.length) {
+          continue
+        }
+
+        for (const trace of message.editTraces) {
+          const existing = traceMap.get(trace.filePath)
+          if (!existing || existing.timestamp <= trace.timestamp) {
+            traceMap.set(trace.filePath, {
+              traceId: trace.id,
+              messageId: message.id,
+              timestamp: trace.timestamp
+            })
+          }
+        }
+      }
+
+      grouped.set(sessionId, traceMap)
+    }
+
+    return grouped
+  })
+
+  const messagesBySession = computed(() => {
+    return (sessionId: string) => messagesBySessionMap.value.get(sessionId) ?? EMPTY_MESSAGES
+  })
+
+  const getLatestAssistantTraceIdsByFile = (sessionId: string) => {
+    return latestAssistantTraceBySession.value.get(sessionId) ?? EMPTY_TRACE_MAP
+  }
 
   const lastMessage = computed(() => {
     return (sessionId: string) => {
@@ -256,7 +308,12 @@ export const useMessageStore = defineStore('message', () => {
         limit: PAGE_SIZE
       })
 
-      messages.value = dedupeMessagesById(result.messages.map(transformMessage))
+      const nextSessionMessages = result.messages.map(transformMessage)
+      const otherSessionMessages = messages.value.filter(message => message.sessionId !== sessionId)
+      messages.value = dedupeMessagesById([
+        ...otherSessionMessages,
+        ...nextSessionMessages
+      ])
 
       // 更新分页状态
       const oldestMessage = result.messages[0]
@@ -472,6 +529,7 @@ export const useMessageStore = defineStore('message', () => {
     messagesBySession,
     lastMessage,
     getPagination,
+    getLatestAssistantTraceIdsByFile,
     // Actions
     loadMessages,
     loadMoreMessages,

@@ -14,6 +14,7 @@ pub mod market_source_support;
 pub mod marketplace;
 pub mod mcp;
 pub mod mcp_market;
+pub mod mcpmarket_source;
 pub(crate) mod mcp_shared;
 pub mod memory;
 pub mod message;

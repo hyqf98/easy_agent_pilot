@@ -46,6 +46,8 @@ const showErrorModal = ref(false)
 const errorSession = ref<Session | null>(null)
 const showSummaryModal = ref(false)
 const summarySession = ref<Session | null>(null)
+const searchInput = ref('')
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
 // 清空消息确认对话框状态
 const showClearMessagesConfirm = ref(false)
@@ -73,6 +75,10 @@ const currentProjectSessions = computed(() => {
   return sessionStore.sessionsByProject(projectStore.currentProjectId)
 })
 
+const sessionActionMap = computed(() => new Map(
+  currentProjectSessions.value.map(session => [session.id, getSessionActions(session)])
+))
+
 // 切换项目
 const handleProjectChange = (projectId: string) => {
   selectedProjectId.value = projectId
@@ -84,7 +90,26 @@ const hasSearchQuery = computed(() => sessionStore.searchQuery.trim().length > 0
 
 // 清除搜索
 const clearSearch = () => {
+  searchInput.value = ''
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer)
+    searchDebounceTimer = null
+  }
   sessionStore.setSearchQuery('')
+}
+
+const handleSearchInput = (value: string) => {
+  searchInput.value = value
+
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer)
+  }
+
+  // 搜索框本地即时响应，实际过滤延迟一点提交，避免大列表上每个按键都触发重排。
+  searchDebounceTimer = setTimeout(() => {
+    sessionStore.setSearchQuery(value)
+    searchDebounceTimer = null
+  }, 160)
 }
 
 // 手动刷新会话列表
@@ -114,6 +139,7 @@ watch(() => projectStore.currentProjectId, async (projectId, oldProjectId) => {
 onMounted(() => {
   // 初始化选中的项目ID
   selectedProjectId.value = projectStore.currentProjectId
+  searchInput.value = sessionStore.searchQuery
 
   if (projectStore.currentProjectId) {
     sessionStore.loadSessions(projectStore.currentProjectId)
@@ -124,6 +150,16 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('keydown', handleModalKeydown)
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer)
+    searchDebounceTimer = null
+  }
+})
+
+watch(() => sessionStore.searchQuery, (value) => {
+  if (value !== searchInput.value) {
+    searchInput.value = value
+  }
 })
 
 // ESC 键关闭模态框
@@ -581,11 +617,11 @@ function getSessionActions(session: Session): SessionActionItem[] {
           class="session-search__icon"
         />
         <input
-          :value="sessionStore.searchQuery"
+          :value="searchInput"
           type="text"
           class="session-search__input"
           :placeholder="t('session.searchSessions')"
-          @input="sessionStore.setSearchQuery(($event.target as HTMLInputElement).value)"
+          @input="handleSearchInput(($event.target as HTMLInputElement).value)"
         >
         <button
           v-if="hasSearchQuery"
@@ -659,12 +695,13 @@ function getSessionActions(session: Session): SessionActionItem[] {
           :active="session.id === sessionStore.currentSessionId"
           :editing-session-id="editingSessionId"
           :editing-session-name="editingSessionName"
-          :actions="getSessionActions(session).map(({ key, title, icon, danger, warning }) => ({ key, title, icon, danger, warning }))"
+          :search-query="sessionStore.searchQuery"
+          :actions="(sessionActionMap.get(session.id) ?? []).map(({ key, title, icon, danger, warning }) => ({ key, title, icon, danger, warning }))"
           @select="handleSelectSession"
           @save-name="saveEditSessionName"
           @cancel-edit="cancelEditSessionName"
           @update-name="editingSessionName = $event"
-          @action="(key, targetSession) => getSessionActions(targetSession).find(action => action.key === key)?.handler(targetSession)"
+          @action="(key, targetSession) => sessionActionMap.get(targetSession.id)?.find(action => action.key === key)?.handler(targetSession)"
         />
       </div>
     </div>

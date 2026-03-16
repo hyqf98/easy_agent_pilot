@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMarketplaceStore } from '@/stores/marketplace'
 import { EaIcon } from '@/components/common'
@@ -7,46 +8,31 @@ const { t } = useI18n()
 const marketplaceStore = useMarketplaceStore()
 
 interface TabItem {
-  id: 'mcp' | 'skills' | 'plugins'
+  id: 'mcp' | 'skills'
   labelKey: string
   icon: string
 }
 
 const tabs: TabItem[] = [
   { id: 'mcp', labelKey: 'marketplace.tabs.mcp', icon: 'plug' },
-  { id: 'skills', labelKey: 'marketplace.tabs.skills', icon: 'sparkles' },
-  { id: 'plugins', labelKey: 'marketplace.tabs.plugins', icon: 'puzzle' }
+  { id: 'skills', labelKey: 'marketplace.tabs.skills', icon: 'sparkles' }
 ]
+
+const visibleTabs = computed(() =>
+  tabs.filter(tab => marketplaceStore.activeMarketSupportedResources.includes(tab.id))
+)
 </script>
 
 <template>
   <div class="marketplace-tabs">
     <button
-      v-for="tab in tabs"
+      v-for="tab in visibleTabs"
       :key="tab.id"
       :class="['marketplace-tabs__tab', { 'marketplace-tabs__tab--active': marketplaceStore.activeMarketTab === tab.id }]"
       @click="marketplaceStore.setActiveMarketTab(tab.id)"
     >
       <EaIcon :name="tab.icon" :size="16" />
       <span>{{ t(tab.labelKey) }}</span>
-      <span
-        v-if="tab.id === 'mcp' && marketplaceStore.installedMcps.length > 0"
-        class="marketplace-tabs__badge"
-      >
-        {{ marketplaceStore.installedMcps.length }}
-      </span>
-      <span
-        v-if="tab.id === 'skills' && marketplaceStore.installedSkills.length > 0"
-        class="marketplace-tabs__badge"
-      >
-        {{ marketplaceStore.installedSkills.length }}
-      </span>
-      <span
-        v-if="tab.id === 'plugins' && marketplaceStore.installedPlugins.length > 0"
-        class="marketplace-tabs__badge"
-      >
-        {{ marketplaceStore.installedPlugins.length }}
-      </span>
     </button>
   </div>
 </template>
@@ -82,19 +68,5 @@ const tabs: TabItem[] = [
 .marketplace-tabs__tab--active {
   color: var(--color-primary);
   border-bottom-color: var(--color-primary);
-}
-
-.marketplace-tabs__badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 var(--spacing-1);
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-bg-primary);
-  background-color: var(--color-primary);
-  border-radius: var(--radius-full);
 }
 </style>

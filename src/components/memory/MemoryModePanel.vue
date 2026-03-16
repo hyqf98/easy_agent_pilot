@@ -15,6 +15,7 @@ import type {
 import MemoryLibraryModal from './MemoryLibraryModal.vue'
 import RawMemoryModal from './RawMemoryModal.vue'
 import MemoryMergeModal from './MemoryMergeModal.vue'
+import MemoryBatchDeleteModal from './MemoryBatchDeleteModal.vue'
 
 const memoryStore = useMemoryStore()
 const projectStore = useProjectStore()
@@ -27,6 +28,7 @@ const libraryEditing = ref<MemoryLibrary | null>(null)
 const rawModalVisible = ref(false)
 const rawEditing = ref<RawMemoryRecord | null>(null)
 const mergeModalVisible = ref(false)
+const batchDeleteModalVisible = ref(false)
 const libraryContentDraft = ref('')
 const libraryContentDirty = ref(false)
 
@@ -43,6 +45,9 @@ const projectOptions = computed<SelectOption[]>(() => [
     label: project.name
   }))
 ])
+const currentProjectLabel = computed(() =>
+  projectOptions.value.find(option => option.value === projectFilter.value)?.label ?? '全部项目'
+)
 
 const sortedLibraries = computed(() =>
   [...memoryStore.libraries].sort((left, right) =>
@@ -135,6 +140,31 @@ async function handleDeleteRecord(record: RawMemoryRecord) {
   if (!window.confirm('确定删除这条原始记忆吗？')) return
   await memoryStore.deleteRawRecord(record.id)
   if (selectedRecordId.value === record.id) {
+    selectedRecordId.value = null
+  }
+}
+
+async function handleBatchDeleteConfirm(payload: {
+  startAt?: string
+  endAt?: string
+  limit?: number
+  deleteOrder?: 'oldest' | 'latest'
+}) {
+  const scopeText = [
+    currentProjectLabel.value !== '全部项目' ? `项目：${currentProjectLabel.value}` : '',
+    search.value.trim() ? `搜索：${search.value.trim()}` : ''
+  ].filter(Boolean).join('，')
+  const actionText = payload.limit
+    ? `按条件批量删除 ${payload.limit} 条原始记忆`
+    : '按时间范围批量删除原始记忆'
+
+  if (!window.confirm(`${actionText}${scopeText ? `（${scopeText}）` : ''}，确认继续吗？`)) {
+    return
+  }
+
+  const result = await memoryStore.batchDeleteRawRecords(payload)
+  batchDeleteModalVisible.value = false
+  if (selectedRecordId.value && result.deletedIds.includes(selectedRecordId.value)) {
     selectedRecordId.value = null
   }
 }
@@ -269,6 +299,13 @@ onUnmounted(() => {
             @click="reloadRawRecords"
           >
             刷新
+          </EaButton>
+          <EaButton
+            type="danger"
+            size="small"
+            @click="batchDeleteModalVisible = true"
+          >
+            批量删除
           </EaButton>
         </div>
       </div>
@@ -480,6 +517,15 @@ onUnmounted(() => {
       :current-library-id="memoryStore.activeLibraryId"
       :loading="memoryStore.isMerging"
       @confirm="handleMergeConfirm"
+    />
+
+    <MemoryBatchDeleteModal
+      v-model:visible="batchDeleteModalVisible"
+      :visible-count="memoryStore.rawRecords.length"
+      :project-label="currentProjectLabel"
+      :search-keyword="search.trim()"
+      :loading="memoryStore.isDeletingRecords"
+      @confirm="handleBatchDeleteConfirm"
     />
   </div>
 </template>

@@ -452,6 +452,11 @@ export class FormEngine {
     const errors: Record<string, string> = {}
 
     schema.fields.forEach(field => {
+      // 条件字段隐藏时不参与校验，否则表单在动态切换字段时会被“看不见的必填项”卡住。
+      if (field.condition && values[field.condition.field] !== field.condition.value) {
+        return
+      }
+
       const value = values[field.name]
       const isEmptyArray = Array.isArray(value) && value.length === 0
 

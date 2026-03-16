@@ -70,11 +70,47 @@ export const useSessionStore = defineStore('session', () => {
   const searchQuery = ref('')
   // 打开的会话 ID 列表（用于标签栏）
   const openSessionIds = ref<string[]>([])
+  const EMPTY_SESSIONS: Session[] = []
 
   // Getters
   const currentSession = computed(() =>
     sessions.value.find(s => s.id === currentSessionId.value)
   )
+
+  const normalizedSearchQuery = computed(() => searchQuery.value.trim().toLowerCase())
+
+  const projectSessionsByUpdatedAt = computed(() => {
+    // 侧栏会频繁读取当前项目会话，先按项目聚合并排序，避免每次渲染都重新 filter/sort。
+    const grouped = new Map<string, Session[]>()
+    const query = normalizedSearchQuery.value
+
+    for (const session of sessions.value) {
+      if (query) {
+        const name = session.name.toLowerCase()
+        const lastMessage = session.lastMessage?.toLowerCase() ?? ''
+        if (!name.includes(query) && !lastMessage.includes(query)) {
+          continue
+        }
+      }
+
+      const projectSessions = grouped.get(session.projectId)
+      if (projectSessions) {
+        projectSessions.push(session)
+      } else {
+        grouped.set(session.projectId, [session])
+      }
+    }
+
+    for (const projectSessions of grouped.values()) {
+      projectSessions.sort((a, b) => {
+        if (a.pinned && !b.pinned) return -1
+        if (!a.pinned && b.pinned) return 1
+        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      })
+    }
+
+    return grouped
+  })
 
   // 获取打开的会话列表
   const openSessions = computed(() => {
@@ -85,6 +121,10 @@ export const useSessionStore = defineStore('session', () => {
 
   const sessionsByProject = computed(() => {
     return (projectId: string, sortBy: 'updatedAt' | 'createdAt' = 'updatedAt') => {
+      if (sortBy === 'updatedAt') {
+        return projectSessionsByUpdatedAt.value.get(projectId) ?? EMPTY_SESSIONS
+      }
+
       let filtered = sessions.value.filter(s => s.projectId === projectId)
 
       // 搜索过滤
@@ -115,6 +155,10 @@ export const useSessionStore = defineStore('session', () => {
   // agentFilter: 'all' 表示全部，其他值为智能体 ID
   const sessionsByProjectAndAgentType = computed(() => {
     return (projectId: string, agentFilter?: string | 'all', sortBy: 'updatedAt' | 'createdAt' = 'updatedAt') => {
+      if ((!agentFilter || agentFilter === 'all') && sortBy === 'updatedAt') {
+        return projectSessionsByUpdatedAt.value.get(projectId) ?? EMPTY_SESSIONS
+      }
+
       let filtered = sessions.value.filter(s => s.projectId === projectId)
 
       // 智能体筛选（根据智能体 ID）

@@ -33,3 +33,9 @@ export interface FileContentPayload {
   filePath: string
   content: string
 }
+
+export interface ProjectFileContent {
+  content: string
+  sizeBytes: number
+  lineCount: number
+}

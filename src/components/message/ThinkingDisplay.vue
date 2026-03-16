@@ -51,7 +51,9 @@ const toggleExpand = () => {
 
 <style scoped>
 .thinking-display {
-  width: 100%;
+  align-self: flex-start;
+  width: var(--timeline-panel-width, min(100%, 29.5rem));
+  max-width: 100%;
   border-radius: var(--radius-lg);
   background:
     linear-gradient(135deg, rgba(14, 165, 233, 0.12), rgba(34, 197, 94, 0.05)),
@@ -85,6 +87,11 @@ const toggleExpand = () => {
   display: flex;
   align-items: center;
   gap: var(--spacing-2);
+  min-width: 0;
+}
+
+.thinking-display__header-right {
+  flex-shrink: 0;
 }
 
 .thinking-display__icon {
@@ -107,12 +114,6 @@ const toggleExpand = () => {
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-}
-
-.thinking-display__header-right {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
 }
 
 .thinking-display__toggle {

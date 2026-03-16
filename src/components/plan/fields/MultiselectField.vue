@@ -6,6 +6,7 @@ const props = defineProps<{
   field: FormField
   modelValue: (string | number)[]
   error?: string
+  disabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -26,6 +27,9 @@ const otherValue = ref('')
 
 // "其他"选项的标签
 const otherLabel = computed(() => props.field.otherLabel || '其他')
+const hasExplicitOtherOption = computed(() =>
+  props.field.options?.some(option => String(option.value) === OTHER_VALUE) ?? false
+)
 
 // 获取预设选项的值集合
 const presetValues = computed(() => {
@@ -113,6 +117,7 @@ function onOtherInput(event: Event) {
           :name="inputId"
           :value="option.value"
           :checked="isSelected(option.value)"
+          :disabled="disabled"
           class="option-checkbox"
           @change="toggleOption(option.value)"
         >
@@ -120,7 +125,7 @@ function onOtherInput(event: Event) {
       </label>
       <!-- "其他"选项 -->
       <label
-        v-if="field.allowOther"
+        v-if="field.allowOther && !hasExplicitOtherOption"
         class="option-label"
         :class="{ selected: isOtherSelected }"
       >
@@ -129,6 +134,7 @@ function onOtherInput(event: Event) {
           :name="inputId"
           :value="OTHER_VALUE"
           :checked="isOtherSelected"
+          :disabled="disabled"
           class="option-checkbox"
           @change="toggleOther"
         >
@@ -141,6 +147,7 @@ function onOtherInput(event: Event) {
       type="text"
       class="other-input"
       :value="otherValue"
+      :disabled="disabled"
       :placeholder="`请输入${field.label}`"
       @input="onOtherInput"
     >

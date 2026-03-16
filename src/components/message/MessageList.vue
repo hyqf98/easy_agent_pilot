@@ -7,6 +7,12 @@ import { EaIcon } from '@/components/common'
 import MessageBubble from './MessageBubble.vue'
 import type { Message } from '@/stores/message'
 
+interface VirtualMessageItem {
+  message: Message
+  top: number
+  height: number
+}
+
 const { t } = useI18n()
 const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
@@ -18,6 +24,15 @@ const emit = defineEmits<{
 }>()
 
 const listRef = ref<HTMLElement | null>(null)
+let scrollFramePending = false
+const messageHeights = ref<Record<string, number>>({})
+const viewportHeight = ref(0)
+const scrollTop = ref(0)
+const resizeObservers = new Map<string, ResizeObserver>()
+
+const DEFAULT_MESSAGE_HEIGHT = 220
+const VIRTUALIZE_THRESHOLD = 40
+const VIRTUAL_OVERSCAN_PX = 1200
 
 // 跟踪用户是否在底部（用于控制自动滚动）
 const isUserAtBottom = ref(true)
@@ -37,6 +52,22 @@ const currentMessages = computed(() => {
   return messageStore.messagesBySession(sessionStore.currentSessionId)
 })
 
+const shouldVirtualize = computed(() => currentMessages.value.length > VIRTUALIZE_THRESHOLD)
+
+// 消息气泡包含 markdown、工具调用和文件追踪，直接 deep watch 整个数组会在流式输出时持续触发深层比较。
+// 这里改成轻量级签名，只监听会影响列表布局和滚动策略的字段。
+const currentMessageSignature = computed(() => currentMessages.value
+  .map(message => [
+    message.id,
+    message.status,
+    message.content.length,
+    message.toolCalls?.length ?? 0,
+    message.editTraces?.length ?? 0,
+    message.attachments?.length ?? 0,
+    message.thinking?.length ?? 0
+  ].join(':'))
+  .join('|'))
+
 // 获取当前会话的分页状态
 const currentPagination = computed(() => {
   if (!sessionStore.currentSessionId) return null
@@ -48,6 +79,69 @@ const hasMoreMessages = computed(() => currentPagination.value?.hasMore ?? false
 
 // 是否正在加载更多
 const isLoadingMore = computed(() => currentPagination.value?.isLoadingMore ?? false)
+
+const messageLayout = computed<VirtualMessageItem[]>(() => {
+  let offset = 0
+
+  return currentMessages.value.map(message => {
+    const height = messageHeights.value[message.id] ?? DEFAULT_MESSAGE_HEIGHT
+    const item = {
+      message,
+      top: offset,
+      height
+    }
+    offset += height
+    return item
+  })
+})
+
+const totalMessageHeight = computed(() => {
+  const lastItem = messageLayout.value[messageLayout.value.length - 1]
+  return lastItem ? lastItem.top + lastItem.height : 0
+})
+
+const virtualWindow = computed(() => {
+  if (!shouldVirtualize.value) {
+    return {
+      start: 0,
+      end: currentMessages.value.length,
+      topSpacer: 0,
+      bottomSpacer: 0
+    }
+  }
+
+  const layouts = messageLayout.value
+  const visibleTop = Math.max(0, scrollTop.value - VIRTUAL_OVERSCAN_PX)
+  const visibleBottom = scrollTop.value + viewportHeight.value + VIRTUAL_OVERSCAN_PX
+
+  let start = 0
+  while (start < layouts.length && layouts[start].top + layouts[start].height < visibleTop) {
+    start += 1
+  }
+
+  let end = start
+  while (end < layouts.length && layouts[end].top < visibleBottom) {
+    end += 1
+  }
+
+  const safeEnd = Math.max(end, start + 1)
+  const lastVisible = layouts[safeEnd - 1]
+
+  return {
+    start,
+    end: safeEnd,
+    topSpacer: layouts[start]?.top ?? 0,
+    bottomSpacer: Math.max(0, totalMessageHeight.value - ((lastVisible?.top ?? 0) + (lastVisible?.height ?? 0)))
+  }
+})
+
+const visibleMessages = computed(() => {
+  if (!shouldVirtualize.value) {
+    return messageLayout.value
+  }
+
+  return messageLayout.value.slice(virtualWindow.value.start, virtualWindow.value.end)
+})
 
 // 检查是否滚动到底部
 const checkIsAtBottom = () => {
@@ -65,16 +159,23 @@ const checkIsAtTop = () => {
 
 // 处理用户滚动事件
 const handleScroll = () => {
-  isUserAtBottom.value = checkIsAtBottom()
-  // 当用户不在底部时显示回到底部按钮
-  showScrollToBottom.value = !isUserAtBottom.value
-
-  // 滚动到顶部时加载更多历史消息
-  if (checkIsAtTop() && hasMoreMessages.value && !isLoadingMore.value && sessionStore.currentSessionId) {
-    // 保存当前滚动高度，用于加载后恢复位置
-    savedScrollHeight.value = listRef.value?.scrollHeight ?? 0
-    messageStore.loadMoreMessages(sessionStore.currentSessionId)
+  if (scrollFramePending) {
+    return
   }
+
+  // 滚动事件频率很高，压到一帧内处理，避免消息很多时频繁读写布局。
+  scrollFramePending = true
+  requestAnimationFrame(() => {
+    scrollFramePending = false
+    scrollTop.value = listRef.value?.scrollTop ?? 0
+    isUserAtBottom.value = checkIsAtBottom()
+    showScrollToBottom.value = !isUserAtBottom.value
+
+    if (checkIsAtTop() && hasMoreMessages.value && !isLoadingMore.value && sessionStore.currentSessionId) {
+      savedScrollHeight.value = listRef.value?.scrollHeight ?? 0
+      void messageStore.loadMoreMessages(sessionStore.currentSessionId)
+    }
+  })
 }
 
 // 平滑滚动到底部
@@ -82,13 +183,11 @@ const scrollToBottom = (smooth = true) => {
   if (!listRef.value) return
 
   if (smooth && 'scrollBehavior' in document.documentElement.style) {
-    // 支持平滑滚动的浏览器
     listRef.value.scrollTo({
       top: listRef.value.scrollHeight,
       behavior: 'smooth'
     })
   } else {
-    // 回退到直接滚动
     listRef.value.scrollTop = listRef.value.scrollHeight
   }
 }
@@ -100,74 +199,109 @@ const handleScrollToBottom = () => {
   showScrollToBottom.value = false
 }
 
-// 监听会话变化，加载消息
+const updateViewportMetrics = () => {
+  viewportHeight.value = listRef.value?.clientHeight ?? 0
+  scrollTop.value = listRef.value?.scrollTop ?? 0
+}
+
+const bindMessageElement = (messageId: string, element: Element | null) => {
+  const existingObserver = resizeObservers.get(messageId)
+
+  if (!element || !(element instanceof HTMLElement)) {
+    existingObserver?.disconnect()
+    resizeObservers.delete(messageId)
+    return
+  }
+
+  existingObserver?.disconnect()
+
+  const observer = new ResizeObserver((entries) => {
+    const nextHeight = Math.ceil(entries[0]?.contentRect.height ?? 0)
+
+    if (nextHeight > 0 && messageHeights.value[messageId] !== nextHeight) {
+      messageHeights.value = {
+        ...messageHeights.value,
+        [messageId]: nextHeight
+      }
+    }
+  })
+
+  observer.observe(element)
+  resizeObservers.set(messageId, observer)
+}
+
 watch(() => sessionStore.currentSessionId, async (sessionId) => {
   if (sessionId) {
-    // 切换会话时重置滚动状态
     isUserAtBottom.value = true
     previousMessageCount.value = 0
+    messageHeights.value = {}
     await messageStore.loadMessages(sessionId)
     await nextTick()
-    scrollToBottom(false) // 切换会话时立即滚动，不平滑
+    updateViewportMetrics()
+    scrollToBottom(false)
   }
 }, { immediate: true })
 
-// 监听消息变化，智能自动滚动
-watch(currentMessages, async (messages) => {
+watch(currentMessageSignature, async () => {
+  const messages = currentMessages.value
   const currentCount = messages.length
   const hasNewMessage = currentCount > previousMessageCount.value
+  const hasStreamingMessage = messages.some(message => message.status === 'streaming')
 
-  // 加载更多历史消息时，恢复滚动位置
   if (isLoadingMore.value && savedScrollHeight.value > 0 && listRef.value) {
     await nextTick()
     const newScrollHeight = listRef.value.scrollHeight
-    // 保持用户视图位置不变
     listRef.value.scrollTop = newScrollHeight - savedScrollHeight.value
     savedScrollHeight.value = 0
     previousMessageCount.value = currentCount
+    updateViewportMetrics()
     return
   }
 
   previousMessageCount.value = currentCount
 
   await nextTick()
+  updateViewportMetrics()
 
-  // 只有在以下情况才自动滚动：
-  // 1. 用户正在查看底部（isUserAtBottom 为 true）
-  // 2. 有新消息到达
-  if (isUserAtBottom.value && hasNewMessage) {
-    scrollToBottom()
+  if (isUserAtBottom.value && (hasNewMessage || hasStreamingMessage)) {
+    scrollToBottom(hasNewMessage)
   }
-}, { deep: true })
+})
 
-// 监听流式输出，自动滚动
-watch(currentMessages, async (messages) => {
-  // 检查是否有正在流式输出的消息
-  const hasStreamingMessage = messages.some(m => m.status === 'streaming')
+watch(currentMessages, (messages) => {
+  const activeIds = new Set(messages.map(message => message.id))
+  const nextHeights: Record<string, number> = {}
 
-  await nextTick()
+  for (const [messageId, height] of Object.entries(messageHeights.value)) {
+    if (activeIds.has(messageId)) {
+      nextHeights[messageId] = height
+      continue
+    }
 
-  // 如果有流式输出且用户在底部，自动滚动
-  if (hasStreamingMessage && isUserAtBottom.value) {
-    scrollToBottom()
+    resizeObservers.get(messageId)?.disconnect()
+    resizeObservers.delete(messageId)
   }
-}, { deep: true })
 
-// 添加滚动事件监听
+  messageHeights.value = nextHeights
+})
+
 onMounted(() => {
   if (listRef.value) {
     listRef.value.addEventListener('scroll', handleScroll, { passive: true })
   }
+  window.addEventListener('resize', updateViewportMetrics, { passive: true })
+  updateViewportMetrics()
 })
 
-// 移除滚动事件监听
 onUnmounted(() => {
   if (listRef.value) {
     listRef.value.removeEventListener('scroll', handleScroll)
   }
+  window.removeEventListener('resize', updateViewportMetrics)
+  resizeObservers.forEach(observer => observer.disconnect())
+  resizeObservers.clear()
 })
 
-// 处理消息重试
 const handleRetry = (message: Message) => {
   emit('retry', message)
 }
@@ -206,17 +340,50 @@ const handleOpenEditTrace = (messageId: string, traceId: string) => {
       </div>
     </div>
 
-    <TransitionGroup name="message">
-      <MessageBubble
-        v-for="message in currentMessages"
-        :key="message.id"
-        :message="message"
-        :session-id="sessionStore.currentSessionId || undefined"
-        @retry="handleRetry"
-        @form-submit="handleFormSubmit"
-        @open-edit-trace="handleOpenEditTrace"
+    <template v-if="!shouldVirtualize">
+      <TransitionGroup name="message">
+        <MessageBubble
+          v-for="message in currentMessages"
+          :key="message.id"
+          :message="message"
+          :session-id="sessionStore.currentSessionId || undefined"
+          @retry="handleRetry"
+          @form-submit="handleFormSubmit"
+          @open-edit-trace="handleOpenEditTrace"
+        />
+      </TransitionGroup>
+    </template>
+
+    <div
+      v-else
+      class="message-list__virtual"
+      :style="{ minHeight: `${totalMessageHeight}px` }"
+    >
+      <div
+        class="message-list__virtual-spacer"
+        :style="{ height: `${virtualWindow.topSpacer}px` }"
       />
-    </TransitionGroup>
+
+      <div
+        v-for="item in visibleMessages"
+        :key="item.message.id"
+        :ref="(element) => bindMessageElement(item.message.id, element as Element | null)"
+        class="message-list__virtual-item"
+      >
+        <MessageBubble
+          :message="item.message"
+          :session-id="sessionStore.currentSessionId || undefined"
+          @retry="handleRetry"
+          @form-submit="handleFormSubmit"
+          @open-edit-trace="handleOpenEditTrace"
+        />
+      </div>
+
+      <div
+        class="message-list__virtual-spacer"
+        :style="{ height: `${virtualWindow.bottomSpacer}px` }"
+      />
+    </div>
 
     <!-- 空状态 -->
     <div
@@ -281,6 +448,20 @@ const handleOpenEditTrace = (messageId: string, traceId: string) => {
   gap: var(--spacing-3);
   min-height: 0;
   position: relative;
+}
+
+.message-list__virtual {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.message-list__virtual-item {
+  contain: layout style paint;
+}
+
+.message-list__virtual-spacer {
+  flex-shrink: 0;
 }
 
 /* 自定义滚动条样式 */

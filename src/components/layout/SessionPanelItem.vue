@@ -18,6 +18,7 @@ const props = defineProps<{
   active: boolean
   editingSessionId: string | null
   editingSessionName: string
+  searchQuery?: string
   actions: SessionActionItem[]
 }>()
 
@@ -40,6 +41,46 @@ const {
 } = useSessionView()
 
 const isEditing = computed(() => props.editingSessionId === props.session.id)
+
+interface HighlightSegment {
+  text: string
+  matched: boolean
+}
+
+function buildHighlightSegments(source: string, query?: string): HighlightSegment[] {
+  const normalizedQuery = query?.trim()
+  if (!source || !normalizedQuery) {
+    return [{ text: source, matched: false }]
+  }
+
+  const lowerSource = source.toLowerCase()
+  const lowerQuery = normalizedQuery.toLowerCase()
+  const segments: HighlightSegment[] = []
+  let cursor = 0
+
+  while (cursor < source.length) {
+    const index = lowerSource.indexOf(lowerQuery, cursor)
+    if (index === -1) {
+      segments.push({ text: source.slice(cursor), matched: false })
+      break
+    }
+
+    if (index > cursor) {
+      segments.push({ text: source.slice(cursor, index), matched: false })
+    }
+
+    segments.push({
+      text: source.slice(index, index + normalizedQuery.length),
+      matched: true
+    })
+    cursor = index + normalizedQuery.length
+  }
+
+  return segments.length > 0 ? segments : [{ text: source, matched: false }]
+}
+
+const sessionNameSegments = computed(() => buildHighlightSegments(props.session.name, props.searchQuery))
+const lastMessageSegments = computed(() => buildHighlightSegments(props.session.lastMessage ?? '', props.searchQuery))
 </script>
 
 <template>
@@ -72,7 +113,18 @@ const isEditing = computed(() => props.editingSessionId === props.session.id)
         @blur="emit('saveName', session)"
       >
       <template v-else>
-        <span class="session-item__name">{{ session.name }}</span>
+        <span class="session-item__name">
+          <template
+            v-for="(segment, index) in sessionNameSegments"
+            :key="`${session.id}-name-${index}`"
+          >
+            <mark
+              v-if="segment.matched"
+              class="session-item__highlight"
+            >{{ segment.text }}</mark>
+            <span v-else>{{ segment.text }}</span>
+          </template>
+        </span>
         <span
           v-if="session.status !== 'idle'"
           :class="['session-item__status-text', getStatusClass(session.status)]"
@@ -138,7 +190,16 @@ const isEditing = computed(() => props.editingSessionId === props.session.id)
       v-if="session.lastMessage"
       class="session-item__preview"
     >
-      {{ session.lastMessage }}
+      <template
+        v-for="(segment, index) in lastMessageSegments"
+        :key="`${session.id}-preview-${index}`"
+      >
+        <mark
+          v-if="segment.matched"
+          class="session-item__highlight"
+        >{{ segment.text }}</mark>
+        <span v-else>{{ segment.text }}</span>
+      </template>
     </div>
 
     <div class="session-item__actions">
@@ -355,6 +416,13 @@ const isEditing = computed(() => props.editingSessionId === props.session.id)
   background-color: var(--color-bg-tertiary);
   border-radius: var(--radius-sm);
   line-height: 1.5;
+}
+
+.session-item__highlight {
+  padding: 0 2px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-warning) 24%, transparent);
+  color: inherit;
 }
 
 .session-item__actions {

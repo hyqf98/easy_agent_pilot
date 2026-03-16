@@ -9,6 +9,8 @@ import { activateLspForFile } from '../services/lspService'
 import type { CompletionEntry, FileEditorOpenInput, MonacoLanguageId } from '../types'
 
 const UNSAVED_CHANGES_CONFIRM = '当前文件有未保存修改，确认放弃这些修改吗？'
+const LARGE_FILE_SIZE_BYTES = 512 * 1024
+const LARGE_FILE_LINE_COUNT = 8000
 
 export const useFileEditorStore = defineStore('fileEditor', () => {
   const uiStore = useUIStore()
@@ -23,6 +25,8 @@ export const useFileEditorStore = defineStore('fileEditor', () => {
   const languageId = ref<MonacoLanguageId>('plaintext')
   const strategyId = ref('plaintext')
   const completionEntries = ref<CompletionEntry[]>([])
+  const fileSizeBytes = ref(0)
+  const lineCount = ref(0)
 
   const isLoading = ref(false)
   const isSaving = ref(false)
@@ -36,6 +40,9 @@ export const useFileEditorStore = defineStore('fileEditor', () => {
 
   const isDirty = computed(() => content.value !== originalContent.value)
   const hasActiveFile = computed(() => Boolean(activeFilePath.value))
+  const isLargeFile = computed(() =>
+    fileSizeBytes.value >= LARGE_FILE_SIZE_BYTES || lineCount.value >= LARGE_FILE_LINE_COUNT
+  )
 
   const canSwitchFile = (): boolean => {
     if (!isDirty.value) {
@@ -54,6 +61,8 @@ export const useFileEditorStore = defineStore('fileEditor', () => {
     languageId.value = 'plaintext'
     strategyId.value = 'plaintext'
     completionEntries.value = []
+    fileSizeBytes.value = 0
+    lineCount.value = 0
     isLoading.value = false
     isSaving.value = false
     loadError.value = null
@@ -119,17 +128,20 @@ export const useFileEditorStore = defineStore('fileEditor', () => {
     loadError.value = null
 
     try {
-      const rawContent = await readProjectFile(input.projectPath, input.filePath)
+      const filePayload = await readProjectFile(input.projectPath, input.filePath)
       const languageState = await resolveLanguageState(input.filePath)
 
       activeProjectId.value = input.projectId
       activeProjectPath.value = input.projectPath
       activeFilePath.value = input.filePath
-      content.value = rawContent
-      originalContent.value = rawContent
+      content.value = filePayload.content
+      originalContent.value = filePayload.content
       strategyId.value = languageState.strategyId
       languageId.value = languageState.languageId
       completionEntries.value = languageState.completionEntries
+      // 大文件场景把文件规模暴露给编辑器组件，便于主动关闭高成本能力。
+      fileSizeBytes.value = filePayload.sizeBytes
+      lineCount.value = filePayload.lineCount
 
       uiStore.setMainContentMode('fileEditor')
       return true
@@ -204,6 +216,9 @@ export const useFileEditorStore = defineStore('fileEditor', () => {
     fileName,
     isDirty,
     hasActiveFile,
+    fileSizeBytes,
+    lineCount,
+    isLargeFile,
     openFile,
     updateContent,
     saveFile,

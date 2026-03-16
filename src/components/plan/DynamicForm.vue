@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, type Component } from 'vue'
+import { ref, computed, watch, type Component } from 'vue'
 import type { DynamicFormSchema, FieldType } from '@/types/plan'
 import { formEngine } from '@/services/plan'
 import {
@@ -17,12 +17,28 @@ import {
 const props = defineProps<{
   schema: DynamicFormSchema
   initialValues?: Record<string, any>
+  disabled?: boolean
+  variant?: 'active' | 'submitted'
 }>()
 
 const emit = defineEmits<{
   (e: 'submit', values: Record<string, any>): void
   (e: 'cancel'): void
 }>()
+
+const fieldComponentMap: Record<FieldType, Component | null> = {
+  text: TextField,
+  textarea: TextareaField,
+  select: SelectField,
+  multiselect: MultiselectField,
+  number: NumberField,
+  checkbox: CheckboxField,
+  radio: RadioField,
+  date: DateField,
+  file: TextField,
+  code: TextareaField,
+  slider: SliderField
+}
 
 // 表单数据
 const formValues = ref<Record<string, any>>({})
@@ -86,27 +102,19 @@ const visibleFields = computed(() => {
   })
 })
 
+const visibleFieldNames = computed(() => new Set(visibleFields.value.map(field => field.name)))
+
 // 获取字段组件
 function getFieldComponent(type: FieldType) {
-  const componentMap: Record<FieldType, Component | null> = {
-    text: TextField,
-    textarea: TextareaField,
-    select: SelectField,
-    multiselect: MultiselectField,
-    number: NumberField,
-    checkbox: CheckboxField,
-    radio: RadioField,
-    date: DateField,
-    file: TextField, // 暂时用文本输入
-    code: TextareaField, // 暂时用文本域
-    slider: SliderField
-  }
-
-  return componentMap[type] ?? null
+  return fieldComponentMap[type] ?? null
 }
 
 // 更新字段值
 function updateFieldValue(fieldName: string, value: any) {
+  if (props.disabled) {
+    return
+  }
+
   formValues.value[fieldName] = value
 
   // 清除该字段的错误
@@ -129,6 +137,10 @@ function validateForm(): boolean {
 
 // 提交表单
 function handleSubmit() {
+  if (props.disabled) {
+    return
+  }
+
   isSubmitted.value = true
 
   if (validateForm()) {
@@ -158,17 +170,30 @@ defineExpose({
   }
 })
 
-onMounted(() => {
-  initFormValues()
+watch(visibleFieldNames, nextVisibleFieldNames => {
+  for (const key of Object.keys(formErrors.value)) {
+    if (!nextVisibleFieldNames.has(key)) {
+      delete formErrors.value[key]
+    }
+  }
 })
 </script>
 
 <template>
-  <div class="dynamic-form dynamic-form--compact">
+  <div
+    class="dynamic-form dynamic-form--compact"
+    :class="`dynamic-form--${props.variant || 'active'}`"
+  >
     <div class="form-header">
       <h3 class="form-title">
         {{ schema.title }}
       </h3>
+      <span
+        v-if="props.variant === 'submitted'"
+        class="form-state-badge"
+      >
+        已提交
+      </span>
       <p
         v-if="schema.description"
         class="form-description"
@@ -190,6 +215,7 @@ onMounted(() => {
           :field="field"
           :model-value="formValues[field.name]"
           :error="getFieldError(field.name)"
+          :disabled="disabled"
           @update:model-value="updateFieldValue(field.name, $event)"
         />
       </template>
@@ -199,6 +225,7 @@ onMounted(() => {
       <button
         type="button"
         class="btn btn-secondary"
+        :disabled="disabled"
         @click="handleCancel"
       >
         取消
@@ -206,6 +233,7 @@ onMounted(() => {
       <button
         type="button"
         class="btn btn-primary"
+        :disabled="disabled"
         @click="handleSubmit"
       >
         {{ schema.submitText || '提交' }}
@@ -230,50 +258,87 @@ onMounted(() => {
   border-radius: 0.95rem;
   border: 1px solid var(--form-border);
   overflow: hidden;
+  width: 100%;
+  max-width: none;
   box-shadow: 0 10px 26px rgba(15, 23, 42, 0.05);
 }
 
+.dynamic-form--submitted {
+  --form-accent: #64748b;
+  --form-accent-alt: #94a3b8;
+  --form-border: rgba(148, 163, 184, 0.22);
+  --form-input-bg: rgba(248, 250, 252, 0.92);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.96));
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04);
+}
+
 .form-header {
-  padding: 0.68rem 0.92rem 0.62rem;
+  padding: 0.56rem 0.78rem 0.52rem;
   border-bottom: 1px solid color-mix(in srgb, var(--form-accent) 14%, #dbe3ee);
   background: linear-gradient(120deg, rgba(239, 246, 255, 0.92), rgba(236, 254, 255, 0.72));
 }
 
+.dynamic-form--submitted .form-header {
+  background: linear-gradient(120deg, rgba(248, 250, 252, 0.96), rgba(241, 245, 249, 0.92));
+}
+
 .form-title {
   margin: 0 0 0.2rem;
-  font-size: 0.84rem;
+  font-size: 0.78rem;
   font-weight: 600;
   color: #0f172a;
   letter-spacing: 0.01em;
 }
 
+.form-state-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: 0.24rem;
+  padding: 0.14rem 0.42rem;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.06);
+  color: #475569;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
 .form-description {
   margin: 0;
-  font-size: 0.7rem;
+  font-size: 0.66rem;
   color: var(--form-muted);
 }
 
 .form-body {
-  padding: 0.72rem 0.92rem 0.82rem;
-  max-height: 48vh;
+  padding: 0.62rem 0.78rem 0.72rem;
+  max-height: 42vh;
   overflow-y: auto;
   display: grid;
   gap: 0.25rem;
+}
+
+.dynamic-form--submitted .form-body {
+  max-height: 34vh;
 }
 
 .form-footer {
   display: flex;
   justify-content: flex-end;
   gap: 0.45rem;
-  padding: 0.6rem 0.92rem;
+  padding: 0.5rem 0.78rem;
   border-top: 1px solid color-mix(in srgb, var(--form-accent) 10%, #dbe3ee);
   background: linear-gradient(180deg, #fbfdff, #f3f8fd);
 }
 
+.dynamic-form--submitted .form-footer {
+  background: linear-gradient(180deg, #fbfcfe, #f7f9fc);
+}
+
 .btn {
-  padding: 0.34rem 0.76rem;
+  padding: 0.3rem 0.66rem;
   border-radius: 0.7rem;
-  font-size: 0.76rem;
+  font-size: 0.72rem;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.16s ease;
@@ -302,12 +367,12 @@ onMounted(() => {
 }
 
 .dynamic-form :deep(.form-field) {
-  margin-bottom: 0.52rem;
+  margin-bottom: 0.42rem;
 }
 
 .dynamic-form :deep(.field-label) {
-  margin-bottom: 0.26rem;
-  font-size: 0.72rem;
+  margin-bottom: 0.22rem;
+  font-size: 0.68rem;
   font-weight: 600;
   letter-spacing: 0.01em;
   color: var(--color-text-primary, #334155);
@@ -324,9 +389,9 @@ onMounted(() => {
   border: 1px solid color-mix(in srgb, var(--form-accent) 20%, #ccd7e5);
   background-color: var(--form-input-bg);
   color: var(--color-text-primary, #0f172a);
-  border-radius: 0.7rem;
-  padding: 0.42rem 0.62rem;
-  font-size: 0.78rem;
+  border-radius: 0.64rem;
+  padding: 0.36rem 0.56rem;
+  font-size: 0.74rem;
   line-height: 1.35;
   transition: border-color 0.16s ease, box-shadow 0.16s ease, background-color 0.16s ease;
 }
@@ -338,7 +403,7 @@ onMounted(() => {
 }
 
 .dynamic-form :deep(.textarea) {
-  min-height: 4.4rem;
+  min-height: 3.8rem;
 }
 
 .dynamic-form :deep(.select) {
@@ -375,14 +440,14 @@ onMounted(() => {
 .dynamic-form :deep(.options-grid) {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.32rem;
+  gap: 0.26rem;
 }
 
 .dynamic-form :deep(.option-label) {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  padding: 0.3rem 0.56rem;
+  padding: 0.24rem 0.48rem;
   border: 1px solid color-mix(in srgb, var(--form-accent) 24%, #cdd7e5);
   border-radius: 999px;
   background: linear-gradient(180deg, var(--color-surface, #ffffff), var(--color-bg-secondary, #f8fbff));
@@ -428,7 +493,7 @@ onMounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.32rem 0.56rem;
+  padding: 0.26rem 0.48rem;
   border-radius: 0.7rem;
   border: 1px solid color-mix(in srgb, var(--form-accent) 18%, #d5deea);
   background: linear-gradient(180deg, #ffffff, #f8fbff);
@@ -449,7 +514,7 @@ onMounted(() => {
 
 .dynamic-form :deep(.error-message) {
   margin-top: 0.2rem;
-  font-size: 0.7rem;
+  font-size: 0.66rem;
   color: #dc2626;
 }
 </style>

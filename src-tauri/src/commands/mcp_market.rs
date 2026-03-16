@@ -1,123 +1,29 @@
 use anyhow::Result;
-use reqwest::Url;
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use tauri::AppHandle;
 
-use crate::commands::mcp_shared::{
-    ensure_mcp_servers_object, read_json_config_or_default, write_json_config_pretty,
+use crate::commands::cli_config::{
+    get_cli_config_paths_internal, read_cli_config, write_cli_config, McpServerConfig,
+};
+use crate::commands::mcpmarket_source::{
+    get_marketplace_source_strategy, MarketListResponse, MarketplaceSourceQuery, McpSourceDetail,
+    McpSourceListItem,
 };
 
-const MCP_MARKET_BASE_URL: &str = "https://modelscope.cn/api/v1/mcp";
-
-/// MCP market item
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct McpMarketItem {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub author: String,
-    pub downloads: u64,
-    pub rating: f64,
-    pub category: String,
-    pub repository_url: Option<String>,
-    pub install_command: Option<String>,
-    pub tags: Vec<String>,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-/// MCP version history entry
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct McpVersion {
-    pub version: String,
-    pub release_notes: String,
-    pub released_at: String,
-}
-
-/// MCP market detail (full information)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct McpMarketDetail {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub full_description: String,
-    pub author: String,
-    pub author_url: Option<String>,
-    pub license: String,
-    pub homepage_url: Option<String>,
-    pub repository_url: Option<String>,
-    pub downloads: u64,
-    pub rating: f64,
-    pub category: String,
-    pub install_command: Option<String>,
-    pub config_example: String,
-    pub tags: Vec<String>,
-    pub version_history: Vec<McpVersion>,
-    pub requirements: Vec<String>,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-/// MCP market list response
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct McpMarketListResponse {
-    pub items: Vec<McpMarketItem>,
-    pub total: u64,
-    pub page: u32,
-    pub page_size: u32,
-    pub has_more: bool,
-}
-
-/// MCP market query parameters
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct McpMarketQuery {
-    pub page: u32,
-    pub page_size: u32,
-    pub category: Option<String>,
-    pub search: Option<String>,
-}
-
-impl Default for McpMarketQuery {
-    fn default() -> Self {
-        Self {
-            page: 1,
-            page_size: 20,
-            category: None,
-            search: None,
-        }
-    }
-}
-
-fn build_mcp_market_url(query: &McpMarketQuery) -> Result<Url, String> {
-    let mut url =
-        Url::parse(MCP_MARKET_BASE_URL).map_err(|e| format!("Invalid MCP market URL: {}", e))?;
-
-    {
-        let mut pairs = url.query_pairs_mut();
-        pairs.append_pair("page", &query.page.to_string());
-        pairs.append_pair("page_size", &query.page_size.to_string());
-
-        if let Some(category) = &query.category {
-            pairs.append_pair("category", category);
-        }
-
-        if let Some(search) = &query.search {
-            pairs.append_pair("search", search);
-        }
-    }
-
-    Ok(url)
-}
+pub type McpMarketItem = McpSourceListItem;
+pub type McpMarketDetail = McpSourceDetail;
+pub type McpMarketListResponse = MarketListResponse<McpMarketItem>;
+pub type McpMarketQuery = MarketplaceSourceQuery;
 
 fn sanitize_mcp_key(name: &str) -> String {
     let sanitized = name
+        .trim()
         .replace(' ', "-")
-        .replace(|c: char| !c.is_alphanumeric() && c != '-', "")
+        .replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "")
         .to_lowercase();
 
     if sanitized.is_empty() {
@@ -127,95 +33,101 @@ fn sanitize_mcp_key(name: &str) -> String {
     }
 }
 
-fn create_settings_backup(
-    settings_path: &PathBuf,
-    error_prefix: &str,
-) -> Result<Option<String>, String> {
-    if !settings_path.exists() {
+fn build_backup_path(config_path: &Path) -> PathBuf {
+    match config_path.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) if !ext.is_empty() => config_path.with_extension(format!("{}.backup", ext)),
+        _ => config_path.with_extension("backup"),
+    }
+}
+
+fn create_config_backup(config_path: &Path) -> Result<Option<String>, String> {
+    if !config_path.exists() {
         return Ok(None);
     }
 
-    let backup = settings_path.with_extension("json.backup");
-    fs::copy(settings_path, &backup).map_err(|e| format!("{error_prefix}: {}", e))?;
-    Ok(Some(backup.to_string_lossy().to_string()))
+    let backup_path = build_backup_path(config_path);
+    fs::copy(config_path, &backup_path).map_err(|e| format!("创建备份失败: {}", e))?;
+    Ok(Some(backup_path.to_string_lossy().to_string()))
 }
 
-fn load_settings_config(settings_path: &PathBuf) -> Result<serde_json::Value, String> {
-    read_json_config_or_default(settings_path, serde_json::json!({}))
-}
-
-fn ensure_settings_parent_dir(settings_path: &PathBuf) -> Result<(), String> {
-    if let Some(parent) = settings_path.parent() {
-        if !parent.exists() {
-            fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {}", e))?;
+fn resolve_cli_identifier_from_config_path(config_path: &str) -> Result<String, String> {
+    for cli in ["claude", "codex"] {
+        let paths = get_cli_config_paths_internal(cli)?;
+        if paths.config_file == config_path {
+            return Ok(cli.to_string());
         }
     }
-    Ok(())
+
+    Err(format!("Unsupported MCP config path: {}", config_path))
 }
 
 fn build_installed_mcp_config(
     command: String,
     args: Vec<String>,
     env: HashMap<String, String>,
-) -> serde_json::Value {
-    let mut config = serde_json::Map::new();
-    config.insert("command".to_string(), serde_json::json!(command));
-    if !args.is_empty() {
-        config.insert("args".to_string(), serde_json::json!(args));
-    }
-    if !env.is_empty() {
-        config.insert("env".to_string(), serde_json::json!(env));
-    }
-    serde_json::Value::Object(config)
-}
-
-/// Fetch MCP market items from ModelScope API
-#[tauri::command]
-pub async fn fetch_mcp_market(query: McpMarketQuery) -> Result<McpMarketListResponse, String> {
-    let client = crate::commands::market_source_support::build_market_http_client()?;
-    let url = build_mcp_market_url(&query)?;
-
-    match client.get(url).send().await {
-        Ok(response) => {
-            if response.status().is_success() {
-                match response.json::<McpMarketListResponse>().await {
-                    Ok(data) => Ok(data),
-                    Err(e) => Err(format!("Failed to parse MCP market response: {}", e)),
-                }
-            } else {
-                Err(format!(
-                    "MCP market request failed with status {}",
-                    response.status()
-                ))
-            }
-        }
-        Err(e) => Err(format!("Failed to fetch MCP market: {}", e)),
+) -> McpServerConfig {
+    McpServerConfig {
+        command: Some(command),
+        args: (!args.is_empty()).then_some(args),
+        env: (!env.is_empty()).then_some(env),
+        url: None,
+        headers: None,
+        disabled: false,
     }
 }
 
-/// Fetch MCP market detail by ID
-#[tauri::command]
-pub async fn fetch_mcp_market_detail(mcp_id: String) -> Result<McpMarketDetail, String> {
-    let client = crate::commands::market_source_support::build_market_http_client()?;
-
-    let url = format!("{}/{}", MCP_MARKET_BASE_URL, mcp_id);
-
-    match client.get(&url).send().await {
-        Ok(response) => {
-            if response.status().is_success() {
-                match response.json::<McpMarketDetail>().await {
-                    Ok(data) => Ok(data),
-                    Err(e) => Err(format!("Failed to parse MCP detail response: {}", e)),
+fn perform_rollback(settings_path: &Path, backup_path: &Option<String>) -> (bool, String) {
+    if let Some(backup) = backup_path {
+        let backup = PathBuf::from(backup);
+        if backup.exists() {
+            match fs::copy(&backup, settings_path) {
+                Ok(_) => {
+                    let _ = fs::remove_file(&backup);
+                    (true, "已恢复备份文件".to_string())
                 }
-            } else {
-                Err(format!(
-                    "MCP detail request failed with status {}",
-                    response.status()
-                ))
+                Err(e) => (false, format!("恢复备份失败: {}", e)),
             }
+        } else {
+            (false, "备份文件不存在".to_string())
         }
-        Err(e) => Err(format!("Failed to fetch MCP detail: {}", e)),
+    } else if settings_path.exists() {
+        match fs::remove_file(settings_path) {
+            Ok(_) => (true, "已删除新创建的配置文件".to_string()),
+            Err(e) => (false, format!("删除配置文件失败: {}", e)),
+        }
+    } else {
+        (true, "无需回滚（文件不存在）".to_string())
     }
+}
+
+fn delete_installed_mcp_test_result(config_path: &str, mcp_name: &str) {
+    if let Ok(conn) = get_db_connection() {
+        let _ = conn.execute(
+            "DELETE FROM installed_mcp_test_results WHERE config_path = ?1 AND mcp_name = ?2",
+            rusqlite::params![config_path, mcp_name],
+        );
+    }
+}
+
+/// Fetch MCP market items from the active marketplace source.
+#[tauri::command]
+pub async fn fetch_mcp_market(
+    app: AppHandle,
+    query: McpMarketQuery,
+) -> Result<McpMarketListResponse, String> {
+    let strategy = get_marketplace_source_strategy(query.source_market.as_deref())?;
+    strategy.fetch_mcp_list(&app, &query).await
+}
+
+/// Fetch MCP market detail by slug.
+#[tauri::command]
+pub async fn fetch_mcp_market_detail(
+    app: AppHandle,
+    mcp_id: String,
+    source_market: Option<String>,
+) -> Result<McpMarketDetail, String> {
+    let strategy = get_marketplace_source_strategy(source_market.as_deref())?;
+    strategy.fetch_mcp_detail(&app, &mcp_id).await
 }
 
 /// MCP installation input
@@ -224,7 +136,7 @@ pub struct McpInstallInput {
     pub mcp_id: String,
     pub mcp_name: String,
     pub cli_path: String,
-    pub scope: String, // "global" or "project"
+    pub scope: String,
     pub project_path: Option<String>,
     pub command: String,
     pub args: Vec<String>,
@@ -238,147 +150,62 @@ pub struct McpInstallResult {
     pub message: String,
     pub config_path: Option<String>,
     pub backup_path: Option<String>,
-    /// Whether a rollback was performed due to installation failure
     pub rollback_performed: bool,
-    /// Message describing the rollback result (if any)
     pub rollback_message: Option<String>,
 }
 
-/// Get CLI settings.json path
-fn get_cli_settings_path(
-    cli_path: &str,
-    scope: &str,
-    project_path: Option<&str>,
-) -> Result<PathBuf, String> {
-    let cli = PathBuf::from(cli_path);
-    let cli_name = cli
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "claude".to_string());
-
-    let settings_path = if scope == "project" {
-        // Project-level settings
-        if let Some(proj_path) = project_path {
-            PathBuf::from(proj_path)
-                .join(".claude")
-                .join("settings.json")
-        } else {
-            return Err("Project path is required for project-level installation".to_string());
-        }
-    } else {
-        // Global settings
-        let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
-
-        match cli_name.as_str() {
-            "claude" => home.join(".claude").join("settings.json"),
-            "codex" => home.join(".codex").join("settings.json"),
-            _ => return Err(format!("Unknown CLI: {}", cli_name)),
-        }
-    };
-
-    Ok(settings_path)
-}
-
-/// Internal helper function to perform rollback
-fn perform_rollback(settings_path: &PathBuf, backup_path: &Option<String>) -> (bool, String) {
-    if let Some(backup) = backup_path {
-        let backup = PathBuf::from(backup);
-        if backup.exists() {
-            // Restore from backup
-            match fs::copy(&backup, settings_path) {
-                Ok(_) => {
-                    // Clean up backup file
-                    let _ = fs::remove_file(&backup);
-                    (true, "已恢复备份文件".to_string())
-                }
-                Err(e) => (false, format!("恢复备份失败: {}", e)),
-            }
-        } else {
-            (false, "备份文件不存在".to_string())
-        }
-    } else {
-        // No backup means file was newly created, so delete it
-        if settings_path.exists() {
-            match fs::remove_file(settings_path) {
-                Ok(_) => (true, "已删除新创建的配置文件".to_string()),
-                Err(e) => (false, format!("删除配置文件失败: {}", e)),
-            }
-        } else {
-            (true, "无需回滚（文件不存在）".to_string())
-        }
-    }
-}
-
-fn delete_installed_mcp_test_result(config_path: &str, mcp_name: &str) {
-    if let Ok(conn) = get_db_connection() {
-        let _ = conn.execute(
-            "DELETE FROM installed_mcp_test_results WHERE config_path = ?1 AND mcp_name = ?2",
-            rusqlite::params![config_path, mcp_name],
-        );
-    }
-}
-
-/// Install MCP to CLI settings.json
+/// Install MCP to Claude/Codex CLI config.
 #[tauri::command]
 pub async fn install_mcp_to_cli(input: McpInstallInput) -> Result<McpInstallResult, String> {
-    // Get the settings file path
-    let settings_path =
-        get_cli_settings_path(&input.cli_path, &input.scope, input.project_path.as_deref())?;
-    ensure_settings_parent_dir(&settings_path)?;
+    if input.scope == "project" {
+        return Err("当前版本的市场安装仅支持全局 MCP 配置".to_string());
+    }
 
-    // Read existing settings or create new
-    let mut settings = load_settings_config(&settings_path)?;
+    let paths = get_cli_config_paths_internal(&input.cli_path)?;
+    let config_path = PathBuf::from(&paths.config_file);
+    let backup_path = create_config_backup(&config_path)?;
 
-    // Create backup
-    let backup_path = create_settings_backup(&settings_path, "创建备份失败")?;
+    let mut config = read_cli_config(input.cli_path.clone())?;
+    if config.mcpServers.is_none() {
+        config.mcpServers = Some(HashMap::new());
+    }
 
-    // Build MCP server config
-    let mcp_config =
-        build_installed_mcp_config(input.command.clone(), input.args.clone(), input.env.clone());
+    if let Some(ref mut servers) = config.mcpServers {
+        servers.insert(
+            sanitize_mcp_key(&input.mcp_name),
+            build_installed_mcp_config(input.command.clone(), input.args.clone(), input.env.clone()),
+        );
+    }
 
-    let write_result = {
-        let mcp_servers = ensure_mcp_servers_object(&mut settings)?;
-        mcp_servers.insert(sanitize_mcp_key(&input.mcp_name), mcp_config);
-        write_json_config_pretty(&settings_path, &settings)
-    };
-
-    if let Err(e) = write_result {
-        let (rollback_success, rollback_msg) = perform_rollback(&settings_path, &backup_path);
+    if let Err(error) = write_cli_config(input.cli_path.clone(), config) {
+        let (rollback_success, rollback_message) = perform_rollback(&config_path, &backup_path);
         return Ok(McpInstallResult {
             success: false,
-            message: e,
-            config_path: Some(settings_path.to_string_lossy().to_string()),
+            message: error,
+            config_path: Some(config_path.to_string_lossy().to_string()),
             backup_path: None,
             rollback_performed: rollback_success,
-            rollback_message: Some(rollback_msg),
+            rollback_message: Some(rollback_message),
         });
     }
 
-    // Save install history to database for manual rollback
-    let config_path_str = settings_path.to_string_lossy().to_string();
-    let backup_path_str = backup_path.clone();
-    if let Err(e) = save_install_history(
+    let config_path_str = config_path.to_string_lossy().to_string();
+    if let Err(error) = save_install_history(
         input.mcp_id.clone(),
-        input.mcp_name.clone(),
+        sanitize_mcp_key(&input.mcp_name),
         input.cli_path.clone(),
         config_path_str.clone(),
-        backup_path_str,
+        backup_path.clone(),
         input.scope.clone(),
     ) {
-        // Log error but don't fail the installation
-        println!("Warning: Failed to save install history: {}", e);
+        eprintln!("Warning: failed to save MCP install history: {}", error);
     }
-
-    // Note: We keep the backup file for potential manual rollback
-    // The backup will be cleaned up when:
-    // 1. User manually rolls back the installation
-    // 2. A new installation overwrites it
 
     Ok(McpInstallResult {
         success: true,
-        message: format!("成功安装 {} 到 {}", input.mcp_name, input.cli_path),
+        message: format!("成功安装 {} 到 {}", input.mcp_name, paths.cli_type),
         config_path: Some(config_path_str),
-        backup_path: backup_path,
+        backup_path,
         rollback_performed: false,
         rollback_message: None,
     })
@@ -409,7 +236,6 @@ pub async fn rollback_mcp_install(
         }
     }
 
-    // If no backup, just delete the settings file if it exists
     if settings_path.exists() {
         fs::remove_file(&settings_path).map_err(|e| format!("删除配置文件失败: {}", e))?;
     }
@@ -443,7 +269,6 @@ pub struct InstalledMcp {
     pub tool_count: Option<i32>,
 }
 
-/// CLI config info for scanning
 struct CliConfigInfo {
     cli_name: String,
     cli_path: String,
@@ -451,117 +276,56 @@ struct CliConfigInfo {
     scope: String,
 }
 
-/// Get all CLI config files to scan for installed MCPs
 fn get_all_cli_configs() -> Vec<CliConfigInfo> {
-    let mut configs = Vec::new();
-    let home = match dirs::home_dir() {
-        Some(h) => h,
-        None => return configs,
-    };
-
-    // Standard CLI config paths
-    let cli_configs = vec![
-        (
-            "claude",
-            "claude",
-            home.join(".claude").join("settings.json"),
-            "global",
-        ),
-        (
-            "codex",
-            "codex",
-            home.join(".codex").join("settings.json"),
-            "global",
-        ),
-    ];
-
-    for (cli_name, cli_path, config_path, scope) in cli_configs {
-        if config_path.exists() {
-            configs.push(CliConfigInfo {
-                cli_name: cli_name.to_string(),
-                cli_path: cli_path.to_string(),
+    ["claude", "codex"]
+        .iter()
+        .filter_map(|cli| {
+            let paths = get_cli_config_paths_internal(cli).ok()?;
+            let config_path = PathBuf::from(&paths.config_file);
+            config_path.exists().then_some(CliConfigInfo {
+                cli_name: (*cli).to_string(),
+                cli_path: (*cli).to_string(),
                 config_path,
-                scope: scope.to_string(),
-            });
-        }
-    }
-
-    configs
+                scope: "global".to_string(),
+            })
+        })
+        .collect()
 }
 
-/// List all installed MCPs from all CLI config files
+/// List all installed MCPs from Claude/Codex CLI config files.
 #[tauri::command]
 pub fn list_installed_mcps() -> Result<Vec<InstalledMcp>, String> {
-    let configs = get_all_cli_configs();
     let mut installed_mcps = Vec::new();
 
-    for config_info in configs {
-        let content = match fs::read_to_string(&config_info.config_path) {
-            Ok(c) => c,
-            Err(_) => continue,
+    for config_info in get_all_cli_configs() {
+        let cli_config = match read_cli_config(config_info.cli_path.clone()) {
+            Ok(config) => config,
+            Err(error) => {
+                eprintln!(
+                    "Failed to read MCP config for {}: {}",
+                    config_info.cli_name, error
+                );
+                continue;
+            }
         };
 
-        let settings: serde_json::Value = match serde_json::from_str(&content) {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
+        let installed_at = fs::metadata(&config_info.config_path)
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .map(|time| {
+                let datetime: chrono::DateTime<chrono::Utc> = time.into();
+                datetime.to_rfc3339()
+            });
 
-        let mcp_servers = match settings.get("mcpServers").and_then(|v| v.as_object()) {
-            Some(obj) => obj,
-            None => continue,
-        };
-
-        // Get file metadata for installed_at
-        let metadata = fs::metadata(&config_info.config_path).ok();
-        let installed_at = metadata.and_then(|m| {
-            m.modified().ok().and_then(|t| {
-                let datetime: chrono::DateTime<chrono::Utc> = t.into();
-                Some(datetime.to_rfc3339())
-            })
-        });
-
-        for (name, config) in mcp_servers {
-            let config_obj = match config.as_object() {
-                Some(obj) => obj,
-                None => continue,
-            };
-
-            let command = config_obj
-                .get("command")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-
-            let args: Vec<String> = config_obj
-                .get("args")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            let env = config_obj
-                .get("env")
-                .and_then(|v| v.as_object())
-                .map(|obj| {
-                    obj.iter()
-                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            let disabled = config_obj
-                .get("disabled")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-
-            // Try to extract version from args (e.g., npx -y @scope/package@1.0.0)
+        for (name, config) in cli_config.mcpServers.unwrap_or_default() {
+            let command = config.command.unwrap_or_default();
+            let args = config.args.unwrap_or_default();
+            let env = config.env.unwrap_or_default();
+            let disabled = config.disabled;
             let current_version = extract_version_from_args(&args);
 
             installed_mcps.push(InstalledMcp {
-                name: name.clone(),
+                name,
                 command,
                 args,
                 env,
@@ -582,11 +346,9 @@ pub fn list_installed_mcps() -> Result<Vec<InstalledMcp>, String> {
     Ok(installed_mcps)
 }
 
-/// Extract version from npm package args
 fn extract_version_from_args(args: &[String]) -> Option<String> {
     for arg in args {
         if arg.starts_with('@') && arg.contains('/') {
-            // Format: @scope/package or @scope/package@version
             if let Some(at_pos) = arg.rfind('@') {
                 if at_pos > 0 {
                     let version = &arg[at_pos + 1..];
@@ -597,49 +359,41 @@ fn extract_version_from_args(args: &[String]) -> Option<String> {
             }
         }
     }
+
     None
 }
 
-/// Toggle installed MCP enabled/disabled status
+/// Toggle installed MCP enabled/disabled status.
 #[tauri::command]
 pub fn toggle_installed_mcp(
     config_path: String,
     mcp_name: String,
     disabled: bool,
 ) -> Result<(), String> {
-    let settings_path = PathBuf::from(&config_path);
-    let mut settings = load_settings_config(&settings_path)?;
-    let mcp_servers = ensure_mcp_servers_object(&mut settings)?;
+    let cli_path = resolve_cli_identifier_from_config_path(&config_path)?;
+    let mut config = read_cli_config(cli_path.clone())?;
 
-    if let Some(mcp_config) = mcp_servers.get_mut(&mcp_name) {
-        if let Some(config_obj) = mcp_config.as_object_mut() {
-            if disabled {
-                config_obj.insert("disabled".to_string(), serde_json::json!(true));
-            } else {
-                config_obj.remove("disabled");
-            }
+    if let Some(ref mut servers) = config.mcpServers {
+        if let Some(server_config) = servers.get_mut(&mcp_name) {
+            server_config.disabled = disabled;
         }
     }
 
-    write_json_config_pretty(&settings_path, &settings)
-        .map_err(|e| format!("Failed to persist settings file: {}", e))?;
-
-    Ok(())
+    write_cli_config(cli_path, config)
 }
 
-/// Uninstall MCP from CLI config file
+/// Uninstall MCP from CLI config file.
 #[tauri::command]
 pub fn uninstall_mcp(config_path: String, mcp_name: String) -> Result<McpInstallResult, String> {
-    let settings_path = PathBuf::from(&config_path);
-    let mut settings = load_settings_config(&settings_path)?;
+    let cli_path = resolve_cli_identifier_from_config_path(&config_path)?;
+    let mut config = read_cli_config(cli_path.clone())?;
+    let backup_path = create_config_backup(Path::new(&config_path))?;
 
-    // Create backup
-    let backup_path = create_settings_backup(&settings_path, "Failed to create backup")?;
-    let mcp_servers = ensure_mcp_servers_object(&mut settings)?;
-    mcp_servers.remove(&mcp_name);
-    write_json_config_pretty(&settings_path, &settings)
-        .map_err(|e| format!("Failed to write settings file: {}", e))?;
+    if let Some(ref mut servers) = config.mcpServers {
+        servers.remove(&mcp_name);
+    }
 
+    write_cli_config(cli_path, config)?;
     delete_installed_mcp_test_result(&config_path, &mcp_name);
 
     Ok(McpInstallResult {
@@ -662,50 +416,30 @@ pub struct McpUpdateCheckResult {
     pub update_notes: Option<String>,
 }
 
-/// Check for MCP updates by comparing with market versions
+/// Check for MCP updates.
 #[tauri::command]
 pub async fn check_mcp_updates(
     mcp_names: Vec<String>,
 ) -> Result<Vec<McpUpdateCheckResult>, String> {
-    let mut results = Vec::new();
-
-    for mcp_name in mcp_names {
-        // Try to fetch market detail to get latest version
-        let market_detail =
-            fetch_mcp_market_detail(format!("mcp-{}", sanitize_mcp_key(&mcp_name))).await;
-
-        let (latest_version, update_notes) = match market_detail {
-            Ok(detail) => {
-                let latest = detail.version_history.first().map(|v| v.version.clone());
-                let notes = detail
-                    .version_history
-                    .first()
-                    .map(|v| v.release_notes.clone());
-                (latest, notes)
-            }
-            Err(_) => (None, None),
-        };
-
-        results.push(McpUpdateCheckResult {
-            mcp_name: mcp_name.clone(),
-            has_update: false, // Will be updated by caller with current version
+    Ok(mcp_names
+        .into_iter()
+        .map(|mcp_name| McpUpdateCheckResult {
+            mcp_name,
+            has_update: false,
             current_version: None,
-            latest_version,
-            update_notes,
-        });
-    }
-
-    Ok(results)
+            latest_version: None,
+            update_notes: Some("MCP Market 当前未暴露稳定版本元数据".to_string()),
+        })
+        .collect())
 }
 
-/// Update MCP to latest version (reinstall)
+/// Update MCP to latest version (reinstall).
 #[tauri::command]
 pub async fn update_mcp(input: McpInstallInput) -> Result<McpInstallResult, String> {
-    // Update is essentially a reinstall that overwrites existing config
     install_mcp_to_cli(input).await
 }
 
-/// Update installed MCP configuration
+/// Update installed MCP configuration.
 #[tauri::command]
 pub fn update_installed_mcp(
     config_path: String,
@@ -715,24 +449,22 @@ pub fn update_installed_mcp(
     args: Vec<String>,
     env: HashMap<String, String>,
 ) -> Result<McpInstallResult, String> {
-    let settings_path = PathBuf::from(&config_path);
-    let mut settings = load_settings_config(&settings_path)?;
+    let cli_path = resolve_cli_identifier_from_config_path(&config_path)?;
+    let mut config = read_cli_config(cli_path.clone())?;
+    let backup_path = create_config_backup(Path::new(&config_path))?;
 
-    // Create backup
-    let backup_path = create_settings_backup(&settings_path, "Failed to create backup")?;
-    let mcp_servers = ensure_mcp_servers_object(&mut settings)
-        .map_err(|e| format!("Failed to get mcpServers object: {}", e))?;
-    let new_config = build_installed_mcp_config(command, args, env);
-
-    // If name changed, remove old entry
-    if old_name != new_name {
-        mcp_servers.remove(&old_name);
+    if config.mcpServers.is_none() {
+        config.mcpServers = Some(HashMap::new());
     }
 
-    // Insert/update the new config
-    mcp_servers.insert(new_name.clone(), new_config);
-    write_json_config_pretty(&settings_path, &settings)
-        .map_err(|e| format!("Failed to write settings file: {}", e))?;
+    if let Some(ref mut servers) = config.mcpServers {
+        if old_name != new_name {
+            servers.remove(&old_name);
+        }
+        servers.insert(new_name.clone(), build_installed_mcp_config(command, args, env));
+    }
+
+    write_cli_config(cli_path, config)?;
 
     Ok(McpInstallResult {
         success: true,
@@ -778,7 +510,6 @@ fn send_jsonrpc_request(
 ) -> Result<serde_json::Value, String> {
     use std::io::{BufRead, Read, Write};
 
-    // 构造 JSON-RPC 请求
     let request = serde_json::json!({
         "jsonrpc": "2.0",
         "id": request_id,
@@ -786,7 +517,6 @@ fn send_jsonrpc_request(
         "params": params
     });
 
-    // 发送请求
     let request_str = serde_json::to_string(&request)
         .map_err(|e| format!("Failed to serialize request: {}", e))?;
 
@@ -802,25 +532,21 @@ fn send_jsonrpc_request(
         .flush()
         .map_err(|e| format!("Failed to flush writer: {}", e))?;
 
-    // 读取响应头
     let mut header_line = String::new();
     reader
         .read_line(&mut header_line)
         .map_err(|e| format!("Failed to read header: {}", e))?;
 
-    // 解析 Content-Length
     let content_length: usize = header_line
         .strip_prefix("Content-Length: ")
         .and_then(|s| s.trim().parse().ok())
         .ok_or_else(|| "Invalid Content-Length header".to_string())?;
 
-    // 读取空行
     let mut empty_line = String::new();
     reader
         .read_line(&mut empty_line)
         .map_err(|e| format!("Failed to read separator: {}", e))?;
 
-    // 读取响应体
     let mut response_body = vec![0u8; content_length];
     reader
         .read_exact(&mut response_body)
@@ -829,10 +555,8 @@ fn send_jsonrpc_request(
     let response_str = String::from_utf8(response_body)
         .map_err(|e| format!("Invalid UTF-8 in response: {}", e))?;
 
-    let response: serde_json::Value = serde_json::from_str(&response_str)
-        .map_err(|e| format!("Failed to parse response JSON: {}", e))?;
-
-    Ok(response)
+    serde_json::from_str(&response_str)
+        .map_err(|e| format!("Failed to parse response JSON: {}", e))
 }
 
 /// 测试已安装 MCP 服务器连接 (Tauri 命令)
@@ -845,11 +569,10 @@ pub fn test_installed_mcp_connection(
     env: HashMap<String, String>,
 ) -> Result<InstalledMcpTestResult, String> {
     use chrono::Utc;
-    use std::io::{BufReader, BufWriter};
+    use std::io::{BufReader, BufWriter, Write};
     use std::process::{Command, Stdio};
     use uuid::Uuid;
 
-    // 启动 MCP 进程
     let mut child = Command::new(&command)
         .args(&args)
         .envs(env)
@@ -872,7 +595,6 @@ pub fn test_installed_mcp_connection(
     let mut reader = BufReader::new(stdout);
 
     let result = (|| {
-        // 发送 initialize 请求
         let init_params = serde_json::json!({
             "protocolVersion": "2024-11-05",
             "capabilities": {},
@@ -885,12 +607,10 @@ pub fn test_installed_mcp_connection(
         let init_response =
             send_jsonrpc_request(&mut writer, &mut reader, "initialize", init_params, 1)?;
 
-        // 检查是否有错误
         if let Some(error) = init_response.get("error") {
             return Err(format!("Initialize error: {}", error));
         }
 
-        // 发送 initialized 通知
         let initialized_notification = serde_json::json!({
             "jsonrpc": "2.0",
             "method": "notifications/initialized"
@@ -908,7 +628,6 @@ pub fn test_installed_mcp_connection(
             .flush()
             .map_err(|e| format!("Failed to flush writer: {}", e))?;
 
-        // 发送 tools/list 请求
         let tools_response = send_jsonrpc_request(
             &mut writer,
             &mut reader,
@@ -917,12 +636,10 @@ pub fn test_installed_mcp_connection(
             2,
         )?;
 
-        // 检查是否有错误
         if let Some(error) = tools_response.get("error") {
             return Err(format!("Tools list error: {}", error));
         }
 
-        // 获取工具数量
         let tool_count = tools_response
             .get("result")
             .and_then(|r| r.get("tools"))
@@ -936,7 +653,6 @@ pub fn test_installed_mcp_connection(
         })
     })();
 
-    // 关闭进程
     let _ = child.kill();
     let _ = child.wait();
 
@@ -950,7 +666,6 @@ pub fn test_installed_mcp_connection(
         },
     };
 
-    // 保存测试结果到数据库
     let conn = get_db_connection()?;
     let status = if test_result.success {
         "success"
@@ -959,7 +674,6 @@ pub fn test_installed_mcp_connection(
     };
     let result_id = Uuid::new_v4().to_string();
 
-    // 使用 UPSERT（INSERT OR REPLACE）
     conn.execute(
         "INSERT OR REPLACE INTO installed_mcp_test_results (id, config_path, mcp_name, test_status, test_message, tool_count, tested_at)
          VALUES (
@@ -1015,8 +729,6 @@ pub fn get_installed_mcp_test_result(
     Ok(result)
 }
 
-// ===================== MCP 安装历史 =====================
-
 /// MCP 安装历史记录
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpInstallHistory {
@@ -1027,7 +739,7 @@ pub struct McpInstallHistory {
     pub config_path: String,
     pub backup_path: Option<String>,
     pub scope: String,
-    pub status: String, // "completed" | "rolled_back"
+    pub status: String,
     pub created_at: String,
     pub rolled_back_at: Option<String>,
 }
@@ -1124,7 +836,6 @@ pub async fn manual_rollback_install(history_id: String) -> Result<McpInstallRes
 
     let conn = get_db_connection()?;
 
-    // 获取历史记录
     let history: McpInstallHistory = conn
         .query_row(
             "SELECT id, mcp_id, mcp_name, cli_path, config_path, backup_path, scope, status, created_at, rolled_back_at
@@ -1147,19 +858,14 @@ pub async fn manual_rollback_install(history_id: String) -> Result<McpInstallRes
         )
         .map_err(|e| format!("安装历史记录不存在: {}", e))?;
 
-    // 检查是否已经回滚
     if history.status == "rolled_back" {
         return Err("此安装已经回滚".to_string());
     }
 
-    // 执行回滚
-    let config_path = history.config_path.clone();
-    let backup_path = history.backup_path.clone();
-
-    let rollback_result = rollback_mcp_install(config_path, backup_path).await?;
+    let rollback_result =
+        rollback_mcp_install(history.config_path.clone(), history.backup_path.clone()).await?;
 
     if rollback_result.success {
-        // 更新历史记录状态
         let now = Utc::now().to_rfc3339();
         conn.execute(
             "UPDATE mcp_install_history SET status = 'rolled_back', rolled_back_at = ?1 WHERE id = ?2",

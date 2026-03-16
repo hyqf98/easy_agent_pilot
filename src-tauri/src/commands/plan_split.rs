@@ -108,6 +108,10 @@ enum ParsedSplitOutput {
     TaskSplit { tasks: Vec<Value> },
 }
 
+fn is_terminal_session_status(status: &str) -> bool {
+    matches!(status, "waiting_input" | "completed" | "stopped" | "failed")
+}
+
 fn map_plan_split_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<PlanSplitSession> {
     Ok(PlanSplitSession {
         id: row.get(0)?,
@@ -654,6 +658,124 @@ fn serialize_json<T: Serialize>(value: &T) -> Result<String, String> {
     serde_json::to_string(value).map_err(|error| error.to_string())
 }
 
+fn apply_parsed_output_to_session(
+    session: &mut PlanSplitSession,
+    session_id: &str,
+    output: ParsedSplitOutput,
+    raw_content: String,
+) -> Result<(), String> {
+    let now = now_rfc3339();
+    session.raw_content = Some(raw_content);
+    session.updated_at = now.clone();
+    session.completed_at = Some(now);
+    session.execution_session_id = Some(session_id.to_string());
+    session.parse_error = None;
+    session.error_message = None;
+    session.stopped_at = None;
+
+    let mut llm_messages = load_llm_messages_json(session.llm_messages_json.as_ref());
+    let mut messages = load_messages_json(session.messages_json.as_ref());
+
+    append_ui_message(
+        &mut messages,
+        "assistant",
+        match &output {
+            ParsedSplitOutput::FormRequest { question, .. } => question.clone(),
+            ParsedSplitOutput::TaskSplit { tasks } => {
+                format!(
+                    "DONE：任务拆分完成，共生成 {} 个任务，请确认。",
+                    tasks.len()
+                )
+            }
+        },
+    );
+    llm_messages.push(MessageInput {
+        role: "assistant".to_string(),
+        content: extract_assistant_summary(&output),
+        attachments: None,
+    });
+    session.llm_messages_json = Some(serialize_json(&llm_messages)?);
+    session.messages_json = Some(serialize_json(&messages)?);
+
+    match output {
+        ParsedSplitOutput::FormRequest { forms, .. } => {
+            session.status = "waiting_input".to_string();
+            session.form_queue_json = Some(serialize_json(&forms)?);
+            session.current_form_index = Some(0);
+            session.result_json = None;
+        }
+        ParsedSplitOutput::TaskSplit { tasks } => {
+            session.status = "completed".to_string();
+            session.form_queue_json = None;
+            session.current_form_index = None;
+            session.result_json = Some(serialize_json(&serde_json::json!({
+                "type": "task_split",
+                "status": "DONE",
+                "tasks": tasks,
+            }))?);
+        }
+    }
+
+    Ok(())
+}
+
+fn extract_structured_output_payload(event: &SplitStreamRecord) -> Option<String> {
+    if event.event_type != "tool_use" {
+        return None;
+    }
+
+    let tool_name = event.tool_name.as_deref()?;
+    if !tool_name.eq_ignore_ascii_case("StructuredOutput")
+        && !tool_name.eq_ignore_ascii_case("structured_output")
+    {
+        return None;
+    }
+
+    event
+        .tool_input
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            event.content
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+        })
+}
+
+fn finalize_session_from_structured_output(
+    app: &AppHandle,
+    plan_id: &str,
+    session_id: &str,
+    raw_output: &str,
+) -> Result<bool, String> {
+    let conn = open_db_connection().map_err(|error| error.to_string())?;
+    let Some(mut session) = read_session(&conn, plan_id)? else {
+        return Ok(false);
+    };
+
+    if session.execution_session_id.as_deref() != Some(session_id)
+        || is_terminal_session_status(&session.status)
+    {
+        return Ok(false);
+    }
+
+    let output = match parse_split_output(raw_output, session.granularity) {
+        Ok(output) => output,
+        Err(_) => return Ok(false),
+    };
+
+    apply_parsed_output_to_session(&mut session, session_id, output, raw_output.to_string())?;
+    insert_or_update_session(&conn, &session)?;
+    emit_session_updated(app, &session);
+
+    let session_id = session_id.to_string();
+    tauri::async_runtime::spawn(async move {
+        set_abort_flag(&session_id, true).await;
+    });
+
+    Ok(true)
+}
+
 fn refresh_session_after_turn(
     app: &AppHandle,
     plan_id: &str,
@@ -689,52 +811,13 @@ fn refresh_session_after_turn(
     session.parse_error = None;
     session.error_message = None;
 
-    let mut llm_messages = load_llm_messages_json(session.llm_messages_json.as_ref());
-    let mut messages = load_messages_json(session.messages_json.as_ref());
-
     match parsed {
         Ok((output, parsed_raw_content)) => {
-            session.raw_content = Some(parsed_raw_content);
-            append_ui_message(
-                &mut messages,
-                "assistant",
-                match &output {
-                    ParsedSplitOutput::FormRequest { question, .. } => question.clone(),
-                    ParsedSplitOutput::TaskSplit { tasks } => {
-                        format!(
-                            "DONE：任务拆分完成，共生成 {} 个任务，请确认。",
-                            tasks.len()
-                        )
-                    }
-                },
-            );
-            llm_messages.push(MessageInput {
-                role: "assistant".to_string(),
-                content: extract_assistant_summary(&output),
-                attachments: None,
-            });
-            session.llm_messages_json = Some(serialize_json(&llm_messages)?);
-            session.messages_json = Some(serialize_json(&messages)?);
-            match output {
-                ParsedSplitOutput::FormRequest { forms, .. } => {
-                    session.status = "waiting_input".to_string();
-                    session.form_queue_json = Some(serialize_json(&forms)?);
-                    session.current_form_index = Some(0);
-                    session.result_json = None;
-                }
-                ParsedSplitOutput::TaskSplit { tasks } => {
-                    session.status = "completed".to_string();
-                    session.form_queue_json = None;
-                    session.current_form_index = None;
-                    session.result_json = Some(serialize_json(&serde_json::json!({
-                        "type": "task_split",
-                        "status": "DONE",
-                        "tasks": tasks,
-                    }))?);
-                }
-            }
+            apply_parsed_output_to_session(&mut session, session_id, output, parsed_raw_content)?;
         }
         Err(error_message) => {
+            let llm_messages = load_llm_messages_json(session.llm_messages_json.as_ref());
+            let mut messages = load_messages_json(session.messages_json.as_ref());
             append_ui_message(
                 &mut messages,
                 "assistant",
@@ -763,13 +846,24 @@ pub fn record_plan_split_event(
     event: SplitStreamRecord,
 ) -> Result<(), String> {
     let conn = open_db_connection().map_err(|error| error.to_string())?;
+    let Some(session) = read_session(&conn, plan_id)? else {
+        return Ok(());
+    };
+
+    if session.execution_session_id.as_deref() != Some(session_id)
+        || is_terminal_session_status(&session.status)
+    {
+        return Ok(());
+    }
+
     let now = now_rfc3339();
+    let structured_output = extract_structured_output_payload(&event);
     let metadata = serde_json::to_string(&serde_json::json!({
-        "toolName": event.tool_name,
-        "toolCallId": event.tool_call_id,
-        "toolInput": event.tool_input,
-        "toolResult": event.tool_result,
-        "error": event.error,
+        "toolName": event.tool_name.clone(),
+        "toolCallId": event.tool_call_id.clone(),
+        "toolInput": event.tool_input.clone(),
+        "toolResult": event.tool_result.clone(),
+        "error": event.error.clone(),
     }))
     .ok();
     let content = event
@@ -813,6 +907,12 @@ pub fn record_plan_split_event(
     let event_name = format!("plan-split-stream-{plan_id}");
     let _ = app.emit(&event_name, &payload);
 
+    if let Some(raw_output) = structured_output {
+        if finalize_session_from_structured_output(app, plan_id, session_id, &raw_output)? {
+            return Ok(());
+        }
+    }
+
     if payload.event_type == "done" {
         let _ = refresh_session_after_turn(app, plan_id, session_id);
     }
@@ -829,7 +929,10 @@ pub fn mark_plan_split_failed(
     let conn = open_db_connection().map_err(|error| error.to_string())?;
     let mut session =
         read_session(&conn, plan_id)?.ok_or_else(|| "计划拆分会话不存在".to_string())?;
-    if session.status == "stopped" {
+
+    if session.execution_session_id.as_deref() != Some(session_id)
+        || is_terminal_session_status(&session.status)
+    {
         emit_session_updated(app, &session);
         return Ok(());
     }
