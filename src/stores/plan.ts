@@ -311,6 +311,25 @@ export const usePlanStore = defineStore('plan', () => {
     currentPlanId.value = id
   }
 
+  function clearProjectPlans(projectId: string): string[] {
+    const clearedPlanIds = plans.value
+      .filter(plan => plan.projectId === projectId)
+      .map(plan => plan.id)
+
+    if (clearedPlanIds.length === 0) {
+      return []
+    }
+
+    const clearedPlanIdSet = new Set(clearedPlanIds)
+    plans.value = plans.value.filter(plan => !clearedPlanIdSet.has(plan.id))
+
+    if (currentPlanId.value && clearedPlanIdSet.has(currentPlanId.value)) {
+      currentPlanId.value = null
+    }
+
+    return clearedPlanIds
+  }
+
   // 根据状态分组获取计划
   function getPlansByStatus(status: PlanStatus): Plan[] {
     return plans.value
@@ -372,6 +391,7 @@ export const usePlanStore = defineStore('plan', () => {
     createPlan,
     updatePlan,
     deletePlan,
+    clearProjectPlans,
     setCurrentPlan,
     getPlansByStatus,
     // 执行控制

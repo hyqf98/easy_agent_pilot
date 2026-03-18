@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tokio::process::Command;
+
+use crate::commands::cli_support::find_cli_executable;
 
 pub const DEFAULT_MARKETPLACE_SOURCE_ID: &str = "mcpmarket";
 const MCPMARKET_SOURCE_LABEL: &str = "MCP Market";
@@ -186,35 +188,171 @@ pub fn get_marketplace_source_strategy(
     }
 }
 
-fn resolve_helper_script_path() -> Result<PathBuf, String> {
-    let candidates = [
-        env::current_dir()
-            .ok()
-            .map(|dir| dir.join("scripts").join("mcpmarket-fetcher.mjs")),
-        env::current_dir()
-            .ok()
-            .map(|dir| dir.join("..").join("scripts").join("mcpmarket-fetcher.mjs")),
-    ];
+fn push_if_exists(candidates: &mut Vec<PathBuf>, path: PathBuf) {
+    if path.exists() {
+        candidates.push(path);
+    }
+}
+
+fn resolve_helper_script_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let mut candidates = Vec::new();
+
+    if let Ok(current_dir) = env::current_dir() {
+        push_if_exists(
+            &mut candidates,
+            current_dir.join("scripts").join("mcpmarket-fetcher.mjs"),
+        );
+        push_if_exists(
+            &mut candidates,
+            current_dir
+                .join("..")
+                .join("scripts")
+                .join("mcpmarket-fetcher.mjs"),
+        );
+    }
+
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        push_if_exists(
+            &mut candidates,
+            resource_dir.join("scripts").join("mcpmarket-fetcher.mjs"),
+        );
+        push_if_exists(&mut candidates, resource_dir.join("mcpmarket-fetcher.mjs"));
+    }
 
     candidates
         .into_iter()
-        .flatten()
-        .find(|path| path.exists())
-        .ok_or_else(|| "Cannot locate scripts/mcpmarket-fetcher.mjs".to_string())
+        .next()
+        .ok_or_else(|| "Cannot locate marketplace helper script".to_string())
 }
 
-async fn run_marketplace_helper<T>(mode: &str, payload: serde_json::Value) -> Result<T, String>
+fn find_playwright_core_in_node_modules(base_dir: &Path) -> Option<PathBuf> {
+    let direct = base_dir
+        .join("node_modules")
+        .join("playwright-core")
+        .join("index.mjs");
+    if direct.exists() {
+        return Some(direct);
+    }
+
+    let pnpm_root = base_dir.join("node_modules").join(".pnpm");
+    let entries = std::fs::read_dir(&pnpm_root).ok()?;
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if !file_name.starts_with("playwright-core@") {
+            continue;
+        }
+
+        let candidate = entry
+            .path()
+            .join("node_modules")
+            .join("playwright-core")
+            .join("index.mjs");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
+fn resolve_playwright_core_path(app: &AppHandle) -> Option<PathBuf> {
+    if let Ok(current_dir) = env::current_dir() {
+        if let Some(path) = find_playwright_core_in_node_modules(&current_dir) {
+            return Some(path);
+        }
+
+        let parent_dir = current_dir.join("..");
+        if let Some(path) = find_playwright_core_in_node_modules(&parent_dir) {
+            return Some(path);
+        }
+    }
+
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let bundled = resource_dir.join("playwright-core").join("index.mjs");
+        if bundled.exists() {
+            return Some(bundled);
+        }
+    }
+
+    None
+}
+
+fn resolve_node_binary() -> String {
+    if let Some(explicit) = env::var_os("EASY_AGENT_NODE_PATH") {
+        let explicit = PathBuf::from(explicit);
+        if explicit.exists() {
+            return explicit.to_string_lossy().to_string();
+        }
+    }
+
+    let mut extra_dirs = Vec::new();
+
+    #[cfg(target_os = "macos")]
+    {
+        extra_dirs.push(PathBuf::from("/opt/homebrew/bin"));
+        extra_dirs.push(PathBuf::from("/usr/local/bin"));
+        extra_dirs.push(PathBuf::from("/usr/bin"));
+        if let Some(home_dir) = dirs::home_dir() {
+            extra_dirs.push(home_dir.join(".volta").join("bin"));
+            extra_dirs.push(home_dir.join(".nvm").join("current").join("bin"));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        extra_dirs.push(PathBuf::from("/usr/local/bin"));
+        extra_dirs.push(PathBuf::from("/usr/bin"));
+        if let Some(home_dir) = dirs::home_dir() {
+            extra_dirs.push(home_dir.join(".local").join("bin"));
+            extra_dirs.push(home_dir.join(".volta").join("bin"));
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(program_files) = env::var_os("ProgramFiles") {
+            extra_dirs.push(PathBuf::from(program_files).join("nodejs"));
+        }
+        if let Some(program_files_x86) = env::var_os("ProgramFiles(x86)") {
+            extra_dirs.push(PathBuf::from(program_files_x86).join("nodejs"));
+        }
+        if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+            extra_dirs.push(
+                PathBuf::from(local_app_data)
+                    .join("Programs")
+                    .join("nodejs"),
+            );
+        }
+    }
+
+    find_cli_executable("node", &extra_dirs)
+        .unwrap_or_else(|| PathBuf::from("node"))
+        .to_string_lossy()
+        .to_string()
+}
+
+async fn run_marketplace_helper<T>(
+    app: &AppHandle,
+    mode: &str,
+    payload: serde_json::Value,
+) -> Result<T, String>
 where
     T: for<'de> Deserialize<'de>,
 {
-    let script_path = resolve_helper_script_path()?;
+    let script_path = resolve_helper_script_path(app)?;
+    let node_binary = resolve_node_binary();
     let payload_json = serde_json::to_string(&payload)
         .map_err(|e| format!("Failed to serialize helper payload: {}", e))?;
 
-    let output = Command::new("node")
-        .arg(script_path)
-        .arg(mode)
-        .arg(payload_json)
+    let mut command = Command::new(&node_binary);
+    command.arg(script_path).arg(mode).arg(payload_json);
+
+    if let Some(playwright_core_path) = resolve_playwright_core_path(app) {
+        command.env("EASY_AGENT_PLAYWRIGHT_CORE", playwright_core_path);
+    }
+
+    let output = command
         .output()
         .await
         .map_err(|e| format!("Failed to start marketplace helper: {}", e))?;
@@ -240,7 +378,7 @@ pub struct McpMarketSourceStrategy;
 impl MarketplaceSourceStrategy for McpMarketSourceStrategy {
     async fn fetch_mcp_list(
         &self,
-        _app: &AppHandle,
+        app: &AppHandle,
         query: &MarketplaceSourceQuery,
     ) -> Result<MarketListResponse<McpSourceListItem>, String> {
         let page = query.page.unwrap_or(1).max(1);
@@ -261,6 +399,7 @@ impl MarketplaceSourceStrategy for McpMarketSourceStrategy {
             .filter(|value| !value.is_empty());
 
         run_marketplace_helper(
+            app,
             "mcp-list",
             serde_json::json!({
                 "page": page,
@@ -274,15 +413,15 @@ impl MarketplaceSourceStrategy for McpMarketSourceStrategy {
 
     async fn fetch_mcp_detail(
         &self,
-        _app: &AppHandle,
+        app: &AppHandle,
         slug: &str,
     ) -> Result<McpSourceDetail, String> {
-        run_marketplace_helper("mcp-detail", serde_json::json!({ "slug": slug })).await
+        run_marketplace_helper(app, "mcp-detail", serde_json::json!({ "slug": slug })).await
     }
 
     async fn fetch_skill_list(
         &self,
-        _app: &AppHandle,
+        app: &AppHandle,
         query: &MarketplaceSourceQuery,
     ) -> Result<MarketListResponse<SkillSourceListItem>, String> {
         let page = query.page.unwrap_or(1).max(1);
@@ -303,6 +442,7 @@ impl MarketplaceSourceStrategy for McpMarketSourceStrategy {
             .filter(|value| !value.is_empty());
 
         run_marketplace_helper(
+            app,
             "skill-list",
             serde_json::json!({
                 "page": page,
@@ -316,18 +456,18 @@ impl MarketplaceSourceStrategy for McpMarketSourceStrategy {
 
     async fn fetch_skill_detail(
         &self,
-        _app: &AppHandle,
+        app: &AppHandle,
         slug: &str,
     ) -> Result<SkillSourceDetail, String> {
-        run_marketplace_helper("skill-detail", serde_json::json!({ "slug": slug })).await
+        run_marketplace_helper(app, "skill-detail", serde_json::json!({ "slug": slug })).await
     }
 
     async fn download_skill_archive(
         &self,
-        _app: &AppHandle,
+        app: &AppHandle,
         slug: &str,
     ) -> Result<SkillArchivePayload, String> {
-        run_marketplace_helper("skill-archive", serde_json::json!({ "slug": slug })).await
+        run_marketplace_helper(app, "skill-archive", serde_json::json!({ "slug": slug })).await
     }
 }
 
@@ -337,7 +477,7 @@ pub struct ModelScopeSourceStrategy;
 impl MarketplaceSourceStrategy for ModelScopeSourceStrategy {
     async fn fetch_mcp_list(
         &self,
-        _app: &AppHandle,
+        app: &AppHandle,
         query: &MarketplaceSourceQuery,
     ) -> Result<MarketListResponse<McpSourceListItem>, String> {
         let page = query.page.unwrap_or(1).max(1);
@@ -353,6 +493,7 @@ impl MarketplaceSourceStrategy for ModelScopeSourceStrategy {
             .filter(|value| !value.is_empty());
 
         run_marketplace_helper(
+            app,
             "modelscope-mcp-list",
             serde_json::json!({
                 "page": page,
@@ -365,10 +506,15 @@ impl MarketplaceSourceStrategy for ModelScopeSourceStrategy {
 
     async fn fetch_mcp_detail(
         &self,
-        _app: &AppHandle,
+        app: &AppHandle,
         slug: &str,
     ) -> Result<McpSourceDetail, String> {
-        run_marketplace_helper("modelscope-mcp-detail", serde_json::json!({ "slug": slug })).await
+        run_marketplace_helper(
+            app,
+            "modelscope-mcp-detail",
+            serde_json::json!({ "slug": slug }),
+        )
+        .await
     }
 
     async fn fetch_skill_list(

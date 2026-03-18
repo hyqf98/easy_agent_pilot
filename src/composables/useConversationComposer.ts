@@ -25,7 +25,14 @@ import { useSettingsStore } from '@/stores/settings'
 import { useTokenStore, type CompressionStrategy, type TokenLevel } from '@/stores/token'
 import { compressionService } from '@/services/compression'
 import { conversationService } from '@/services/conversation'
-import { executeSlashCommand, parseSlashCommandInput, searchSlashCommands, type SlashCommandPanelType } from '@/services/slashCommands'
+import {
+  executeSlashCommand,
+  parseSlashCommandInput,
+  searchSlashCommands,
+  type ParsedSlashCommand,
+  type SlashCommandDescriptor,
+  type SlashCommandPanelType
+} from '@/services/slashCommands'
 import { useSafeOutsideClick } from '@/composables/useSafeOutsideClick'
 import { FILE_MENTION_PATTERN, getMentionDisplayText, getMentionTitle, isGlobalMentionPath } from '@/utils/fileMention'
 import { resolveSessionAgent, resolveSessionAgentId } from '@/utils/sessionAgent'
@@ -605,7 +612,16 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     })
   }
 
-  const handleSlashCommandSelect = (command: { insertText: string }) => {
+  const handleSlashCommandSelect = async (command: SlashCommandDescriptor) => {
+    if (command.name === 'compact') {
+      await runSlashCommand({
+        name: command.name,
+        argsText: ''
+      })
+      focusInput()
+      return
+    }
+
     inputText.value = command.insertText
     closeSlashCommand()
     focusInput()
@@ -884,6 +900,36 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     focusInput()
   }
 
+  const runSlashCommand = async (parsedSlashCommand: ParsedSlashCommand) => {
+    const sessionId = currentSessionId.value
+    if (!sessionId) {
+      return false
+    }
+
+    const result = await executeSlashCommand(parsedSlashCommand, {
+      panelType: options.panelType,
+      sessionId,
+      isSending: isSending.value,
+      hasMessages: messageCount.value > 0,
+      currentWorkingDirectory: currentWorkingDirectory.value,
+      openCompressionDialog: handleOpenCompress,
+      clearSession: clearCurrentSession,
+      setWorkingDirectory: options.setWorkingDirectory,
+      notifySuccess: message => notificationStore.success(message),
+      notifyWarning: message => notificationStore.warning(message),
+      notifyError: message => notificationStore.error(t('common.error'), message)
+    })
+
+    if (result.handled) {
+      closeSlashCommand()
+      if (result.clearInput) {
+        inputText.value = ''
+      }
+    }
+
+    return result.handled
+  }
+
   const handleSend = async () => {
     const sessionId = currentSessionId.value
     if (!sessionId || isUploadingImages.value) return
@@ -901,25 +947,8 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
     const parsedSlashCommand = attachments.length === 0 ? parseSlashCommandInput(userInput) : null
     if (parsedSlashCommand) {
-      const result = await executeSlashCommand(parsedSlashCommand, {
-        panelType: options.panelType,
-        sessionId,
-        isSending: isSending.value,
-        hasMessages: messageCount.value > 0,
-        currentWorkingDirectory: currentWorkingDirectory.value,
-        openCompressionDialog: handleOpenCompress,
-        clearSession: clearCurrentSession,
-        setWorkingDirectory: options.setWorkingDirectory,
-        notifySuccess: message => notificationStore.success(message),
-        notifyWarning: message => notificationStore.warning(message),
-        notifyError: message => notificationStore.error(t('common.error'), message)
-      })
-
-      if (result.handled) {
-        closeSlashCommand()
-        if (result.clearInput) {
-          inputText.value = ''
-        }
+      const handled = await runSlashCommand(parsedSlashCommand)
+      if (handled) {
         return
       }
     }

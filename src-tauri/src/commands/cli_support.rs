@@ -1,9 +1,23 @@
 use std::collections::HashSet;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tokio::process::Command as TokioCommand;
 
 const WINDOWS_EXEC_EXTENSIONS: &[&str] = &[".exe", ".cmd", ".bat", ".com"];
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(target_os = "windows")]
+fn configure_windows_std_command(command: &mut Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(target_os = "windows")]
+fn configure_windows_tokio_command(command: &mut TokioCommand) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
 
 fn split_path_tail(value: &str) -> &str {
     value.rsplit(['/', '\\']).next().unwrap_or(value)
@@ -226,11 +240,13 @@ pub fn run_cli_command(cli_path: &Path, args: &[&str]) -> std::io::Result<Output
 
     if extension == "cmd" || extension == "bat" {
         let mut command = Command::new("cmd");
+        configure_windows_std_command(&mut command);
         command.arg("/C").arg(cli_path);
         command.args(args);
         command.output()
     } else {
         let mut command = Command::new(cli_path);
+        configure_windows_std_command(&mut command);
         command.args(args);
         command.output()
     }
@@ -253,12 +269,14 @@ pub fn build_tokio_cli_command(cli_path: &str, args: &[String]) -> TokioCommand 
 
     if extension == "cmd" || extension == "bat" {
         let mut command = TokioCommand::new("cmd");
+        configure_windows_tokio_command(&mut command);
         command.arg("/C").arg(cli_path);
         command.args(args);
         return command;
     }
 
     let mut command = TokioCommand::new(cli_path);
+    configure_windows_tokio_command(&mut command);
     command.args(args);
     command
 }

@@ -11,6 +11,12 @@ import type {
 
 type AbortCommand = 'abort_cli_execution' | 'abort_sdk_execution'
 
+interface ExecutionEventState {
+  sawMeaningfulOutput: boolean
+  sawDone: boolean
+  sawError: boolean
+}
+
 function parseToolPayload(value?: string): Record<string, unknown> | undefined {
   if (!value) return undefined
 
@@ -60,11 +66,18 @@ export abstract class BaseAgentStrategy implements AgentStrategy {
     this.abortController = new AbortController()
 
     try {
+      const eventState: ExecutionEventState = {
+        sawMeaningfulOutput: false,
+        sawDone: false,
+        sawError: false
+      }
+
       this.unlistenStream = await listen<BackendStreamEvent>(
         this.getEventName(context.sessionId),
         (event) => {
           const streamEvent = this.transformEvent(event.payload)
           if (streamEvent) {
+            this.recordEventState(eventState, streamEvent)
             onEvent(streamEvent)
           }
         }
@@ -82,18 +95,20 @@ export abstract class BaseAgentStrategy implements AgentStrategy {
 
       await invoke('execute_agent', { request })
 
+      await this.waitForTerminalEvent(eventState)
+
       console.info('[AI Execute] done', {
         provider: request.provider,
         mode: request.executionMode,
         sessionId: context.sessionId
       })
-
-      await new Promise(resolve => setTimeout(resolve, 100))
     } catch (error) {
       if (this.abortController?.signal.aborted) {
         onEvent({ type: 'done' })
         return
       }
+
+      const eventState = this.getSafeEventState()
 
       const errorMessage = error instanceof Error ? error.message : String(error)
       console.error('[AI Execute] failed', {
@@ -101,6 +116,18 @@ export abstract class BaseAgentStrategy implements AgentStrategy {
         sessionId: this.currentSessionId,
         error: errorMessage
       })
+
+      if (eventState.sawDone || (eventState.sawMeaningfulOutput && !eventState.sawError)) {
+        if (!eventState.sawDone) {
+          onEvent({ type: 'done' })
+        }
+        return
+      }
+
+      if (eventState.sawError) {
+        return
+      }
+
       onEvent({
         type: 'error',
         error: errorMessage
@@ -198,6 +225,50 @@ export abstract class BaseAgentStrategy implements AgentStrategy {
     }
   }
 
+  private lastEventState: ExecutionEventState = {
+    sawMeaningfulOutput: false,
+    sawDone: false,
+    sawError: false
+  }
+
+  private getSafeEventState(): ExecutionEventState {
+    return { ...this.lastEventState }
+  }
+
+  private recordEventState(state: ExecutionEventState, event: StreamEvent): void {
+    switch (event.type) {
+      case 'content':
+      case 'thinking':
+      case 'tool_use':
+      case 'tool_result':
+      case 'file_edit':
+        state.sawMeaningfulOutput = true
+        break
+      case 'error':
+        state.sawError = true
+        break
+      case 'done':
+        state.sawDone = true
+        break
+      default:
+        break
+    }
+
+    this.lastEventState = { ...state }
+  }
+
+  private async waitForTerminalEvent(state: ExecutionEventState): Promise<void> {
+    this.lastEventState = { ...state }
+
+    const deadline = Date.now() + (state.sawMeaningfulOutput ? 5000 : 1500)
+    while (Date.now() < deadline) {
+      if (state.sawDone || state.sawError) {
+        break
+      }
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+  }
+
   private abortExecution(): void {
     if (!this.currentSessionId) return
 
@@ -211,5 +282,10 @@ export abstract class BaseAgentStrategy implements AgentStrategy {
     this.unlistenStream = null
     this.abortController = null
     this.currentSessionId = null
+    this.lastEventState = {
+      sawMeaningfulOutput: false,
+      sawDone: false,
+      sawError: false
+    }
   }
 }

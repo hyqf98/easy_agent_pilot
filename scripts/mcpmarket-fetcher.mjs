@@ -1,6 +1,17 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { chromium } from 'playwright'
+import { pathToFileURL } from 'node:url'
+
+async function loadPlaywrightModule() {
+  const bundledCorePath = process.env.EASY_AGENT_PLAYWRIGHT_CORE
+  if (bundledCorePath && fs.existsSync(bundledCorePath)) {
+    return import(pathToFileURL(bundledCorePath).href)
+  }
+
+  return import('playwright')
+}
+
+const { chromium } = await loadPlaywrightModule()
 
 const [, , mode, rawPayload = '{}'] = process.argv
 

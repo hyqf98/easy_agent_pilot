@@ -14,8 +14,8 @@ const uiStore = useUIStore()
 
 // 处理工作区点击
 const handleWorkspaceClick = () => {
-  // 如果在计划模式，先切换回普通模式
-  if (uiStore.appMode === 'plan') {
+  // 从任意特殊模式返回工作区
+  if (uiStore.appMode !== 'chat') {
     uiStore.setAppMode('chat')
   }
   layoutStore.togglePanel('unified')

@@ -933,6 +933,20 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
     clearPlanExecutionRuntime(planId, executionQueues.value, executionStates.value)
   }
 
+  function clearPlansExecution(planIds: string[]): void {
+    planIds.forEach((planId) => {
+      clearPlanExecutionRuntime(planId, executionQueues.value, executionStates.value)
+    })
+
+    if (currentViewingTaskId.value) {
+      const taskStore = useTaskStore()
+      const currentTask = taskStore.tasks.find(task => task.id === currentViewingTaskId.value)
+      if (!currentTask || planIds.includes(currentTask.planId)) {
+        currentViewingTaskId.value = null
+      }
+    }
+  }
+
   return {
     // State
     executionStates,
@@ -959,6 +973,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
     loadTaskLogs,
     clearTaskLogs,
     clearPlanExecution,
+    clearPlansExecution,
     listRecentPlanResults,
     getPlanExecutionProgress,
     clearPlanExecutionResults

@@ -196,6 +196,21 @@ export const useSessionStore = defineStore('session', () => {
     sessions.value = [...otherSessions, ...projectSessions]
   }
 
+  function pruneStaleOpenSessions() {
+    const validSessionIds = new Set(sessions.value.map(session => session.id))
+    const nextOpenSessionIds = openSessionIds.value.filter(sessionId => validSessionIds.has(sessionId))
+
+    if (nextOpenSessionIds.length !== openSessionIds.value.length) {
+      openSessionIds.value = nextOpenSessionIds
+      const appStateStore = useAppStateStore()
+      appStateStore.setLastSessions([...openSessionIds.value])
+    }
+
+    if (currentSessionId.value && !validSessionIds.has(currentSessionId.value)) {
+      currentSessionId.value = openSessionIds.value[0] ?? null
+    }
+  }
+
   // Actions
   async function loadSessions(projectId: string) {
     isLoading.value = true
@@ -204,6 +219,7 @@ export const useSessionStore = defineStore('session', () => {
     try {
       const rustSessions = await invoke<RustSession[]>('list_sessions', { projectId })
       replaceProjectSessions(projectId, rustSessions.map(transformSession))
+      pruneStaleOpenSessions()
     } catch (error) {
       console.error('Failed to load sessions:', error)
       loadError.value = getErrorMessage(error)
@@ -311,6 +327,34 @@ export const useSessionStore = defineStore('session', () => {
 
   function setCurrentSession(id: string | null) {
     currentSessionId.value = id
+  }
+
+  async function clearProjectSessions(projectId: string) {
+    const projectSessionIds = sessions.value
+      .filter(session => session.projectId === projectId)
+      .map(session => session.id)
+
+    if (projectSessionIds.length === 0) {
+      return
+    }
+
+    const projectSessionIdSet = new Set(projectSessionIds)
+    const windowManager = useWindowManagerStore()
+    await Promise.all(
+      projectSessionIds.map(sessionId =>
+        windowManager.releaseSession(sessionId).catch(console.error)
+      )
+    )
+
+    sessions.value = sessions.value.filter(session => session.projectId !== projectId)
+    openSessionIds.value = openSessionIds.value.filter(sessionId => !projectSessionIdSet.has(sessionId))
+    pruneStaleOpenSessions()
+
+    const sessionExecutionStore = useSessionExecutionStore()
+    projectSessionIds.forEach(sessionId => sessionExecutionStore.clearExecutionState(sessionId))
+
+    const appStateStore = useAppStateStore()
+    appStateStore.setLastSessions([...openSessionIds.value])
   }
 
   async function togglePin(id: string) {
@@ -474,6 +518,7 @@ export const useSessionStore = defineStore('session', () => {
     createSession,
     updateSession,
     deleteSession,
+    clearProjectSessions,
     setCurrentSession,
     togglePin,
     setSearchQuery,

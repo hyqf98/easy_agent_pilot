@@ -527,6 +527,16 @@ export const useMessageStore = defineStore('message', () => {
     }
   }
 
+  function clearProjectMessages(sessionIds: string[]) {
+    if (sessionIds.length === 0) {
+      return
+    }
+
+    const sessionIdSet = new Set(sessionIds)
+    messages.value = messages.value.filter(message => !sessionIdSet.has(message.sessionId))
+    sessionIds.forEach(sessionId => pagination.value.delete(sessionId))
+  }
+
   return {
     // State
     messages,
@@ -545,6 +555,7 @@ export const useMessageStore = defineStore('message', () => {
     addMessage,
     updateMessage,
     deleteMessage,
-    clearSessionMessages
+    clearSessionMessages,
+    clearProjectMessages
   }
 })

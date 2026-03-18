@@ -373,6 +373,17 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     }
   }
 
+  function clearProjectSplitState(planIds: string[]) {
+    if (planIds.length === 0) {
+      return
+    }
+
+    if (context.value && planIds.includes(context.value.planId)) {
+      detachStream()
+      resetState()
+    }
+  }
+
   function updateSplitTask(index: number, updates: Partial<AITaskItem>) {
     if (!splitResult.value || !splitResult.value[index]) return
     splitResult.value[index] = { ...splitResult.value[index], ...updates }
@@ -513,6 +524,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     cancelSubSplit,
     clearAllSplitData,
     clearPlanSplitSessions: clearAllSplitData,
+    clearProjectSplitState,
     reset,
     detach,
     loadSession

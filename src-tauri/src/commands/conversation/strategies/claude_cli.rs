@@ -1,15 +1,18 @@
 use std::process::Stdio;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use async_trait::async_trait;
 use tauri::AppHandle;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+use tokio::time::sleep;
 
 use super::cli_common::{
-    build_content_event, build_error_event, emit_cli_event, extract_error_from_json_blob,
+    build_content_event, build_error_event, build_execution_summary, build_timeout_error_message,
+    detect_cli_timeout, emit_cli_event, extract_error_from_json_blob,
     extract_result_content_from_json_blob, extract_structured_output_from_json_blob,
-    parse_json_blob_with_fallback, preview_text, shell_escape,
+    parse_json_blob_with_fallback, preview_text, shell_escape, timeout_config_for_execution_mode,
+    CliExecutionMonitor,
 };
 use crate::commands::cli_support::build_tokio_cli_command;
 use crate::commands::conversation::abort::{
@@ -44,6 +47,7 @@ macro_rules! log_debug {
 struct StdoutReadOutcome {
     emitted_content: bool,
     emitted_error: bool,
+    emitted_non_error_event: bool,
 }
 
 impl StdoutReadOutcome {
@@ -51,8 +55,51 @@ impl StdoutReadOutcome {
         Self {
             emitted_content: false,
             emitted_error: false,
+            emitted_non_error_event: false,
         }
     }
+}
+
+struct StderrReadOutcome {
+    emitted_error: bool,
+}
+
+impl StderrReadOutcome {
+    fn none() -> Self {
+        Self {
+            emitted_error: false,
+        }
+    }
+}
+
+fn is_successful_event_type(event_type: &str) -> bool {
+    !matches!(event_type, "error" | "usage" | "message_start")
+}
+
+fn is_meaningful_event_type(event_type: &str) -> bool {
+    matches!(
+        event_type,
+        "content" | "thinking" | "tool_use" | "tool_result" | "file_edit"
+    )
+}
+
+fn is_rmcp_transport_closed_warning(line: &str) -> bool {
+    let normalized = line.to_lowercase();
+    normalized.contains("rmcp::transport::worker")
+        && normalized.contains("transport channel closed")
+}
+
+fn should_ignore_stderr_line(line: &str) -> bool {
+    is_rmcp_transport_closed_warning(line)
+}
+
+fn should_treat_process_failure_as_success(
+    stdout_outcome: &StdoutReadOutcome,
+    stderr_outcome: &StderrReadOutcome,
+) -> bool {
+    (stdout_outcome.emitted_content || stdout_outcome.emitted_non_error_event)
+        && !stdout_outcome.emitted_error
+        && !stderr_outcome.emitted_error
 }
 
 fn render_cli_message(message: &MessageInput) -> String {
@@ -207,6 +254,8 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
             .env_remove("CLAUDECODE");
 
         let execution_started_at = Instant::now();
+        let monitor = CliExecutionMonitor::new();
+        let timeout_config = timeout_config_for_execution_mode(request.execution_mode.as_deref());
         let mut child = cmd.spawn()?;
 
         // 注册进程 PID，用于后续可能的中断操作
@@ -228,12 +277,14 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
         let app_clone = app.clone();
         let event_name_clone = event_name.clone();
         let plan_id_clone = plan_id.clone();
+        let stdout_monitor = monitor.clone();
 
         // 处理标准输出
         let stdout_handle = tokio::spawn(async move {
             if is_stream_json {
                 let reader = tokio::io::BufReader::new(stdout);
                 let mut lines = reader.lines();
+                let mut outcome = StdoutReadOutcome::none();
 
                 while let Ok(Some(line)) = lines.next_line().await {
                     log_info!("[stdout] 原始行: {}", line);
@@ -251,6 +302,12 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                             log_info!("[stdout] JSON type: {}", event_type);
                             let event = parse_claude_json_output(&session_id_clone, &json_value);
                             if let Some(event) = event {
+                                outcome.emitted_non_error_event |=
+                                    is_successful_event_type(&event.event_type);
+                                outcome.emitted_content |= event.event_type == "content";
+                                outcome.emitted_error |= event.event_type == "error";
+                                stdout_monitor
+                                    .note_activity(is_meaningful_event_type(&event.event_type));
                                 log_info!(
                                     "[stdout] 发送事件: type={}, content_len={:?}",
                                     event.event_type,
@@ -272,7 +329,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                     }
                 }
 
-                return StdoutReadOutcome::none();
+                return outcome;
             }
 
             let mut reader = tokio::io::BufReader::new(stdout);
@@ -307,6 +364,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                     "[stdout] 事件内容长度: {:?}",
                     event.content.as_ref().map(|c| c.len())
                 );
+                stdout_monitor.note_activity(is_meaningful_event_type(&event.event_type));
                 emit_cli_event(
                     &app_clone,
                     &event_name_clone,
@@ -315,8 +373,9 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                 );
                 log_info!("[stdout] 事件发送成功");
                 return StdoutReadOutcome {
-                    emitted_content: true,
-                    emitted_error: false,
+                    emitted_content: event.event_type == "content",
+                    emitted_error: event.event_type == "error",
+                    emitted_non_error_event: is_successful_event_type(&event.event_type),
                 };
             }
 
@@ -327,6 +386,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                 event_name_clone,
                 event.event_type
             );
+            stdout_monitor.note_activity(true);
             emit_cli_event(
                 &app_clone,
                 &event_name_clone,
@@ -336,6 +396,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
             StdoutReadOutcome {
                 emitted_content: true,
                 emitted_error: false,
+                emitted_non_error_event: true,
             }
         });
 
@@ -343,17 +404,18 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
         let app_clone = app.clone();
         let event_name_clone = event_name.clone();
         let plan_id_clone = plan_id.clone();
+        let stderr_monitor = monitor.clone();
 
         // 处理标准错误
         let stderr_handle = tokio::spawn(async move {
             let mut reader = tokio::io::BufReader::new(stderr);
             let mut error_output = String::new();
             if let Err(_) = reader.read_to_string(&mut error_output).await {
-                return;
+                return StderrReadOutcome::none();
             }
 
             if error_output.is_empty() {
-                return;
+                return StderrReadOutcome::none();
             }
 
             log_error!("[stderr] {}", error_output);
@@ -362,6 +424,15 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
             let error_lines: Vec<&str> = error_output
                 .lines()
                 .filter(|line| {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        return false;
+                    }
+                    if should_ignore_stderr_line(trimmed) {
+                        stderr_monitor.note_stderr_warning();
+                        return false;
+                    }
+                    stderr_monitor.note_activity(false);
                     let line_lower = line.to_lowercase();
                     line_lower.contains("error")
                         || line_lower.contains("failed")
@@ -379,11 +450,47 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                     plan_id_clone.as_ref(),
                     &event,
                 );
+                return StderrReadOutcome {
+                    emitted_error: true,
+                };
             }
+
+            StderrReadOutcome::none()
         });
 
-        // 等待进程完成
-        let status = child.wait().await?;
+        let mut timeout_error_message: Option<String> = None;
+
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(exit_status)) => {
+                    monitor.note_process_exit(exit_status.code());
+                    break exit_status;
+                }
+                Ok(None) => {}
+                Err(error) => return Err(error.into()),
+            }
+
+            let snapshot = monitor.snapshot();
+            let now = Instant::now();
+            if let Some(timeout_kind) = detect_cli_timeout(&snapshot, timeout_config, now) {
+                let error_message =
+                    build_timeout_error_message("Claude", timeout_kind, &snapshot, now);
+                log_error!("{}", error_message);
+                let error_event = build_error_event(&session_id, error_message.clone());
+                emit_cli_event(&app, &event_name, plan_id.as_ref(), &error_event);
+                timeout_error_message = Some(error_message);
+
+                if let Err(error) = child.kill().await {
+                    log_error!("终止超时的 Claude CLI 进程失败: {}", error);
+                }
+
+                let exit_status = child.wait().await?;
+                monitor.note_process_exit(exit_status.code());
+                break exit_status;
+            }
+
+            sleep(Duration::from_millis(250)).await;
+        };
         let elapsed = execution_started_at.elapsed();
         log_info!(
             "CLI 执行完成，退出码: {:?}, 耗时: {:.2}s",
@@ -393,35 +500,59 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
 
         // 等待输出处理完成
         let stdout_outcome = stdout_handle.await?;
-        stderr_handle.await?;
+        let stderr_outcome = match stderr_handle.await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                log_error!("[stderr] 任务等待失败: {}", error);
+                StderrReadOutcome::none()
+            }
+        };
+
+        let finished_at = Instant::now();
+        let summary = build_execution_summary(&monitor.snapshot(), finished_at);
+        log_info!("CLI 执行摘要: {}", summary);
 
         // 注销进程 PID
         unregister_session_pid(&session_id).await;
 
-        let done_event = CliStreamEvent {
-            event_type: "done".to_string(),
-            session_id: session_id.clone(),
-            content: None,
-            tool_name: None,
-            tool_call_id: None,
-            tool_input: None,
-            tool_result: None,
-            error: None,
-            input_tokens: None,
-            output_tokens: None,
-            model: None,
-        };
-        emit_cli_event(&app, &event_name, plan_id.as_ref(), &done_event);
+        if timeout_error_message.is_none() {
+            let done_event = CliStreamEvent {
+                event_type: "done".to_string(),
+                session_id: session_id.clone(),
+                content: None,
+                tool_name: None,
+                tool_call_id: None,
+                tool_input: None,
+                tool_result: None,
+                error: None,
+                input_tokens: None,
+                output_tokens: None,
+                model: None,
+            };
+            emit_cli_event(&app, &event_name, plan_id.as_ref(), &done_event);
+        }
 
         // 清理中断标志
         clear_abort_flag(&session_id).await;
 
+        if let Some(error_message) = timeout_error_message {
+            return Err(anyhow::anyhow!(error_message));
+        }
+
         if !status.success() {
-            // 对于非流式 JSON 输出，如果已经输出了内容且没有错误，则视为成功
-            if !is_stream_json && stdout_outcome.emitted_content && !stdout_outcome.emitted_error {
+            if should_treat_process_failure_as_success(&stdout_outcome, &stderr_outcome) {
+                log_info!(
+                    "忽略 CLI 非零/空退出码：已收到有效输出，exit_code={:?}, {}",
+                    status.code(),
+                    summary
+                );
                 return Ok(());
             }
-            return Err(anyhow::anyhow!("CLI 执行失败，退出码: {:?}", status.code()));
+            return Err(anyhow::anyhow!(
+                "CLI 执行失败，退出码: {:?}, {}",
+                status.code(),
+                summary
+            ));
         }
 
         Ok(())
@@ -906,5 +1037,53 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
             log_debug!("[parse] 未处理的事件类型: {}", event_type);
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        should_ignore_stderr_line, should_treat_process_failure_as_success, StderrReadOutcome,
+        StdoutReadOutcome,
+    };
+
+    #[test]
+    fn ignores_rmcp_transport_closed_warning() {
+        let warning = "rmcp::transport::worker: worker quit with fatal: Transport channel closed";
+        assert!(should_ignore_stderr_line(warning));
+    }
+
+    #[test]
+    fn treats_non_zero_exit_as_success_when_valid_output_arrived() {
+        let stdout_outcome = StdoutReadOutcome {
+            emitted_content: true,
+            emitted_error: false,
+            emitted_non_error_event: true,
+        };
+        let stderr_outcome = StderrReadOutcome {
+            emitted_error: false,
+        };
+
+        assert!(should_treat_process_failure_as_success(
+            &stdout_outcome,
+            &stderr_outcome,
+        ));
+    }
+
+    #[test]
+    fn does_not_hide_real_stderr_errors() {
+        let stdout_outcome = StdoutReadOutcome {
+            emitted_content: true,
+            emitted_error: false,
+            emitted_non_error_event: true,
+        };
+        let stderr_outcome = StderrReadOutcome {
+            emitted_error: true,
+        };
+
+        assert!(!should_treat_process_failure_as_success(
+            &stdout_outcome,
+            &stderr_outcome,
+        ));
     }
 }

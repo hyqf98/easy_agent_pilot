@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 #[cfg(target_os = "macos")]
 use std::process::Command;
 
+use super::message::remove_session_uploads;
 use super::support::{now_rfc3339, open_db_connection, open_db_connection_with_foreign_keys};
 
 /// 文件操作结果
@@ -155,6 +156,20 @@ pub struct CreateProjectInput {
     pub description: Option<String>,
     #[serde(default, rename = "memoryLibraryIds")]
     pub memory_library_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectRuntimeCleanupResult {
+    pub project_id: String,
+    pub cleared_sessions: usize,
+    pub cleared_messages: usize,
+    pub cleared_plans: usize,
+    pub cleared_tasks: usize,
+    pub cleared_plan_split_logs: usize,
+    pub cleared_plan_split_sessions: usize,
+    pub cleared_execution_results: usize,
+    pub cleared_execution_logs: usize,
 }
 
 fn normalize_memory_library_ids(library_ids: &[String]) -> Vec<String> {
@@ -405,6 +420,114 @@ pub fn delete_project(id: String) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+#[tauri::command]
+pub fn clear_project_runtime_data(
+    project_id: String,
+) -> Result<ProjectRuntimeCleanupResult, String> {
+    let mut conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+
+    let session_ids = {
+        let mut stmt = conn
+            .prepare("SELECT id FROM sessions WHERE project_id = ?1")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([&project_id], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?
+    };
+
+    let cleared_sessions = session_ids.len();
+    let cleared_messages: usize = conn
+        .query_row(
+            "SELECT COUNT(*) FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?1)",
+            [&project_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let cleared_plans: usize = conn
+        .query_row(
+            "SELECT COUNT(*) FROM plans WHERE project_id = ?1",
+            [&project_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let cleared_tasks: usize = conn
+        .query_row(
+            "SELECT COUNT(*) FROM tasks WHERE plan_id IN (SELECT id FROM plans WHERE project_id = ?1)",
+            [&project_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let cleared_plan_split_logs: usize = conn
+        .query_row(
+            "SELECT COUNT(*) FROM plan_split_logs WHERE plan_id IN (SELECT id FROM plans WHERE project_id = ?1)",
+            [&project_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let cleared_plan_split_sessions: usize = conn
+        .query_row(
+            "SELECT COUNT(*) FROM task_split_sessions WHERE plan_id IN (SELECT id FROM plans WHERE project_id = ?1)",
+            [&project_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let cleared_execution_results: usize = conn
+        .query_row(
+            "SELECT COUNT(*) FROM task_execution_results WHERE plan_id IN (SELECT id FROM plans WHERE project_id = ?1)",
+            [&project_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let cleared_execution_logs: usize = conn
+        .query_row(
+            "SELECT COUNT(*) FROM task_execution_logs WHERE task_id IN (
+                SELECT id FROM tasks WHERE plan_id IN (SELECT id FROM plans WHERE project_id = ?1)
+            )",
+            [&project_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    let now = now_rfc3339();
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+    tx.execute(
+        "DELETE FROM window_session_locks WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?1)",
+        [&project_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    tx.execute("DELETE FROM sessions WHERE project_id = ?1", [&project_id])
+        .map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM plans WHERE project_id = ?1", [&project_id])
+        .map_err(|e| e.to_string())?;
+    tx.execute(
+        "UPDATE projects SET updated_at = ?1 WHERE id = ?2",
+        rusqlite::params![&now, &project_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    tx.commit().map_err(|e| e.to_string())?;
+
+    for session_id in &session_ids {
+        remove_session_uploads(session_id)?;
+    }
+
+    Ok(ProjectRuntimeCleanupResult {
+        project_id,
+        cleared_sessions,
+        cleared_messages,
+        cleared_plans,
+        cleared_tasks,
+        cleared_plan_split_logs,
+        cleared_plan_split_sessions,
+        cleared_execution_results,
+        cleared_execution_logs,
+    })
 }
 
 /// 路径验证结果

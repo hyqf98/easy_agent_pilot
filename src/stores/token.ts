@@ -263,6 +263,18 @@ export const useTokenStore = defineStore('token', () => {
     persistSessionTokenCaches()
   }
 
+  function clearProjectSessionTokenCaches(sessionIds: string[]) {
+    if (sessionIds.length === 0) {
+      return
+    }
+
+    sessionIds.forEach((sessionId) => {
+      sessionTokenCaches.value.delete(sessionId)
+      realtimeTokens.value.delete(sessionId)
+    })
+    persistSessionTokenCaches()
+  }
+
   /**
    * 清除所有 token 缓存
    */
@@ -284,6 +296,7 @@ export const useTokenStore = defineStore('token', () => {
     clearRealtimeTokens,
     updateSessionTokenCache,
     clearSessionTokenCache,
+    clearProjectSessionTokenCaches,
     clearAllTokenCaches,
     // Utils
     formatTokenCount

@@ -148,6 +148,12 @@ export const useAiEditTraceStore = defineStore('aiEditTrace', () => {
     delete sessionStates[sessionId]
   }
 
+  function resetSessions(sessionIds: string[]) {
+    sessionIds.forEach((sessionId) => {
+      delete sessionStates[sessionId]
+    })
+  }
+
   function findSelectedTrace(sessionId: string, traces: Array<FileEditTrace & { messageId: string }>) {
     const state = ensureState(sessionId)
 
@@ -167,6 +173,7 @@ export const useAiEditTraceStore = defineStore('aiEditTrace', () => {
     toggleAutoFollow,
     setPaneWidth,
     resetSession,
+    resetSessions,
     findSelectedTrace
   }
 })

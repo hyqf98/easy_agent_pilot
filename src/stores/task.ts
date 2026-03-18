@@ -695,6 +695,22 @@ export const useTaskStore = defineStore('task', () => {
     }
   }
 
+  function clearPlansTasks(planIds: string[]): void {
+    if (planIds.length === 0) {
+      return
+    }
+
+    const planIdSet = new Set(planIds)
+    tasks.value = tasks.value.filter(task => !planIdSet.has(task.planId))
+
+    if (currentTaskId.value) {
+      const currentTask = tasks.value.find(task => task.id === currentTaskId.value)
+      if (!currentTask) {
+        currentTaskId.value = null
+      }
+    }
+  }
+
   return {
     // State
     tasks,
@@ -729,6 +745,7 @@ export const useTaskStore = defineStore('task', () => {
     createTasksFromSplit,
     // 清理操作
     clearPlanTasks,
+    clearPlansTasks,
     // 编辑对话框
     editDialogVisible,
     editingTask,

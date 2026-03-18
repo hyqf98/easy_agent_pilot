@@ -43,7 +43,7 @@ const COMMANDS: SlashCommandDescriptor[] = [
   },
   {
     name: 'compact',
-    aliases: ['compress'],
+    aliases: ['compress', 'compect'],
     scopes: ['main', 'mini'],
     descriptionKey: 'message.slash.compactDesc',
     usageKey: 'message.slash.compactUsage',

@@ -12,6 +12,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -22,6 +26,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: install pnpm
         uses: pnpm/action-setup@v4
@@ -29,7 +35,7 @@ jobs:
           version: 9
 
       - name: install frontend dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile --prefer-offline
 
       - name: run linter
         run: pnpm lint
@@ -65,6 +71,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: install pnpm
         uses: pnpm/action-setup@v4
@@ -82,7 +90,7 @@ jobs:
           workspaces: './src-tauri -> target'
 
       - name: install frontend dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile --prefer-offline
 
       - name: build the app
         run: pnpm tauri build ${{ matrix.args }}

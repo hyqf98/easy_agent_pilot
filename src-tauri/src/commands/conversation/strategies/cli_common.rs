@@ -1,3 +1,6 @@
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
 use tauri::{AppHandle, Emitter};
 
 use crate::commands::conversation::types::CliStreamEvent;
@@ -59,6 +62,189 @@ pub fn build_error_event(session_id: &str, error: String) -> CliStreamEvent {
         output_tokens: None,
         model: None,
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CliTimeoutKind {
+    Startup,
+    Idle,
+    Hard,
+}
+
+impl CliTimeoutKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Startup => "startup_timeout",
+            Self::Idle => "idle_timeout",
+            Self::Hard => "hard_timeout",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CliTimeoutConfig {
+    pub startup: Duration,
+    pub idle: Duration,
+    pub hard: Duration,
+}
+
+impl Default for CliTimeoutConfig {
+    fn default() -> Self {
+        Self {
+            startup: Duration::from_secs(60),
+            idle: Duration::from_secs(180),
+            hard: Duration::from_secs(900),
+        }
+    }
+}
+
+pub fn timeout_config_for_execution_mode(execution_mode: Option<&str>) -> CliTimeoutConfig {
+    if matches!(execution_mode, Some("task_split")) {
+        return CliTimeoutConfig {
+            startup: Duration::from_secs(180),
+            idle: Duration::from_secs(240),
+            hard: Duration::from_secs(900),
+        };
+    }
+
+    CliTimeoutConfig::default()
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CliExecutionSnapshot {
+    pub started_at: Instant,
+    pub first_meaningful_event_at: Option<Instant>,
+    pub last_activity_at: Option<Instant>,
+    pub process_exited_at: Option<Instant>,
+    pub stderr_warning_count: u32,
+    pub exit_code: Option<i32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CliExecutionMonitor {
+    state: Arc<Mutex<CliExecutionSnapshot>>,
+}
+
+impl CliExecutionMonitor {
+    pub fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(CliExecutionSnapshot {
+                started_at: Instant::now(),
+                first_meaningful_event_at: None,
+                last_activity_at: None,
+                process_exited_at: None,
+                stderr_warning_count: 0,
+                exit_code: None,
+            })),
+        }
+    }
+
+    pub fn note_activity(&self, meaningful: bool) {
+        let now = Instant::now();
+        let mut state = self.state.lock().expect("cli monitor poisoned");
+        state.last_activity_at = Some(now);
+        if meaningful && state.first_meaningful_event_at.is_none() {
+            state.first_meaningful_event_at = Some(now);
+        }
+    }
+
+    pub fn note_stderr_warning(&self) {
+        let now = Instant::now();
+        let mut state = self.state.lock().expect("cli monitor poisoned");
+        state.last_activity_at = Some(now);
+        state.stderr_warning_count += 1;
+    }
+
+    pub fn note_process_exit(&self, exit_code: Option<i32>) {
+        let mut state = self.state.lock().expect("cli monitor poisoned");
+        state.process_exited_at = Some(Instant::now());
+        state.exit_code = exit_code;
+    }
+
+    pub fn snapshot(&self) -> CliExecutionSnapshot {
+        *self.state.lock().expect("cli monitor poisoned")
+    }
+}
+
+pub fn detect_cli_timeout(
+    snapshot: &CliExecutionSnapshot,
+    config: CliTimeoutConfig,
+    now: Instant,
+) -> Option<CliTimeoutKind> {
+    if now.duration_since(snapshot.started_at) >= config.hard {
+        return Some(CliTimeoutKind::Hard);
+    }
+
+    if snapshot.first_meaningful_event_at.is_none()
+        && now.duration_since(snapshot.started_at) >= config.startup
+    {
+        return Some(CliTimeoutKind::Startup);
+    }
+
+    if snapshot.first_meaningful_event_at.is_some() {
+        let last_activity_at = snapshot.last_activity_at.unwrap_or(snapshot.started_at);
+        if now.duration_since(last_activity_at) >= config.idle {
+            return Some(CliTimeoutKind::Idle);
+        }
+    }
+
+    None
+}
+
+pub fn build_timeout_error_message(
+    provider: &str,
+    timeout_kind: CliTimeoutKind,
+    snapshot: &CliExecutionSnapshot,
+    now: Instant,
+) -> String {
+    let total_secs = now.duration_since(snapshot.started_at).as_secs_f64();
+    let first_event_secs = snapshot
+        .first_meaningful_event_at
+        .map(|ts| ts.duration_since(snapshot.started_at).as_secs_f64());
+    let idle_secs = snapshot
+        .last_activity_at
+        .map(|ts| now.duration_since(ts).as_secs_f64())
+        .unwrap_or(total_secs);
+
+    format!(
+        "{provider} CLI {timeout_kind} after {total_secs:.1}s (first_meaningful={first_event}, idle={idle_secs:.1}s, stderr_warnings={}, exit_code={:?})",
+        snapshot.stderr_warning_count,
+        snapshot.exit_code,
+        timeout_kind = timeout_kind.as_str(),
+        first_event = first_event_secs
+            .map(|secs| format!("{secs:.1}s"))
+            .unwrap_or_else(|| "none".to_string())
+    )
+}
+
+pub fn build_execution_summary(snapshot: &CliExecutionSnapshot, finished_at: Instant) -> String {
+    let total_secs = finished_at
+        .duration_since(snapshot.started_at)
+        .as_secs_f64();
+    let first_event_secs = snapshot
+        .first_meaningful_event_at
+        .map(|ts| ts.duration_since(snapshot.started_at).as_secs_f64());
+    let last_activity_secs = snapshot
+        .last_activity_at
+        .map(|ts| ts.duration_since(snapshot.started_at).as_secs_f64());
+    let process_exit_secs = snapshot
+        .process_exited_at
+        .map(|ts| ts.duration_since(snapshot.started_at).as_secs_f64());
+
+    format!(
+        "elapsed={total_secs:.2}s, first_meaningful={}, last_activity={}, process_exit={}, stderr_warnings={}, exit_code={:?}",
+        first_event_secs
+            .map(|secs| format!("{secs:.2}s"))
+            .unwrap_or_else(|| "none".to_string()),
+        last_activity_secs
+            .map(|secs| format!("{secs:.2}s"))
+            .unwrap_or_else(|| "none".to_string()),
+        process_exit_secs
+            .map(|secs| format!("{secs:.2}s"))
+            .unwrap_or_else(|| "none".to_string()),
+        snapshot.stderr_warning_count,
+        snapshot.exit_code
+    )
 }
 
 pub fn shell_escape(value: &str) -> String {
@@ -255,4 +441,89 @@ fn extract_tool_output_from_result(parsed: &serde_json::Value) -> Option<String>
     }
 
     Some(output_parts.join("\n\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_timeout_error_message, detect_cli_timeout, CliExecutionSnapshot, CliTimeoutConfig,
+        CliTimeoutKind,
+    };
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn detects_startup_timeout_before_any_meaningful_output() {
+        let started_at = Instant::now();
+        let snapshot = CliExecutionSnapshot {
+            started_at,
+            first_meaningful_event_at: None,
+            last_activity_at: None,
+            process_exited_at: None,
+            stderr_warning_count: 0,
+            exit_code: None,
+        };
+
+        let timeout = detect_cli_timeout(
+            &snapshot,
+            CliTimeoutConfig {
+                startup: Duration::from_secs(5),
+                idle: Duration::from_secs(30),
+                hard: Duration::from_secs(60),
+            },
+            started_at + Duration::from_secs(6),
+        );
+
+        assert_eq!(timeout, Some(CliTimeoutKind::Startup));
+    }
+
+    #[test]
+    fn detects_idle_timeout_after_meaningful_output() {
+        let started_at = Instant::now();
+        let first_event_at = started_at + Duration::from_secs(2);
+        let snapshot = CliExecutionSnapshot {
+            started_at,
+            first_meaningful_event_at: Some(first_event_at),
+            last_activity_at: Some(first_event_at),
+            process_exited_at: None,
+            stderr_warning_count: 1,
+            exit_code: None,
+        };
+
+        let timeout = detect_cli_timeout(
+            &snapshot,
+            CliTimeoutConfig {
+                startup: Duration::from_secs(5),
+                idle: Duration::from_secs(10),
+                hard: Duration::from_secs(60),
+            },
+            first_event_at + Duration::from_secs(11),
+        );
+
+        assert_eq!(timeout, Some(CliTimeoutKind::Idle));
+    }
+
+    #[test]
+    fn timeout_error_message_contains_diagnostics() {
+        let started_at = Instant::now();
+        let first_event_at = started_at + Duration::from_secs(1);
+        let snapshot = CliExecutionSnapshot {
+            started_at,
+            first_meaningful_event_at: Some(first_event_at),
+            last_activity_at: Some(first_event_at + Duration::from_secs(2)),
+            process_exited_at: None,
+            stderr_warning_count: 3,
+            exit_code: None,
+        };
+
+        let message = build_timeout_error_message(
+            "Codex",
+            CliTimeoutKind::Idle,
+            &snapshot,
+            started_at + Duration::from_secs(20),
+        );
+
+        assert!(message.contains("Codex CLI idle_timeout"));
+        assert!(message.contains("stderr_warnings=3"));
+        assert!(message.contains("first_meaningful=1.0s"));
+    }
 }

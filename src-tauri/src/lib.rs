@@ -133,6 +133,7 @@ pub fn run() {
             commands::project::create_project,
             commands::project::update_project,
             commands::project::delete_project,
+            commands::project::clear_project_runtime_data,
             commands::project::validate_project_path,
             commands::project::list_project_files,
             commands::project::load_directory_children,

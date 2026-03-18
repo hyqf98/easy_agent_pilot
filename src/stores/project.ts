@@ -35,6 +35,18 @@ export interface FileOperationResult {
   newPath?: string
 }
 
+export interface ProjectRuntimeCleanupResult {
+  projectId: string
+  clearedSessions: number
+  clearedMessages: number
+  clearedPlans: number
+  clearedTasks: number
+  clearedPlanSplitLogs: number
+  clearedPlanSplitSessions: number
+  clearedExecutionResults: number
+  clearedExecutionLogs: number
+}
+
 /// 重命名文件输入
 export interface RenameFileInput {
   oldPath: string
@@ -206,6 +218,68 @@ export const useProjectStore = defineStore('project', () => {
         '删除项目失败',
         getErrorMessage(error),
         async () => { await deleteProject(id) }
+      )
+      throw error
+    }
+  }
+
+  async function clearProjectRuntimeData(projectId: string): Promise<ProjectRuntimeCleanupResult> {
+    const notificationStore = useNotificationStore()
+
+    try {
+      const [
+        { useSessionStore },
+        { useMessageStore },
+        { useTokenStore },
+        { useAiEditTraceStore },
+        { usePlanStore },
+        { useTaskStore },
+        { useTaskExecutionStore },
+        { useTaskSplitStore }
+      ] = await Promise.all([
+        import('./session'),
+        import('./message'),
+        import('./token'),
+        import('./aiEditTrace'),
+        import('./plan'),
+        import('./task'),
+        import('./taskExecution'),
+        import('./taskSplit')
+      ])
+
+      const sessionStore = useSessionStore()
+      const planStore = usePlanStore()
+      await sessionStore.loadSessions(projectId)
+      await planStore.loadPlans(projectId)
+      const sessionIds = sessionStore.sessions
+        .filter(session => session.projectId === projectId)
+        .map(session => session.id)
+      const planIds = planStore.plans
+        .filter(plan => plan.projectId === projectId)
+        .map(plan => plan.id)
+
+      const result = await invoke<ProjectRuntimeCleanupResult>('clear_project_runtime_data', { projectId })
+
+      await sessionStore.clearProjectSessions(projectId)
+      const project = projects.value.find(item => item.id === projectId)
+      if (project) {
+        project.sessionCount = sessionStore.sessions.filter(session => session.projectId === projectId).length
+      }
+      useMessageStore().clearProjectMessages(sessionIds)
+      useTokenStore().clearProjectSessionTokenCaches(sessionIds)
+      useAiEditTraceStore().resetSessions(sessionIds)
+      useTaskSplitStore().clearProjectSplitState(planIds)
+      planStore.clearProjectPlans(projectId)
+      useTaskExecutionStore().clearPlansExecution(planIds)
+      useTaskStore().clearPlansTasks(planIds)
+
+      return result
+    } catch (error) {
+      console.error('Failed to clear project runtime data:', error)
+      notificationStore.databaseError(
+        '清理项目运行数据失败',
+        getErrorMessage(error),
+        async () => { await clearProjectRuntimeData(projectId) }
       )
       throw error
     }
@@ -475,6 +549,7 @@ export const useProjectStore = defineStore('project', () => {
     createProject,
     updateProject,
     deleteProject,
+    clearProjectRuntimeData,
     setCurrentProject,
     incrementSessionCount,
     decrementSessionCount,

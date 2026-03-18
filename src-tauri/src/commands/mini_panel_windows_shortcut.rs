@@ -75,8 +75,9 @@ pub fn register_shortcut(app: AppHandle, shortcut: String) -> Result<(), String>
         let thread_id = unsafe { GetCurrentThreadId() };
         *ACTIVE_RUNTIME.lock() = Some(worker_runtime);
 
-        let hook =
-            unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(low_level_keyboard_proc), null_mut(), 0) };
+        let hook = unsafe {
+            SetWindowsHookExW(WH_KEYBOARD_LL, Some(low_level_keyboard_proc), null_mut(), 0)
+        };
         if hook.is_null() {
             *ACTIVE_RUNTIME.lock() = None;
             let _ = ready_tx.send(Err("WINDOWS_SHORTCUT_OVERRIDE_FAILED".to_string()));

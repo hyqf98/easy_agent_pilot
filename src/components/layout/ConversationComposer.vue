@@ -142,7 +142,8 @@ onUnmounted(() => {
 
 defineExpose({
   focusInput,
-  handleMessageFormSubmit
+  handleMessageFormSubmit,
+  openCompressionDialog: handleOpenCompress
 })
 </script>
 
@@ -157,6 +158,22 @@ defineExpose({
       'conversation-composer--drag-over': isDragOver
     }"
   >
+    <div
+      v-if="hideStatusBar && showWorkingDirectory && currentWorkingDirectory"
+      class="conversation-composer__path-row"
+    >
+      <div
+        class="conversation-composer__path"
+        :title="currentWorkingDirectory"
+      >
+        <EaIcon
+          name="folder-open"
+          :size="12"
+        />
+        <span>{{ currentWorkingDirectory }}</span>
+      </div>
+    </div>
+
     <div
       v-if="!isMainPanel && !hideStatusBar"
       class="conversation-composer__status"
@@ -595,6 +612,12 @@ defineExpose({
 .conversation-composer__status,
 .conversation-composer__toolbar {
   justify-content: space-between;
+}
+
+.conversation-composer__path-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
 }
 
 .conversation-composer__status-left,

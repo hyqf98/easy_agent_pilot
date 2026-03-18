@@ -428,6 +428,19 @@ export class CompressionService {
     const settingsStore = useSettingsStore()
     const tokenStore = useTokenStore()
     const notificationStore = useNotificationStore()
+    const messageStore = useMessageStore()
+
+    const meaningfulMessages = messageStore
+      .messagesBySession(sessionId)
+      .filter(message => message.role !== 'compression')
+
+    // 短会话自动压缩会引入额外的 CLI 调用，先用消息数做硬门槛避免误触发。
+    if (meaningfulMessages.length < 8) {
+      console.log(
+        `[CompressionService] 跳过自动压缩: 消息数不足 (${meaningfulMessages.length}/8)`
+      )
+      return false
+    }
 
     // 检查是否启用自动压缩
     if (!settingsStore.settings.autoCompressionEnabled) {
@@ -442,6 +455,13 @@ export class CompressionService {
     // 获取当前 token 使用情况
     const usage = tokenStore.getTokenUsage(sessionId)
     const threshold = settingsStore.settings.compressionThreshold
+
+    if (usage.used < 8000) {
+      console.log(
+        `[CompressionService] 跳过自动压缩: token 使用量不足 (${usage.used}/8000)`
+      )
+      return false
+    }
 
     console.log(`[CompressionService] 检查自动压缩: ${usage.percentage.toFixed(1)}% >= ${threshold}%`)
 

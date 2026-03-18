@@ -17,6 +17,7 @@ const sessionExecutionStore = useSessionExecutionStore()
 
 type ComposerExposed = ComponentPublicInstance & {
   focusInput: () => void
+  openCompressionDialog: () => void
 }
 
 const composerRef = ref<ComposerExposed | null>(null)
@@ -29,6 +30,10 @@ const toPendingImages = (attachments: MessageAttachment[]) => attachments.map(at
 
 async function hideMiniPanel() {
   await invoke('hide_mini_panel')
+}
+
+function handleOpenCompress() {
+  composerRef.value?.openCompressionDialog()
 }
 
 async function handleRetry(message: Message) {
@@ -79,7 +84,9 @@ onUnmounted(() => {
 <template>
   <div class="mini-panel">
     <header class="mini-panel__header">
-      <TokenProgressBar />
+      <div class="mini-panel__token-bar">
+        <TokenProgressBar @compress="handleOpenCompress" />
+      </div>
       <button
         class="mini-panel__close"
         @click="hideMiniPanel"
@@ -106,6 +113,7 @@ onUnmounted(() => {
         :session-id="miniPanelStore.sessionId"
         :working-directory="miniPanelStore.workingDirectory"
         :set-working-directory="miniPanelStore.setWorkingDirectory"
+        show-working-directory
         hide-status-bar
         compact
         class="mini-panel__composer"
@@ -129,9 +137,19 @@ onUnmounted(() => {
 .mini-panel__header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
+  position: relative;
   padding: 14px 18px 10px;
+  min-height: 56px;
+}
+
+.mini-panel__token-bar {
+  position: absolute;
+  left: 50%;
+  top: 14px;
+  transform: translateX(-50%);
+  width: min(320px, calc(100% - 88px));
 }
 
 .mini-panel__close {
@@ -146,6 +164,7 @@ onUnmounted(() => {
   background: rgba(255, 255, 255, 0.88);
   color: var(--color-text-secondary);
   transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+  z-index: 1;
 }
 
 .mini-panel__close:hover {
@@ -189,14 +208,13 @@ onUnmounted(() => {
   box-shadow: 0 12px 30px rgba(15, 23, 42, 0.05);
 }
 
-:deep(.mini-panel__header .token-progress) {
-  flex: 1;
-  min-width: 0;
+:deep(.mini-panel__token-bar .token-progress) {
+  width: 100%;
 }
 
 :deep(.mini-panel__composer.conversation-composer) {
   padding: 12px;
-  gap: 0;
+  gap: 8px;
   background: transparent;
 }
 
