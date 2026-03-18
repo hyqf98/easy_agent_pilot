@@ -532,14 +532,58 @@ onUnmounted(() => {
 
 <style scoped>
 .memory-mode {
+  --memory-bg-top: rgba(191, 219, 254, 0.18);
+  --memory-bg-bottom: rgba(251, 191, 36, 0.12);
+  --memory-bg-surface-start: rgba(255, 255, 255, 0.94);
+  --memory-bg-surface-end: rgba(248, 250, 252, 0.92);
+  --memory-panel-border: rgba(148, 163, 184, 0.18);
+  --memory-panel-border-strong: rgba(148, 163, 184, 0.45);
+  --memory-card-bg: rgba(255, 255, 255, 0.9);
+  --memory-card-hover-border: rgba(14, 116, 144, 0.28);
+  --memory-card-hover-shadow: rgba(14, 116, 144, 0.08);
+  --memory-card-active-border: rgba(15, 118, 110, 0.38);
+  --memory-card-active-shadow: rgba(15, 118, 110, 0.12);
+  --memory-card-shadow: rgba(15, 23, 42, 0.04);
+  --memory-heading-color: var(--color-text-primary);
+  --memory-muted-color: var(--color-text-secondary);
+  --memory-accent-color: #0f766e;
+  --memory-danger-color: #b91c1c;
+  --memory-textarea-bg-start: rgba(255, 255, 255, 0.94);
+  --memory-textarea-bg-end: rgba(248, 250, 252, 0.96);
+  --memory-textarea-focus-border: rgba(15, 118, 110, 0.42);
+  --memory-textarea-focus-shadow: rgba(15, 118, 110, 0.12);
+  --memory-textarea-inner-shadow: rgba(255, 255, 255, 0.6);
   display: grid;
   grid-template-columns: 300px minmax(0, 1.1fr) minmax(380px, 0.9fr);
   height: 100%;
   min-width: 0;
   background:
-    radial-gradient(circle at top left, rgba(191, 219, 254, 0.18), transparent 28%),
-    radial-gradient(circle at bottom right, rgba(251, 191, 36, 0.12), transparent 24%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(248, 250, 252, 0.92));
+    radial-gradient(circle at top left, var(--memory-bg-top), transparent 28%),
+    radial-gradient(circle at bottom right, var(--memory-bg-bottom), transparent 24%),
+    linear-gradient(180deg, var(--memory-bg-surface-start), var(--memory-bg-surface-end));
+}
+
+[data-theme='dark'] .memory-mode,
+.dark .memory-mode {
+  --memory-bg-top: rgba(59, 130, 246, 0.14);
+  --memory-bg-bottom: rgba(245, 158, 11, 0.08);
+  --memory-bg-surface-start: rgba(15, 23, 42, 0.98);
+  --memory-bg-surface-end: rgba(17, 24, 39, 0.96);
+  --memory-panel-border: rgba(71, 85, 105, 0.5);
+  --memory-panel-border-strong: rgba(71, 85, 105, 0.72);
+  --memory-card-bg: rgba(15, 23, 42, 0.82);
+  --memory-card-hover-border: rgba(56, 189, 248, 0.4);
+  --memory-card-hover-shadow: rgba(8, 145, 178, 0.18);
+  --memory-card-active-border: rgba(45, 212, 191, 0.42);
+  --memory-card-active-shadow: rgba(20, 184, 166, 0.22);
+  --memory-card-shadow: rgba(2, 6, 23, 0.3);
+  --memory-accent-color: #5eead4;
+  --memory-danger-color: #fca5a5;
+  --memory-textarea-bg-start: rgba(15, 23, 42, 0.96);
+  --memory-textarea-bg-end: rgba(30, 41, 59, 0.98);
+  --memory-textarea-focus-border: rgba(45, 212, 191, 0.46);
+  --memory-textarea-focus-shadow: rgba(45, 212, 191, 0.18);
+  --memory-textarea-inner-shadow: rgba(255, 255, 255, 0.04);
 }
 
 .memory-mode__libraries,
@@ -555,7 +599,7 @@ onUnmounted(() => {
 
 .memory-mode__libraries,
 .memory-mode__records {
-  border-right: 1px solid rgba(148, 163, 184, 0.18);
+  border-right: 1px solid var(--memory-panel-border);
 }
 
 .memory-panel-heading {
@@ -567,7 +611,7 @@ onUnmounted(() => {
 
 .memory-panel-heading h2 {
   margin: 2px 0 0;
-  color: #0f172a;
+  color: var(--memory-heading-color);
   line-height: 1;
   font-size: 30px;
   font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
@@ -575,7 +619,7 @@ onUnmounted(() => {
 
 .memory-panel-heading__eyebrow {
   margin: 0;
-  color: #64748b;
+  color: var(--memory-muted-color);
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.14em;
@@ -583,10 +627,10 @@ onUnmounted(() => {
 
 .memory-empty {
   padding: 18px;
-  border: 1px dashed rgba(148, 163, 184, 0.45);
+  border: 1px dashed var(--memory-panel-border-strong);
   border-radius: 20px;
-  background: rgba(255, 255, 255, 0.8);
-  color: #64748b;
+  background: color-mix(in srgb, var(--memory-card-bg) 92%, transparent);
+  color: var(--memory-muted-color);
   line-height: 1.7;
 }
 
@@ -604,10 +648,10 @@ onUnmounted(() => {
 .memory-record-card,
 .memory-record-preview,
 .memory-merge-history__item {
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  border: 1px solid var(--memory-panel-border);
   border-radius: 22px;
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.04);
+  background: var(--memory-card-bg);
+  box-shadow: 0 20px 50px var(--memory-card-shadow);
 }
 
 .memory-library-card {
@@ -620,14 +664,14 @@ onUnmounted(() => {
 .memory-library-card:hover,
 .memory-record-card:hover {
   transform: translateY(-1px);
-  border-color: rgba(14, 116, 144, 0.28);
-  box-shadow: 0 24px 50px rgba(14, 116, 144, 0.08);
+  border-color: var(--memory-card-hover-border);
+  box-shadow: 0 24px 50px var(--memory-card-hover-shadow);
 }
 
 .memory-library-card--active,
 .memory-record-card--active {
-  border-color: rgba(15, 118, 110, 0.38);
-  box-shadow: 0 24px 50px rgba(15, 118, 110, 0.12);
+  border-color: var(--memory-card-active-border);
+  box-shadow: 0 24px 50px var(--memory-card-active-shadow);
 }
 
 .memory-library-card__head {
@@ -638,14 +682,14 @@ onUnmounted(() => {
 
 .memory-library-card__head strong {
   display: block;
-  color: #0f172a;
+  color: var(--memory-heading-color);
   font-size: 16px;
 }
 
 .memory-library-card__head p,
 .memory-merge-history__item p {
   margin: 6px 0 0;
-  color: #64748b;
+  color: var(--memory-muted-color);
   line-height: 1.6;
 }
 
@@ -654,7 +698,7 @@ onUnmounted(() => {
 .memory-record-card__meta,
 .memory-library-editor__toolbar,
 .memory-merge-history__meta {
-  color: #64748b;
+  color: var(--memory-muted-color);
   font-size: 12px;
 }
 
@@ -671,14 +715,14 @@ onUnmounted(() => {
 .memory-inline-action {
   border: none;
   background: transparent;
-  color: #0f766e;
+  color: var(--memory-accent-color);
   cursor: pointer;
   padding: 0;
   font-size: 13px;
 }
 
 .memory-inline-action--danger {
-  color: #b91c1c;
+  color: var(--memory-danger-color);
 }
 
 .memory-filters,
@@ -697,7 +741,7 @@ onUnmounted(() => {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
-  color: #64748b;
+  color: var(--memory-muted-color);
   font-size: 13px;
 }
 
@@ -718,7 +762,7 @@ onUnmounted(() => {
 
 .memory-record-card__content p {
   margin: 12px 0;
-  color: #0f172a;
+  color: var(--memory-heading-color);
   line-height: 1.7;
   display: -webkit-box;
   -webkit-line-clamp: 4;
@@ -738,25 +782,25 @@ onUnmounted(() => {
 
 .memory-record-preview__head strong {
   display: block;
-  color: #0f172a;
+  color: var(--memory-heading-color);
 }
 
 .memory-record-preview__head span {
   font-size: 12px;
-  color: #64748b;
+  color: var(--memory-muted-color);
 }
 
 .memory-record-preview pre {
   margin: 14px 0 0;
   white-space: pre-wrap;
   word-break: break-word;
-  color: #0f172a;
+  color: var(--memory-heading-color);
   line-height: 1.75;
 }
 
 .memory-library-editor__desc {
   margin: 10px 0 0;
-  color: #64748b;
+  color: var(--memory-muted-color);
   line-height: 1.7;
 }
 
@@ -765,19 +809,19 @@ onUnmounted(() => {
   min-height: 320px;
   resize: none;
   padding: 18px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  border: 1px solid var(--memory-panel-border);
   border-radius: 24px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(248, 250, 252, 0.96));
-  color: #111827;
+    linear-gradient(180deg, var(--memory-textarea-bg-start), var(--memory-textarea-bg-end));
+  color: var(--memory-heading-color);
   font: 500 14px/1.8 var(--font-family-mono, "SFMono-Regular", Consolas, monospace);
   outline: none;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  box-shadow: inset 0 1px 0 var(--memory-textarea-inner-shadow);
 }
 
 .memory-library-editor__textarea:focus {
-  border-color: rgba(15, 118, 110, 0.42);
-  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.12);
+  border-color: var(--memory-textarea-focus-border);
+  box-shadow: 0 0 0 2px var(--memory-textarea-focus-shadow);
 }
 
 .memory-merge-history {
@@ -792,11 +836,11 @@ onUnmounted(() => {
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  color: #0f172a;
+  color: var(--memory-heading-color);
 }
 
 .memory-merge-history__empty {
-  color: #64748b;
+  color: var(--memory-muted-color);
   font-size: 13px;
 }
 
@@ -825,7 +869,7 @@ onUnmounted(() => {
   .memory-mode__libraries,
   .memory-mode__records {
     border-right: none;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+    border-bottom: 1px solid var(--memory-panel-border);
   }
 
   .memory-library-editor__textarea {

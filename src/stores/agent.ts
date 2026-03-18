@@ -43,6 +43,28 @@ export interface AgentConfig {
   updatedAt: string
 }
 
+export function inferAgentProvider(
+  agent?: Pick<AgentConfig, 'provider' | 'name' | 'cliPath'> | null
+): AgentProvider | undefined {
+  if (!agent) {
+    return undefined
+  }
+
+  if (agent.provider === 'claude' || agent.provider === 'codex') {
+    return agent.provider
+  }
+
+  const hint = `${agent.name || ''} ${agent.cliPath || ''}`.toLowerCase()
+  if (hint.includes('claude')) {
+    return 'claude'
+  }
+  if (hint.includes('codex')) {
+    return 'codex'
+  }
+
+  return undefined
+}
+
 // 后端返回的原始数据结构（snake_case）
 interface RawAgentData {
   id: string

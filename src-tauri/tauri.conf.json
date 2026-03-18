@@ -32,10 +32,10 @@
   "bundle": {
     "active": true,
     "targets": ["nsis", "msi", "dmg", "app", "deb", "rpm", "appimage"],
-    "resources": [
-      "../scripts",
-      "../node_modules/.pnpm/playwright-core@1.58.2/node_modules/playwright-core"
-    ],
+    "resources": {
+      "../scripts/mcpmarket-fetcher.mjs": "scripts/mcpmarket-fetcher.mjs",
+      "../node_modules/.pnpm/playwright-core@1.58.2/node_modules/playwright-core/": "playwright-core/"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

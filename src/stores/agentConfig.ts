@@ -572,6 +572,20 @@ export const useAgentConfigStore = defineStore('agentConfig', () => {
     }
   }
 
+  async function ensureModelsConfigs(agentId: string, provider?: string) {
+    const configs = await loadModelsConfigs(agentId)
+    if (configs.length > 0 || !provider) {
+      return configs
+    }
+
+    try {
+      return await initBuiltinModels(agentId, provider)
+    } catch (error) {
+      console.error('Failed to ensure model configs:', error)
+      return getModelsConfigs(agentId)
+    }
+  }
+
   async function createModelConfig(config: Omit<AgentModelConfig, 'id' | 'createdAt' | 'updatedAt'>) {
     const notificationStore = useNotificationStore()
     try {
@@ -745,6 +759,7 @@ export const useAgentConfigStore = defineStore('agentConfig', () => {
     getPluginsConfigs,
     // Model Actions
     loadModelsConfigs,
+    ensureModelsConfigs,
     createModelConfig,
     initBuiltinModels,
     updateModelConfig,

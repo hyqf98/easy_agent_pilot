@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { useAgentStore, useAgentConfigStore } from '@/stores'
+import { inferAgentProvider } from '@/stores/agent'
 import type { AgentModelConfig } from '@/stores/agentConfig'
 import type { AITaskItem, TaskResplitConfig } from '@/types/plan'
 import { useOverlayDismiss } from '@/composables/useOverlayDismiss'
@@ -71,7 +72,8 @@ watch(() => props.visible, (newVisible) => {
     resetForm()
     // 加载选中 agent 的模型列表
     if (selectedAgentId.value) {
-      agentConfigStore.loadModelsConfigs(selectedAgentId.value)
+      const provider = inferAgentProvider(agentStore.agents.find(agent => agent.id === selectedAgentId.value))
+      void agentConfigStore.ensureModelsConfigs(selectedAgentId.value, provider)
     }
   }
 })
@@ -79,7 +81,8 @@ watch(() => props.visible, (newVisible) => {
 // 监听 agent 选择变化，加载模型列表
 watch(selectedAgentId, async (newAgentId) => {
   if (newAgentId) {
-    await agentConfigStore.loadModelsConfigs(newAgentId)
+    const provider = inferAgentProvider(agentStore.agents.find(agent => agent.id === newAgentId))
+    await agentConfigStore.ensureModelsConfigs(newAgentId, provider)
     // 设置默认模型
     const models = agentConfigStore.getModelsConfigs(newAgentId)
     const defaultModel = models.find((m: AgentModelConfig) => m.isDefault)

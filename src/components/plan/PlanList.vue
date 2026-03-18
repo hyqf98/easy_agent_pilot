@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useConfirmDialog } from '@/composables'
 import { useAgentConfigStore } from '@/stores/agentConfig'
-import { useAgentStore } from '@/stores/agent'
+import { inferAgentProvider, useAgentStore } from '@/stores/agent'
 import { usePlanStore } from '@/stores/plan'
 import { useProjectStore } from '@/stores/project'
 import type { Plan, PlanStatus, TaskStatus, UpdatePlanInput } from '@/types/plan'
@@ -202,9 +202,9 @@ const canStartSplitFromList = computed(() =>
 )
 
 async function loadEnabledModels(agentId: string): Promise<ModelOption[]> {
-  await agentConfigStore.loadModelsConfigs(agentId)
-  return agentConfigStore
-    .getModelsConfigs(agentId)
+  const provider = inferAgentProvider(agentStore.agents.find(agent => agent.id === agentId))
+  const configs = await agentConfigStore.ensureModelsConfigs(agentId, provider)
+  return configs
     .filter(model => model.enabled)
     .map(model => ({
       label: model.displayName,

@@ -2,7 +2,7 @@
 import { ref, watch, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useTaskStore } from '@/stores/task'
-import { useAgentStore } from '@/stores/agent'
+import { inferAgentProvider, useAgentStore } from '@/stores/agent'
 import { useAgentConfigStore } from '@/stores/agentConfig'
 import { usePlanStore } from '@/stores/plan'
 import { useNotificationStore } from '@/stores/notification'
@@ -165,10 +165,9 @@ watch(
       return
     }
 
-    await agentConfigStore.loadModelsConfigs(agentId)
-
-    const availableModels = agentConfigStore.getModelsConfigs(agentId)
-      .filter(config => config.enabled)
+    const provider = inferAgentProvider(agentStore.agents.find(agent => agent.id === agentId))
+    const modelConfigs = await agentConfigStore.ensureModelsConfigs(agentId, provider)
+    const availableModels = modelConfigs.filter(config => config.enabled)
 
     if (availableModels.length === 0) {
       form.value.modelId = ''

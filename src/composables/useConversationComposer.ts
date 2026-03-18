@@ -10,7 +10,7 @@ import {
 import { useI18n } from 'vue-i18n'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { useAgentConfigStore } from '@/stores/agentConfig'
-import { useAgentStore } from '@/stores/agent'
+import { inferAgentProvider, useAgentStore } from '@/stores/agent'
 import { useMessageStore, type MessageAttachment } from '@/stores/message'
 import { useNotificationStore } from '@/stores/notification'
 import { useProjectStore } from '@/stores/project'
@@ -376,13 +376,14 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
   watch(currentAgentId, async (agentId) => {
     if (agentId) {
-      await agentConfigStore.loadModelsConfigs(agentId)
+      const provider = inferAgentProvider(agentStore.agents.find(agent => agent.id === agentId))
+      await agentConfigStore.ensureModelsConfigs(agentId, provider)
     }
   }, { immediate: true })
 
   watch(currentAgent, async (agent) => {
     if (agent && currentAgentId.value) {
-      await agentConfigStore.loadModelsConfigs(currentAgentId.value)
+      await agentConfigStore.ensureModelsConfigs(currentAgentId.value, inferAgentProvider(agent))
       const configs = agentConfigStore.getModelsConfigs(currentAgentId.value)
       const defaultModel = configs.find(config => config.isDefault && config.enabled)
       selectedModelId.value = defaultModel?.modelId || ''
@@ -417,7 +418,8 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     try {
       await agentStore.loadAgents()
       if (currentAgentId.value) {
-        await agentConfigStore.loadModelsConfigs(currentAgentId.value)
+        const provider = inferAgentProvider(agentStore.agents.find(agent => agent.id === currentAgentId.value))
+        await agentConfigStore.ensureModelsConfigs(currentAgentId.value, provider)
       }
     } catch (error) {
       console.error('Failed to load agents:', error)
