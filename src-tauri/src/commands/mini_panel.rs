@@ -476,6 +476,20 @@ pub fn unregister_mini_panel_windows_shortcut() -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn capture_mini_panel_native_shortcut_once(timeout_ms: Option<u64>) -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        super::mini_panel_macos_shortcut::capture_shortcut_once(timeout_ms)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = timeout_ms;
+        Err("NATIVE_SHORTCUT_OVERRIDE_UNSUPPORTED".to_string())
+    }
+}
+
+#[tauri::command]
 pub fn show_mini_panel(app: AppHandle) -> Result<(), String> {
     let window = ensure_window(&app)?;
     window.center().map_err(|e| e.to_string())?;

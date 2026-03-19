@@ -174,6 +174,7 @@ pub fn run() {
             commands::mini_panel::suggest_mini_panel_directories,
             commands::mini_panel::register_mini_panel_windows_shortcut,
             commands::mini_panel::unregister_mini_panel_windows_shortcut,
+            commands::mini_panel::capture_mini_panel_native_shortcut_once,
             commands::mini_panel::show_mini_panel,
             commands::mini_panel::hide_mini_panel,
             commands::mini_panel::toggle_mini_panel,

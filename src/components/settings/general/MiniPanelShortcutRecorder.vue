@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { invoke } from '@tauri-apps/api/core'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { EaButton } from '@/components/common'
@@ -8,6 +9,7 @@ import {
   DEFAULT_MINI_PANEL_SHORTCUT,
   formatShortcutForDisplay,
   formatShortcutPreviewFromKeyboardEvent,
+  IS_MAC,
   resolveMiniPanelShortcut,
   SUPPORTS_NATIVE_SHORTCUT_OVERRIDE,
   validateShortcutForCurrentPlatform
@@ -32,6 +34,7 @@ const recorderRef = ref<HTMLButtonElement | null>(null)
 const captureHint = ref('')
 const recordingPreview = ref('')
 const suppressNextToggleUntil = ref(0)
+const nativeCaptureToken = ref(0)
 
 const displayValue = computed(() => formatShortcutForDisplay(props.modelValue))
 const recordingDisplayValue = computed(() => recordingPreview.value || t('settings.general.miniPanelShortcutRecording'))
@@ -106,9 +109,62 @@ const canEnableShortcutOverride = computed(() => (
 ))
 
 function stopRecording() {
+  nativeCaptureToken.value += 1
   isRecording.value = false
   captureHint.value = ''
   recordingPreview.value = ''
+}
+
+function applyCapturedShortcut(shortcut: string) {
+  const validationError = validateShortcutForCurrentPlatform(shortcut, {
+    windowsOverrideEnabled: props.windowsOverrideEnabled
+  })
+  if (validationError === 'reserved-windows-alt-space') {
+    captureHint.value = t('settings.general.miniPanelShortcutReservedWindowsAltSpace')
+    return
+  }
+
+  emit('update:modelValue', shortcut)
+  suppressNextToggleUntil.value = Date.now() + 160
+  stopRecording()
+}
+
+async function startNativeCapture(captureToken: number) {
+  try {
+    const shortcut = await invoke<string>('capture_mini_panel_native_shortcut_once', {
+      timeoutMs: 15000
+    })
+
+    if (!isRecording.value || captureToken !== nativeCaptureToken.value) {
+      return
+    }
+
+    recordingPreview.value = formatShortcutForDisplay(shortcut)
+    applyCapturedShortcut(shortcut)
+  } catch (error) {
+    if (!isRecording.value || captureToken !== nativeCaptureToken.value) {
+      return
+    }
+
+    const message = error instanceof Error ? error.message : String(error)
+    if (message.includes('MACOS_SHORTCUT_OVERRIDE_PERMISSION_REQUIRED')) {
+      captureHint.value = t('settings.general.miniPanelShortcutOverridePermissionRequired')
+      return
+    }
+
+    if (message.includes('MACOS_SHORTCUT_CAPTURE_CANCELLED')) {
+      suppressNextToggleUntil.value = Date.now() + 160
+      stopRecording()
+      return
+    }
+
+    if (message.includes('MACOS_SHORTCUT_CAPTURE_TIMEOUT')) {
+      captureHint.value = t('settings.general.miniPanelShortcutRecordingDesc')
+      return
+    }
+
+    captureHint.value = t('settings.general.miniPanelShortcutUnsupported')
+  }
 }
 
 async function startRecording() {
@@ -121,6 +177,12 @@ async function startRecording() {
   recordingPreview.value = ''
   await nextTick()
   recorderRef.value?.focus()
+
+  if (IS_MAC) {
+    const captureToken = nativeCaptureToken.value + 1
+    nativeCaptureToken.value = captureToken
+    void startNativeCapture(captureToken)
+  }
 }
 
 function toggleRecording() {
@@ -159,17 +221,7 @@ function handleKeydown(event: KeyboardEvent) {
 
   const result = buildShortcutFromKeyboardEvent(event)
   if (result.accelerator) {
-    const validationError = validateShortcutForCurrentPlatform(result.accelerator, {
-      windowsOverrideEnabled: props.windowsOverrideEnabled
-    })
-    if (validationError === 'reserved-windows-alt-space') {
-      captureHint.value = t('settings.general.miniPanelShortcutReservedWindowsAltSpace')
-      return
-    }
-
-    emit('update:modelValue', result.accelerator)
-    suppressNextToggleUntil.value = Date.now() + 160
-    stopRecording()
+    applyCapturedShortcut(result.accelerator)
     return
   }
 

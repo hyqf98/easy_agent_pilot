@@ -1,13 +1,13 @@
 use core_foundation::runloop::CFRunLoop;
 use core_graphics::event::{
-    CallbackResult, CGEventFlags, CGEventTap, CGEventTapLocation,
-    CGEventTapOptions, CGEventTapPlacement, CGEventType, KeyCode,
-    EventField,
+    CallbackResult, CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions,
+    CGEventTapPlacement, CGEventType, EventField, KeyCode,
 };
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use std::sync::{mpsc, Arc};
 use std::thread;
+use std::time::Duration;
 use tauri::AppHandle;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -55,31 +55,26 @@ pub fn register_shortcut(app: AppHandle, shortcut: String) -> Result<(), String>
     let join_handle = thread::spawn(move || {
         let run_loop = CFRunLoop::get_current();
         *ACTIVE_RUNTIME.lock() = Some(worker_runtime.clone());
+        let ready_tx_run = ready_tx.clone();
 
-        let tap = CGEventTap::new(
+        let tap_result = CGEventTap::with_enabled(
             CGEventTapLocation::HID,
             CGEventTapPlacement::HeadInsertEventTap,
             CGEventTapOptions::Default,
-            vec![
-                CGEventType::KeyDown,
-                CGEventType::KeyUp,
-                CGEventType::FlagsChanged,
-                CGEventType::TapDisabledByTimeout,
-                CGEventType::TapDisabledByUserInput,
-            ],
-            move |_proxy, event_type, event| handle_event(&worker_runtime, event_type, event),
+            vec![CGEventType::KeyDown, CGEventType::KeyUp, CGEventType::FlagsChanged],
+            move |_proxy, event_type, event| handle_registered_event(&worker_runtime, event_type, event),
+            || {
+                let _ = ready_tx_run.send(Ok(run_loop.clone()));
+                CFRunLoop::run_current();
+            },
         );
 
-        let Ok(tap) = tap else {
+        if tap_result.is_err() {
             *ACTIVE_RUNTIME.lock() = None;
             let _ = ready_tx.send(Err("MACOS_SHORTCUT_OVERRIDE_PERMISSION_REQUIRED".to_string()));
             return;
-        };
+        }
 
-        let _ = ready_tx.send(Ok(run_loop.clone()));
-        tap.enable();
-        CFRunLoop::run_current();
-        drop(tap);
         *ACTIVE_RUNTIME.lock() = None;
     });
 
@@ -110,18 +105,59 @@ pub fn unregister_shortcut() -> Result<(), String> {
     Ok(())
 }
 
-fn handle_event(
+pub fn capture_shortcut_once(timeout_ms: Option<u64>) -> Result<String, String> {
+    let timeout = Duration::from_millis(timeout_ms.unwrap_or(15_000).clamp(1_000, 60_000));
+    let (result_tx, result_rx) = mpsc::channel::<Result<String, String>>();
+    let (ready_tx, ready_rx) = mpsc::channel::<Result<CFRunLoop, String>>();
+
+    let join_handle = thread::spawn(move || {
+        let run_loop = CFRunLoop::get_current();
+        let ready_tx_run = ready_tx.clone();
+        let tap_result = CGEventTap::with_enabled(
+            CGEventTapLocation::HID,
+            CGEventTapPlacement::HeadInsertEventTap,
+            CGEventTapOptions::Default,
+            vec![CGEventType::KeyDown],
+            move |_proxy, event_type, event| handle_capture_event(&result_tx, event_type, event),
+            || {
+                let _ = ready_tx_run.send(Ok(run_loop.clone()));
+                CFRunLoop::run_current();
+            },
+        );
+
+        if tap_result.is_err() {
+            let _ = ready_tx.send(Err("MACOS_SHORTCUT_OVERRIDE_PERMISSION_REQUIRED".to_string()));
+        }
+    });
+
+    let run_loop = ready_rx
+        .recv()
+        .map_err(|_| "MACOS_SHORTCUT_CAPTURE_FAILED".to_string())??;
+
+    let result = match result_rx.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(_) => {
+            run_loop.stop();
+            join_handle
+                .join()
+                .map_err(|_| "MACOS_SHORTCUT_CAPTURE_FAILED".to_string())?;
+            return Err("MACOS_SHORTCUT_CAPTURE_TIMEOUT".to_string());
+        }
+    };
+
+    run_loop.stop();
+    join_handle
+        .join()
+        .map_err(|_| "MACOS_SHORTCUT_CAPTURE_FAILED".to_string())?;
+
+    result
+}
+
+fn handle_registered_event(
     runtime: &Arc<Mutex<HookRuntime>>,
     event_type: CGEventType,
     event: &core_graphics::event::CGEvent,
 ) -> CallbackResult {
-    if matches!(
-        event_type,
-        CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput
-    ) {
-        return CallbackResult::Keep;
-    }
-
     let key_code = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
     let flags = event.get_flags();
 
@@ -156,13 +192,66 @@ fn handle_event(
     CallbackResult::Keep
 }
 
-fn modifiers_match(flags: CGEventFlags, expected: ShortcutModifiers) -> bool {
+fn handle_capture_event(
+    result_tx: &mpsc::Sender<Result<String, String>>,
+    event_type: CGEventType,
+    event: &core_graphics::event::CGEvent,
+) -> CallbackResult {
+    if !matches!(event_type, CGEventType::KeyDown) {
+        return CallbackResult::Keep;
+    }
+
+    let key_code = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
+    let flags = event.get_flags();
+
+    if key_code == KeyCode::ESCAPE && active_modifiers(flags) == ShortcutModifiers::default() {
+        let _ = result_tx.send(Err("MACOS_SHORTCUT_CAPTURE_CANCELLED".to_string()));
+        CFRunLoop::get_current().stop();
+        return CallbackResult::Drop;
+    }
+
+    let Some(shortcut) = shortcut_from_event(flags, key_code) else {
+        return CallbackResult::Keep;
+    };
+
+    let _ = result_tx.send(Ok(shortcut));
+    CFRunLoop::get_current().stop();
+    CallbackResult::Drop
+}
+
+fn shortcut_from_event(flags: CGEventFlags, key_code: u16) -> Option<String> {
+    let key_token = key_code_to_token(key_code)?;
+    let modifiers = active_modifiers(flags);
+    let mut tokens = Vec::new();
+
+    if modifiers.command {
+        tokens.push("CommandOrControl");
+    }
+    if modifiers.control {
+        tokens.push("Control");
+    }
+    if modifiers.alt {
+        tokens.push("Alt");
+    }
+    if modifiers.shift {
+        tokens.push("Shift");
+    }
+
+    tokens.push(key_token);
+    Some(tokens.join("+"))
+}
+
+fn active_modifiers(flags: CGEventFlags) -> ShortcutModifiers {
     ShortcutModifiers {
         control: flags.contains(CGEventFlags::CGEventFlagControl),
         alt: flags.contains(CGEventFlags::CGEventFlagAlternate),
         shift: flags.contains(CGEventFlags::CGEventFlagShift),
         command: flags.contains(CGEventFlags::CGEventFlagCommand),
-    } == expected
+    }
+}
+
+fn modifiers_match(flags: CGEventFlags, expected: ShortcutModifiers) -> bool {
+    active_modifiers(flags) == expected
 }
 
 fn parse_shortcut(shortcut: &str) -> Result<ShortcutSpec, String> {
@@ -316,5 +405,109 @@ fn parse_key_code(token: &str) -> Result<u16, String> {
         "F19" => KeyCode::F19,
         "F20" => KeyCode::F20,
         _ => return Err("MACOS_SHORTCUT_OVERRIDE_FAILED".to_string()),
+    })
+}
+
+fn key_code_to_token(key_code: u16) -> Option<&'static str> {
+    Some(match key_code {
+        KeyCode::ANSI_A => "A",
+        KeyCode::ANSI_B => "B",
+        KeyCode::ANSI_C => "C",
+        KeyCode::ANSI_D => "D",
+        KeyCode::ANSI_E => "E",
+        KeyCode::ANSI_F => "F",
+        KeyCode::ANSI_G => "G",
+        KeyCode::ANSI_H => "H",
+        KeyCode::ANSI_I => "I",
+        KeyCode::ANSI_J => "J",
+        KeyCode::ANSI_K => "K",
+        KeyCode::ANSI_L => "L",
+        KeyCode::ANSI_M => "M",
+        KeyCode::ANSI_N => "N",
+        KeyCode::ANSI_O => "O",
+        KeyCode::ANSI_P => "P",
+        KeyCode::ANSI_Q => "Q",
+        KeyCode::ANSI_R => "R",
+        KeyCode::ANSI_S => "S",
+        KeyCode::ANSI_T => "T",
+        KeyCode::ANSI_U => "U",
+        KeyCode::ANSI_V => "V",
+        KeyCode::ANSI_W => "W",
+        KeyCode::ANSI_X => "X",
+        KeyCode::ANSI_Y => "Y",
+        KeyCode::ANSI_Z => "Z",
+        KeyCode::ANSI_0 => "0",
+        KeyCode::ANSI_1 => "1",
+        KeyCode::ANSI_2 => "2",
+        KeyCode::ANSI_3 => "3",
+        KeyCode::ANSI_4 => "4",
+        KeyCode::ANSI_5 => "5",
+        KeyCode::ANSI_6 => "6",
+        KeyCode::ANSI_7 => "7",
+        KeyCode::ANSI_8 => "8",
+        KeyCode::ANSI_9 => "9",
+        KeyCode::ANSI_GRAVE => "`",
+        KeyCode::ANSI_MINUS => "-",
+        KeyCode::ANSI_EQUAL => "=",
+        KeyCode::ANSI_LEFT_BRACKET => "[",
+        KeyCode::ANSI_RIGHT_BRACKET => "]",
+        KeyCode::ANSI_BACKSLASH => "\\",
+        KeyCode::ANSI_SEMICOLON => ";",
+        KeyCode::ANSI_QUOTE => "'",
+        KeyCode::ANSI_COMMA => ",",
+        KeyCode::ANSI_PERIOD => ".",
+        KeyCode::ANSI_SLASH => "/",
+        KeyCode::SPACE => "Space",
+        KeyCode::ESCAPE => "Escape",
+        KeyCode::RETURN => "Enter",
+        KeyCode::TAB => "Tab",
+        KeyCode::DELETE => "Backspace",
+        KeyCode::FORWARD_DELETE => "Delete",
+        KeyCode::END => "End",
+        KeyCode::HOME => "Home",
+        KeyCode::PAGE_DOWN => "PageDown",
+        KeyCode::PAGE_UP => "PageUp",
+        KeyCode::UP_ARROW => "Up",
+        KeyCode::DOWN_ARROW => "Down",
+        KeyCode::LEFT_ARROW => "Left",
+        KeyCode::RIGHT_ARROW => "Right",
+        KeyCode::ANSI_KEYPAD_0 => "Numpad0",
+        KeyCode::ANSI_KEYPAD_1 => "Numpad1",
+        KeyCode::ANSI_KEYPAD_2 => "Numpad2",
+        KeyCode::ANSI_KEYPAD_3 => "Numpad3",
+        KeyCode::ANSI_KEYPAD_4 => "Numpad4",
+        KeyCode::ANSI_KEYPAD_5 => "Numpad5",
+        KeyCode::ANSI_KEYPAD_6 => "Numpad6",
+        KeyCode::ANSI_KEYPAD_7 => "Numpad7",
+        KeyCode::ANSI_KEYPAD_8 => "Numpad8",
+        KeyCode::ANSI_KEYPAD_9 => "Numpad9",
+        KeyCode::ANSI_KEYPAD_PLUS => "NumpadAdd",
+        KeyCode::ANSI_KEYPAD_DECIMAL => "NumpadDecimal",
+        KeyCode::ANSI_KEYPAD_DIVIDE => "NumpadDivide",
+        KeyCode::ANSI_KEYPAD_ENTER => "NumpadEnter",
+        KeyCode::ANSI_KEYPAD_EQUAL => "NumpadEqual",
+        KeyCode::ANSI_KEYPAD_MULTIPLY => "NumpadMultiply",
+        KeyCode::ANSI_KEYPAD_MINUS => "NumpadSubtract",
+        KeyCode::F1 => "F1",
+        KeyCode::F2 => "F2",
+        KeyCode::F3 => "F3",
+        KeyCode::F4 => "F4",
+        KeyCode::F5 => "F5",
+        KeyCode::F6 => "F6",
+        KeyCode::F7 => "F7",
+        KeyCode::F8 => "F8",
+        KeyCode::F9 => "F9",
+        KeyCode::F10 => "F10",
+        KeyCode::F11 => "F11",
+        KeyCode::F12 => "F12",
+        KeyCode::F13 => "F13",
+        KeyCode::F14 => "F14",
+        KeyCode::F15 => "F15",
+        KeyCode::F16 => "F16",
+        KeyCode::F17 => "F17",
+        KeyCode::F18 => "F18",
+        KeyCode::F19 => "F19",
+        KeyCode::F20 => "F20",
+        _ => return None,
     })
 }
