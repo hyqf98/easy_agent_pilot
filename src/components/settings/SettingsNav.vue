@@ -13,7 +13,6 @@ const { t } = useI18n()
 
 const navItems: NavItem[] = [
   { id: 'general', labelKey: 'settings.nav.general', icon: 'settings' },
-  { id: 'agentStudio', labelKey: 'settings.nav.agentStudio', icon: 'bot' },
   { id: 'agents', labelKey: 'settings.nav.agents', icon: 'bot' },
   { id: 'agentConfig', labelKey: 'settings.nav.agentConfig', icon: 'settings-2' },
   { id: 'marketplace', labelKey: 'settings.nav.marketplace', icon: 'store' },

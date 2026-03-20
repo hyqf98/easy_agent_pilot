@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { useUIStore } from '@/stores/ui'
 import GeneralSettings from './tabs/GeneralSettings.vue'
-import AgentStudioSettings from './tabs/AgentStudioSettings.vue'
 import AgentSettings from './tabs/AgentSettings.vue'
 import SkillConfigPage from '@/components/skill-config/SkillConfigPage.vue'
 import ProviderSwitch from './tabs/ProviderSwitch.vue'
@@ -24,10 +23,6 @@ const uiStore = useUIStore()
     <!-- MarketplacePage 需要更大的空间 -->
     <MarketplacePage
       v-else-if="uiStore.activeSettingsTab === 'marketplace'"
-      class="settings-content__full"
-    />
-    <AgentStudioSettings
-      v-else-if="uiStore.activeSettingsTab === 'agentStudio'"
       class="settings-content__full"
     />
     <!-- 其他设置页面使用固定宽度 -->
@@ -64,7 +59,6 @@ const uiStore = useUIStore()
   flex: 1;
   width: 100%;
   height: 100%;
-  min-width: 0;
 }
 
 /* 自定义滚动条 */

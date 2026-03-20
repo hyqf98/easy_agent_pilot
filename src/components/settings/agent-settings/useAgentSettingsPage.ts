@@ -24,7 +24,6 @@ export function useAgentSettingsPage() {
   const addingToolName = ref<string | null>(null)
   const currentPage = ref(1)
   const searchQuery = ref('')
-  const activeAgentId = ref<string | null>(null)
 
   const showModal = ref(false)
   const editingAgent = ref<AgentConfig | null>(null)
@@ -61,10 +60,6 @@ export function useAgentSettingsPage() {
     result.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     return result
   })
-
-  const activeAgent = computed(() =>
-    agentStore.agents.find(agent => agent.id === activeAgentId.value) || null
-  )
 
   const totalPages = computed(() => Math.ceil(filteredAgents.value.length / PAGE_SIZE) || 1)
 
@@ -167,15 +162,10 @@ export function useAgentSettingsPage() {
   async function handleQuickAdd(tool: CliTool) {
     addingToolName.value = tool.name
     try {
-      const agent = await agentStore.addDetectedTool(tool)
-      activeAgentId.value = agent.id
+      await agentStore.addDetectedTool(tool)
     } finally {
       addingToolName.value = null
     }
-  }
-
-  function handleFocusAgent(agent: AgentConfig) {
-    activeAgentId.value = agent.id
   }
 
   function handleAdd() {
@@ -195,11 +185,7 @@ export function useAgentSettingsPage() {
 
   async function confirmDelete() {
     if (deletingAgent.value) {
-      const deletedId = deletingAgent.value.id
       await agentStore.deleteAgent(deletingAgent.value.id)
-      if (activeAgentId.value === deletedId) {
-        activeAgentId.value = agentStore.agents[0]?.id || null
-      }
       if (paginatedAgents.value.length === 0 && currentPage.value > 1) {
         currentPage.value -= 1
       }
@@ -219,10 +205,8 @@ export function useAgentSettingsPage() {
   ) {
     if (editingAgent.value) {
       await agentStore.updateAgent(editingAgent.value.id, data)
-      activeAgentId.value = editingAgent.value.id
     } else {
-      const agent = await agentStore.createAgent(data)
-      activeAgentId.value = agent.id
+      await agentStore.createAgent(data)
     }
 
     showModal.value = false
@@ -257,9 +241,6 @@ export function useAgentSettingsPage() {
 
   onMounted(async () => {
     await agentStore.loadAgents()
-    if (!activeAgentId.value && agentStore.agents.length > 0) {
-      activeAgentId.value = agentStore.agents[0].id
-    }
     await agentStore.scanCliTools()
     void checkMigrationNeeded()
   })
@@ -268,8 +249,6 @@ export function useAgentSettingsPage() {
     PAGE_SIZE,
     addingToolName,
     agentStore,
-    activeAgentId,
-    activeAgent,
     currentPage,
     searchQuery,
     showModal,
@@ -293,7 +272,6 @@ export function useAgentSettingsPage() {
     handleMigration,
     handleMigrationLater,
     handleQuickAdd,
-    handleFocusAgent,
     handleAdd,
     handleEdit,
     handleDelete,

@@ -343,7 +343,6 @@ export default {
     title: 'Settings',
     nav: {
       general: 'General',
-      agentStudio: 'Agent Studio',
       agents: 'Agent Config',
       agentConfig: 'Skills Config',
       integration: 'Agent Integration',
