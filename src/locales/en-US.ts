@@ -354,6 +354,7 @@ export default {
       theme: 'Theme',
       lsp: 'LSP Management',
       data: 'Data Management',
+      logs: 'Log Management',
       providerSwitch: 'Config Switch'
     },
     general: {
@@ -1091,6 +1092,29 @@ export default {
       clearConfirmError: 'Please type CLEAR to confirm',
       clearSuccess: 'All data has been cleared',
       clearFailed: 'Failed to clear data'
+    },
+    logs: {
+      title: 'Log Management',
+      description: 'Runtime logs are written to local files for diagnosing Claude CLI, Codex CLI, SDK, and startup issues.',
+      refresh: 'Refresh',
+      clear: 'Clear Logs',
+      hideFiles: 'Hide Files',
+      showFiles: 'Show Files',
+      path: 'Log Directory',
+      fileCount: 'Log Files',
+      totalSize: 'Total Size',
+      loadingTitle: 'Loading runtime logs',
+      loadingDescription: 'Reading local log files and runtime metadata.',
+      errorTitle: 'Unable to load logs',
+      emptyTitle: 'No runtime logs yet',
+      emptyDescription: 'New log files will appear here after the application records runtime events.',
+      loadFailed: 'Failed to load runtime logs',
+      readFailed: 'Failed to read runtime log file',
+      clearFailed: 'Failed to clear runtime logs',
+      clearSuccess: 'Cleared {count} log file(s)',
+      clearConfirm: 'Clear all runtime log files? This cannot be undone.',
+      truncatedNotice: 'Only the latest portion of the file is shown here to keep the view responsive.',
+      lineCount: '{count} lines'
     },
     installSessions: {
       title: 'Install Sessions',

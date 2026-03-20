@@ -4,7 +4,7 @@ use base64::Engine;
 use tauri::{AppHandle, Emitter};
 
 use crate::commands::conversation::abort::{clear_abort_flag, set_abort_flag, should_abort};
-use crate::commands::conversation::strategy::AgentExecutionStrategy;
+use crate::commands::conversation::strategy::{AgentExecutionStrategy, AgentRuntimeKind};
 use crate::commands::conversation::types::{ExecutionRequest, MessageInput, SdkStreamEvent};
 use crate::commands::plan_split::{record_plan_split_event, SplitStreamRecord};
 
@@ -82,25 +82,33 @@ fn emit_sdk_event(
 // 简单的日志宏
 macro_rules! log_info {
     ($($arg:tt)*) => {
-        println!("[INFO][codex-sdk] {}", format!($($arg)*))
+        {
+            let message = format!($($arg)*);
+            crate::logging::write_log("INFO", "codex-sdk", &message);
+            println!("[INFO][codex-sdk] {}", message)
+        }
     };
 }
 
 macro_rules! log_error {
     ($($arg:tt)*) => {
-        eprintln!("[ERROR][codex-sdk] {}", format!($($arg)*))
+        {
+            let message = format!($($arg)*);
+            crate::logging::write_log("ERROR", "codex-sdk", &message);
+            eprintln!("[ERROR][codex-sdk] {}", message)
+        }
     };
 }
 
 #[async_trait]
 impl AgentExecutionStrategy for CodexSdkStrategy {
-    fn supports(&self, agent_type: &str, provider: &str) -> bool {
-        agent_type == "sdk" && provider == "codex"
+    fn kind(&self) -> AgentRuntimeKind {
+        AgentRuntimeKind::CodexSdk
     }
 
     async fn execute(&self, app: AppHandle, request: ExecutionRequest) -> Result<()> {
         let session_id = request.session_id.clone();
-        let event_name = format!("codex-sdk-stream-{}", session_id);
+        let event_name = self.kind().event_name(&session_id);
         let plan_id = request.plan_id.clone();
 
         log_info!("开始执行 Codex SDK, session_id: {}", session_id);

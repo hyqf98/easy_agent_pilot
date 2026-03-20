@@ -1,9 +1,17 @@
 mod commands;
 mod database;
+mod logging;
 mod scheduler;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Err(error) = commands::init_persistence_dirs() {
+        eprintln!("Failed to initialize persistence directories: {}", error);
+    }
+    if let Err(error) = logging::init_runtime_logging() {
+        eprintln!("Failed to initialize runtime logging: {}", error);
+    }
+
     // 初始化日志，只显示 error 级别的日志
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::ERROR)
@@ -34,11 +42,21 @@ pub fn run() {
             // 初始化持久化目录
             if let Err(e) = commands::init_persistence_dirs() {
                 eprintln!("Failed to initialize persistence directories: {}", e);
+                crate::logging::write_log(
+                    "ERROR",
+                    "bootstrap",
+                    &format!("Failed to initialize persistence directories: {}", e),
+                );
             }
 
             // 初始化数据库
             if let Err(e) = database::init_database() {
                 eprintln!("Failed to initialize database: {}", e);
+                crate::logging::write_log(
+                    "ERROR",
+                    "bootstrap",
+                    &format!("Failed to initialize database: {}", e),
+                );
             }
 
             // 初始化策略注册表
@@ -219,6 +237,10 @@ pub fn run() {
             commands::settings::save_app_settings,
             commands::settings::delete_app_setting,
             commands::settings::clear_app_settings,
+            commands::runtime_log::get_runtime_log_summary_command,
+            commands::runtime_log::list_runtime_log_files_command,
+            commands::runtime_log::read_runtime_log_file_command,
+            commands::runtime_log::clear_runtime_log_files_command,
             commands::scan::scan_cli_config,
             commands::scan::scan_claude_mcp_list,
             commands::scan::scan_cli_sessions,

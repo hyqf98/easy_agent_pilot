@@ -20,7 +20,7 @@ use crate::commands::cli_support::build_tokio_cli_command;
 use crate::commands::conversation::abort::{
     clear_abort_flag, register_session_pid, set_abort_flag, should_abort, unregister_session_pid,
 };
-use crate::commands::conversation::strategy::AgentExecutionStrategy;
+use crate::commands::conversation::strategy::{AgentExecutionStrategy, AgentRuntimeKind};
 use crate::commands::conversation::types::{CliStreamEvent, ExecutionRequest, MessageInput};
 
 /// Codex CLI 策略
@@ -29,13 +29,21 @@ pub struct CodexCliStrategy;
 // 简单的日志宏
 macro_rules! log_info {
     ($($arg:tt)*) => {
-        println!("[INFO][codex-cli] {}", format!($($arg)*))
+        {
+            let message = format!($($arg)*);
+            crate::logging::write_log("INFO", "codex-cli", &message);
+            println!("[INFO][codex-cli] {}", message)
+        }
     };
 }
 
 macro_rules! log_error {
     ($($arg:tt)*) => {
-        eprintln!("[ERROR][codex-cli] {}", format!($($arg)*))
+        {
+            let message = format!($($arg)*);
+            crate::logging::write_log("ERROR", "codex-cli", &message);
+            eprintln!("[ERROR][codex-cli] {}", message)
+        }
     };
 }
 
@@ -182,13 +190,13 @@ impl Drop for TempSchemaFile {
 
 #[async_trait]
 impl AgentExecutionStrategy for CodexCliStrategy {
-    fn supports(&self, agent_type: &str, provider: &str) -> bool {
-        agent_type == "cli" && provider == "codex"
+    fn kind(&self) -> AgentRuntimeKind {
+        AgentRuntimeKind::CodexCli
     }
 
     async fn execute(&self, app: AppHandle, request: ExecutionRequest) -> Result<()> {
         let session_id = request.session_id.clone();
-        let event_name = format!("codex-stream-{}", session_id);
+        let event_name = self.kind().event_name(&session_id);
 
         log_info!("开始执行 Codex CLI, session_id: {}", session_id);
 

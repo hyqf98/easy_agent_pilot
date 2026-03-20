@@ -61,7 +61,9 @@ const handleOverlayClick = (e: MouseEvent) => {
         class="settings-overlay"
         @click="handleOverlayClick"
       >
-        <div class="settings-modal">
+        <div
+          :class="['settings-modal', { 'settings-modal--logs': uiStore.activeSettingsTab === 'logs' }]"
+        >
           <div class="settings-modal__header">
             <h2 class="settings-modal__title">
               设置
@@ -107,13 +109,17 @@ const handleOverlayClick = (e: MouseEvent) => {
 .settings-modal {
   display: flex;
   flex-direction: column;
-  width: 80vw;
-  max-width: 1000px;
-  height: 85vh;
+  width: min(96vw, 1440px);
+  height: 94vh;
   background-color: var(--color-surface);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-2xl);
   overflow: hidden;
+}
+
+.settings-modal--logs {
+  width: min(98vw, 1560px);
+  height: 96vh;
 }
 
 .settings-modal__header {

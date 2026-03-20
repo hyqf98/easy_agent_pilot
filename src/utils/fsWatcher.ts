@@ -7,6 +7,8 @@ function isUnavailableError(error: unknown): boolean {
   return message.includes('Command watch not found')
     || message.includes('plugin:fs|watch')
     || message.includes('unsupported')
+    || message.includes('forbidden path')
+    || message.includes('allow-watch')
 }
 
 export async function startFsWatcher(

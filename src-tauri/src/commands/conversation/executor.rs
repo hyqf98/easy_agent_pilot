@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use tauri::AppHandle;
 
-use super::strategy::AgentExecutionStrategy;
+use super::strategy::{AgentExecutionStrategy, AgentRuntimeKind};
 use super::types::ExecutionRequest;
 
 /// 策略注册表
@@ -25,21 +25,16 @@ impl StrategyRegistry {
     }
 
     /// 获取支持的策略
-    pub fn get_strategy(
-        &self,
-        agent_type: &str,
-        provider: &str,
-    ) -> Option<Arc<dyn AgentExecutionStrategy>> {
+    pub fn get_strategy(&self, kind: AgentRuntimeKind) -> Option<Arc<dyn AgentExecutionStrategy>> {
         self.strategies
             .iter()
-            .find(|s| s.supports(agent_type, provider))
+            .find(|strategy| strategy.kind() == kind)
             .cloned()
     }
 
     /// 执行智能体调用
     pub async fn execute(&self, app: AppHandle, request: ExecutionRequest) -> Result<()> {
-        let strategy = self
-            .get_strategy(&request.agent_type, &request.provider)
+        let kind = AgentRuntimeKind::from_request(&request.agent_type, &request.provider)
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "不支持的智能体类型: {} ({})",
@@ -47,6 +42,14 @@ impl StrategyRegistry {
                     request.provider
                 )
             })?;
+
+        let strategy = self.get_strategy(kind).ok_or_else(|| {
+            anyhow::anyhow!(
+                "未注册智能体运行时策略: {} ({})",
+                request.agent_type,
+                request.provider
+            )
+        })?;
 
         strategy.execute(app, request).await
     }

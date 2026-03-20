@@ -8,6 +8,7 @@ export type SettingsTab =
   | 'integration'
   | 'theme'
   | 'data'
+  | 'logs'
   | 'providerSwitch'
   | 'lsp'
   | 'marketplace'

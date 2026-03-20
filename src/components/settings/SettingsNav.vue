@@ -1,28 +1,11 @@
 <script setup lang="ts">
+import { watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useUIStore, type SettingsTab } from '@/stores/ui'
+import { useUIStore } from '@/stores/ui'
 import { EaIcon } from '@/components/common'
-
-interface NavItem {
-  id: SettingsTab
-  labelKey: string
-  icon: string
-}
+import { SETTINGS_TAB_DESCRIPTORS } from './settingsTabs'
 
 const { t } = useI18n()
-
-const navItems: NavItem[] = [
-  { id: 'general', labelKey: 'settings.nav.general', icon: 'settings' },
-  { id: 'agents', labelKey: 'settings.nav.agents', icon: 'bot' },
-  { id: 'agentConfig', labelKey: 'settings.nav.agentConfig', icon: 'settings-2' },
-  { id: 'marketplace', labelKey: 'settings.nav.marketplace', icon: 'store' },
-  { id: 'providerSwitch', labelKey: 'settings.nav.providerSwitch', icon: 'repeat' },
-  { id: 'sessions', labelKey: 'settings.nav.sessions', icon: 'history' },
-  { id: 'theme', labelKey: 'settings.nav.theme', icon: 'palette' },
-  { id: 'lsp', labelKey: 'settings.nav.lsp', icon: 'languages' },
-  { id: 'data', labelKey: 'settings.nav.data', icon: 'database' }
-]
-
 const uiStore = useUIStore()
 
 // 鼠标悬停事件处理
@@ -33,17 +16,33 @@ function handleMouseEnter() {
 function handleMouseLeave() {
   uiStore.setSettingsNavCollapsed(true)
 }
+
+watch(
+  () => uiStore.activeSettingsTab,
+  (tab) => {
+    if (tab === 'logs') {
+      uiStore.setSettingsNavCollapsed(true)
+    }
+  },
+  { immediate: true }
+)
 </script>
 
 <template>
   <nav
-    :class="['settings-nav', { 'settings-nav--collapsed': uiStore.settingsNavCollapsed }]"
+    :class="[
+      'settings-nav',
+      {
+        'settings-nav--collapsed': uiStore.settingsNavCollapsed,
+        'settings-nav--logs': uiStore.settingsNavCollapsed && uiStore.activeSettingsTab === 'logs'
+      }
+    ]"
     @mouseenter="handleMouseEnter"
     @mouseleave="handleMouseLeave"
   >
     <div class="settings-nav__list">
       <button
-        v-for="item in navItems"
+        v-for="item in SETTINGS_TAB_DESCRIPTORS"
         :key="item.id"
         :class="['settings-nav__item', { 'settings-nav__item--active': uiStore.activeSettingsTab === item.id }]"
         :title="uiStore.settingsNavCollapsed ? t(item.labelKey) : undefined"
@@ -82,6 +81,11 @@ function handleMouseLeave() {
 .settings-nav--collapsed {
   width: 56px;
   padding: var(--spacing-2);
+}
+
+.settings-nav--logs {
+  width: 44px;
+  padding: 6px;
 }
 
 .settings-nav__list {

@@ -264,6 +264,7 @@ const zhCN = {
       theme: '主题设置',
       lsp: 'LSP 管理',
       data: '数据管理',
+      logs: '日志管理',
       providerSwitch: '配置切换'
     },
     general: {
@@ -920,6 +921,30 @@ const zhCN = {
       clearConfirmError: '请输入 CLEAR 以确认',
       clearSuccess: '所有数据已清除',
       clearFailed: '清除数据失败'
+    },
+    logs: {
+      ...enUS.settings.logs,
+      title: '日志管理',
+      description: '将运行期日志写入本地文件，便于排查 Claude CLI、Codex CLI、SDK 和启动阶段问题。',
+      refresh: '刷新',
+      clear: '清空日志',
+      hideFiles: '隐藏文件列表',
+      showFiles: '显示文件列表',
+      path: '日志目录',
+      fileCount: '日志文件数',
+      totalSize: '总大小',
+      loadingTitle: '正在加载运行日志',
+      loadingDescription: '正在读取本地日志文件与运行时元数据。',
+      errorTitle: '日志加载失败',
+      emptyTitle: '暂无运行日志',
+      emptyDescription: '程序产生新的运行日志后会显示在这里。',
+      loadFailed: '加载运行日志失败',
+      readFailed: '读取日志文件失败',
+      clearFailed: '清空日志失败',
+      clearSuccess: '已清空 {count} 个日志文件',
+      clearConfirm: '确定清空所有运行日志文件吗？此操作不可恢复。',
+      truncatedNotice: '当前仅显示文件末尾部分内容，以保证界面响应速度。',
+      lineCount: '{count} 行'
     },
     installSessions: {
       ...enUS.settings.installSessions,

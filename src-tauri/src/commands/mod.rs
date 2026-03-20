@@ -30,6 +30,7 @@ pub mod plugins_market;
 pub mod project;
 pub mod project_access;
 pub mod provider_profile;
+pub mod runtime_log;
 pub mod scan;
 pub(crate) mod scan_session_shared;
 pub(crate) mod scan_shared;
@@ -69,7 +70,14 @@ pub fn init_persistence_dirs() -> Result<()> {
     // LSP 统一存储目录
     fs::create_dir_all(base_dir.join("tools").join("lsp"))?;
 
-    println!("Persistence directories initialized at: {:?}", base_dir);
+    crate::logging::write_log(
+        "INFO",
+        "bootstrap",
+        &format!(
+            "Persistence directories initialized at: {}",
+            base_dir.display()
+        ),
+    );
     Ok(())
 }
 

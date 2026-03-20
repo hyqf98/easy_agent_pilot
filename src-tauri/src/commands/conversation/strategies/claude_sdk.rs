@@ -4,7 +4,7 @@ use base64::Engine;
 use tauri::{AppHandle, Emitter};
 
 use crate::commands::conversation::abort::{clear_abort_flag, set_abort_flag, should_abort};
-use crate::commands::conversation::strategy::AgentExecutionStrategy;
+use crate::commands::conversation::strategy::{AgentExecutionStrategy, AgentRuntimeKind};
 use crate::commands::conversation::types::{ExecutionRequest, MessageInput, SdkStreamEvent};
 use crate::commands::plan_split::{record_plan_split_event, SplitStreamRecord};
 
@@ -82,19 +82,23 @@ fn emit_sdk_event(
 // 简单的日志宏
 macro_rules! log_info {
     ($($arg:tt)*) => {
-        println!("[INFO][claude-sdk] {}", format!($($arg)*))
+        {
+            let message = format!($($arg)*);
+            crate::logging::write_log("INFO", "claude-sdk", &message);
+            println!("[INFO][claude-sdk] {}", message)
+        }
     };
 }
 
 #[async_trait]
 impl AgentExecutionStrategy for ClaudeSdkStrategy {
-    fn supports(&self, agent_type: &str, provider: &str) -> bool {
-        agent_type == "sdk" && (provider == "claude" || provider.is_empty())
+    fn kind(&self) -> AgentRuntimeKind {
+        AgentRuntimeKind::ClaudeSdk
     }
 
     async fn execute(&self, app: AppHandle, request: ExecutionRequest) -> Result<()> {
         let session_id = request.session_id.clone();
-        let event_name = format!("sdk-stream-{}", session_id);
+        let event_name = self.kind().event_name(&session_id);
         let plan_id = request.plan_id.clone();
 
         log_info!("开始执行 Claude SDK, session_id: {}", session_id);

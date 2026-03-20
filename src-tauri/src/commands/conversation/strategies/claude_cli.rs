@@ -20,7 +20,7 @@ use crate::commands::cli_support::build_tokio_cli_command;
 use crate::commands::conversation::abort::{
     clear_abort_flag, register_session_pid, set_abort_flag, should_abort, unregister_session_pid,
 };
-use crate::commands::conversation::strategy::AgentExecutionStrategy;
+use crate::commands::conversation::strategy::{AgentExecutionStrategy, AgentRuntimeKind};
 use crate::commands::conversation::types::{
     CliStreamEvent, ExecutionRequest, McpServerConfig, MessageInput,
 };
@@ -32,13 +32,21 @@ pub struct ClaudeCliStrategy;
 // 简单的日志宏
 macro_rules! log_info {
     ($($arg:tt)*) => {
-        println!("[INFO][claude-cli] {}", format!($($arg)*))
+        {
+            let message = format!($($arg)*);
+            crate::logging::write_log("INFO", "claude-cli", &message);
+            println!("[INFO][claude-cli] {}", message)
+        }
     };
 }
 
 macro_rules! log_error {
     ($($arg:tt)*) => {
-        eprintln!("[ERROR][claude-cli] {}", format!($($arg)*))
+        {
+            let message = format!($($arg)*);
+            crate::logging::write_log("ERROR", "claude-cli", &message);
+            eprintln!("[ERROR][claude-cli] {}", message)
+        }
     };
 }
 
@@ -291,13 +299,13 @@ impl Drop for TempMcpConfigFile {
 
 #[async_trait]
 impl AgentExecutionStrategy for ClaudeCliStrategy {
-    fn supports(&self, agent_type: &str, provider: &str) -> bool {
-        agent_type == "cli" && provider == "claude"
+    fn kind(&self) -> AgentRuntimeKind {
+        AgentRuntimeKind::ClaudeCli
     }
 
     async fn execute(&self, app: AppHandle, request: ExecutionRequest) -> Result<()> {
         let session_id = request.session_id.clone();
-        let event_name = format!("claude-stream-{}", session_id);
+        let event_name = self.kind().event_name(&session_id);
 
         // 重置中断标志
         set_abort_flag(&session_id, false).await;
@@ -877,9 +885,7 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                 .unwrap_or("");
 
             match block_type {
-                "thinking" => {
-                    Some(build_thinking_start_event(session_id))
-                }
+                "thinking" => Some(build_thinking_start_event(session_id)),
                 "tool_use" => {
                     let tool_name = content_block.get("name").and_then(|n| n.as_str())?;
                     let tool_id = content_block
