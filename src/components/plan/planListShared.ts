@@ -1,4 +1,5 @@
 import type { Plan } from '@/types/plan'
+import type { AgentTeamMode } from '@/stores/agentTeam'
 
 export interface PlanTaskStats {
   total: number
@@ -30,6 +31,8 @@ export interface PlanCreateFormState {
   name: string
   description: string
   splitMode: 'ai' | 'manual'    // 拆分模式
+  splitExecutionMode: AgentTeamMode
+  splitTeamId: string | null
   granularity: number
   maxRetryCount: number
   splitAgentId: string | null
@@ -42,6 +45,8 @@ export interface PlanEditFormState {
   name: string
   description: string
   splitMode: 'ai' | 'manual'
+  splitExecutionMode: AgentTeamMode
+  splitTeamId: string | null
   granularity: number
   maxRetryCount: number
   splitAgentId: string | null
@@ -51,6 +56,8 @@ export interface PlanEditFormState {
 }
 
 export interface PlanSplitConfigFormState {
+  executionMode: AgentTeamMode
+  teamId: string | null
   agentId: string | null
   modelId: string
 }

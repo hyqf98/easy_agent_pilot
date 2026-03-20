@@ -3,6 +3,9 @@ import { computed, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useAgentStore, type AgentConfig } from './agent'
+import { useAgentStudioStore } from './agentStudio'
+import { buildAgentProfileSystemPrompt, useAgentProfileStore } from './agentProfile'
+import { useAgentTeamStore } from './agentTeam'
 import { logger } from '@/utils/logger'
 import { normalizeFormSchemaForRendering, normalizeFormSchemasForRendering } from '@/utils/formSchema'
 import {
@@ -31,6 +34,8 @@ interface TaskSplitContext {
   granularity: number
   agentId: string
   modelId: string
+  splitExecutionMode?: 'single' | 'coordinator_subagents'
+  splitTeamId?: string
   workingDirectory?: string
 }
 
@@ -79,9 +84,16 @@ function parseJson<T>(raw?: string | null, fallback?: T): T {
 function buildExecutionRequest(
   context: TaskSplitContext,
   agent: AgentConfig,
-  llmMessages: MessageInput[]
+  llmMessages: MessageInput[],
+  mcpServers?: ExecutionRequest['mcpServers']
 ): ExecutionRequest {
   const provider = agent.provider || 'claude'
+  const systemPrompt = llmMessages
+    .filter(message => message.role === 'system')
+    .map(message => message.content.trim())
+    .filter(Boolean)
+    .join('\n\n')
+
   return {
     sessionId: crypto.randomUUID(),
     planId: context.planId,
@@ -94,12 +106,13 @@ function buildExecutionRequest(
     messages: llmMessages,
     workingDirectory: context.workingDirectory,
     allowedTools: agent.type === 'cli' ? getAllowedTools(provider) : undefined,
-    systemPrompt: llmMessages.find(message => message.role === 'system')?.content,
+    systemPrompt: systemPrompt || undefined,
     maxTokens: agent.type === 'sdk' ? 4096 : undefined,
     cliOutputFormat: agent.type === 'cli' ? 'stream-json' : undefined,
     jsonSchema: agent.type === 'cli'
       ? buildPlanSplitJsonSchema(context.granularity, provider.toLowerCase() === 'codex' ? 'codex' : 'claude')
       : undefined,
+    mcpServers,
     executionMode: 'task_split',
     responseMode: 'stream_text'
   }
@@ -244,7 +257,8 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
   async function startBackgroundSession(
     nextContext: TaskSplitContext,
     llmMessages: MessageInput[],
-    uiMessages: SplitMessage[]
+    uiMessages: SplitMessage[],
+    mcpServers?: ExecutionRequest['mcpServers']
   ) {
     const agentStore = useAgentStore()
     const agent = agentStore.agents.find(item => item.id === nextContext.agentId)
@@ -259,7 +273,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     }
 
     logs.value = []
-    const executionRequest = buildExecutionRequest(nextContext, agent, llmMessages)
+    const executionRequest = buildExecutionRequest(nextContext, agent, llmMessages, mcpServers)
     const snapshot = await invoke<PlanSplitSessionRecord>('start_plan_split', {
       input: {
         planId: nextContext.planId,
@@ -295,6 +309,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
   }
 
   async function initSession(nextContext: TaskSplitContext) {
+    const agentProfileStore = useAgentProfileStore()
     if (context.value?.planId !== nextContext.planId) {
       submittedForms.value = []
     }
@@ -308,6 +323,10 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
         runtimeNotices.value = [environmentNotice]
       }
     }
+    const selectedExecutionProfile = selectedAgent
+      ? await agentProfileStore.resolveExecutionProfile(selectedAgent.id)
+      : null
+    const selectedAgentSystemPrompt = buildAgentProfileSystemPrompt(selectedExecutionProfile)
     await subscribeToPlan(nextContext.planId)
     await loadSession(nextContext.planId)
 
@@ -315,17 +334,52 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       return
     }
 
+    await agentProfileStore.loadProfiles().catch(() => [])
+    await useAgentStudioStore().loadAgents().catch(() => [])
+
     const llmMessages: MessageInput[] = [
       {
         role: 'system',
         content: buildPlanSplitSystemPrompt()
       },
+      ...(selectedAgentSystemPrompt
+        ? [{
+            role: 'system' as const,
+            content: selectedAgentSystemPrompt
+          }]
+        : []),
       {
         role: 'user',
         content: buildPlanSplitKickoffPrompt({
           planName: nextContext.planName,
           planDescription: nextContext.planDescription,
-          minTaskCount: nextContext.granularity
+          minTaskCount: nextContext.granularity,
+          executionMode: nextContext.splitExecutionMode,
+          teamName: nextContext.splitTeamId
+            ? useAgentTeamStore().getTeam(nextContext.splitTeamId)?.name
+            : undefined,
+          coordinatorLabel: selectedAgent?.name,
+          teamSummary: nextContext.splitTeamId
+            ? useAgentTeamStore().getTeam(nextContext.splitTeamId)?.members
+              .map(member => {
+                const studioAgent = useAgentStudioStore().getAgent(member.agentId)
+                return `- ${member.displayName || studioAgent?.name || member.agentId} / ${member.role} / ${member.capabilityPreset}`
+              })
+              .join('\n')
+            : undefined,
+          agentCatalog: useAgentStudioStore().enabledAgents
+            .map(studioAgent => {
+              const runtimeAgent = useAgentStore().agents.find(agent => agent.id === studioAgent.runtimeAgentId)
+              const capabilities = [
+                studioAgent.planningCapability ? '规划' : '',
+                studioAgent.readonlyResearcher ? '只读研究' : '',
+                studioAgent.executionCapability ? '执行' : ''
+              ].filter(Boolean)
+              const specialization = studioAgent.specialization ? ` / 专业 ${studioAgent.specialization}` : ''
+              const model = studioAgent.runtimeModelId || runtimeAgent?.modelId
+              return `- ${studioAgent.runtimeAgentId}: ${studioAgent.name}${model ? ` / 默认模型 ${model}` : ''}${capabilities.length > 0 ? ` / 能力 ${capabilities.join('、')}` : ''}${specialization}`
+            })
+            .join('\n')
         })
       }
     ]
@@ -341,7 +395,12 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       timestamp: new Date().toISOString()
     }]
 
-    await startBackgroundSession(nextContext, llmMessages, uiMessages)
+    await startBackgroundSession(
+      nextContext,
+      llmMessages,
+      uiMessages,
+      selectedExecutionProfile?.mcpServers
+    )
   }
 
   async function submitFormResponse(formId: string, values: Record<string, unknown>) {
@@ -374,12 +433,13 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
 
     const llmMessages = parseJson<MessageInput[]>(session.value.llmMessagesJson, [])
     const uiMessages = toSplitMessages(session.value.messagesJson)
+    const previousRequest = parseJson<ExecutionRequest | null>(session.value.executionRequestJson, null)
 
     if (llmMessages.length === 0) {
       throw new Error('当前会话缺少可重试的上下文。')
     }
 
-    await startBackgroundSession(context.value, llmMessages, uiMessages)
+    await startBackgroundSession(context.value, llmMessages, uiMessages, previousRequest?.mcpServers)
   }
 
   async function stop() {
@@ -436,6 +496,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
 
   async function startSubSplit(index: number, config: TaskResplitConfig) {
     if (!context.value || !splitResult.value || !splitResult.value[index]) return
+    const agentProfileStore = useAgentProfileStore()
 
     const targetTask = splitResult.value[index]
     subSplitMode.value = true
@@ -447,15 +508,25 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       ...context.value,
       granularity: config.granularity,
       agentId: config.agentId || context.value.agentId,
-      modelId: config.modelId || context.value.modelId
+      modelId: config.modelId || context.value.modelId,
+      splitExecutionMode: context.value.splitExecutionMode,
+      splitTeamId: context.value.splitTeamId
     }
     context.value = nextContext
+    const executionProfile = await agentProfileStore.resolveExecutionProfile(nextContext.agentId)
+    const agentSystemPrompt = buildAgentProfileSystemPrompt(executionProfile)
 
     const llmMessages: MessageInput[] = [
       {
         role: 'system',
         content: buildPlanSplitSystemPrompt()
       },
+      ...(agentSystemPrompt
+        ? [{
+            role: 'system' as const,
+            content: agentSystemPrompt
+          }]
+        : []),
       {
         role: 'user',
         content: buildTaskResplitKickoffPrompt({
@@ -484,7 +555,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       timestamp: new Date().toISOString()
     }]
 
-    await startBackgroundSession(nextContext, llmMessages, uiMessages)
+    await startBackgroundSession(nextContext, llmMessages, uiMessages, executionProfile.mcpServers)
   }
 
   function completeSubSplit(newTasks: AITaskItem[]) {

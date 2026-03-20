@@ -203,6 +203,8 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-6);
+  width: 100%;
+  min-width: 0;
 }
 
 .settings-page--embedded {

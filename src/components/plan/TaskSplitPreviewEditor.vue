@@ -50,6 +50,9 @@ function resetDraft() {
     title: props.task.title || '',
     description: props.task.description || '',
     priority: props.task.priority || 'medium',
+    recommendedAgentId: props.task.recommendedAgentId || '',
+    recommendedModelId: props.task.recommendedModelId || '',
+    recommendationReason: props.task.recommendationReason || '',
     implementationSteps: [...(props.task.implementationSteps || [])],
     testSteps: [...(props.task.testSteps || [])],
     acceptanceCriteria: [...(props.task.acceptanceCriteria || [])],
@@ -151,6 +154,33 @@ useSafeOutsideClick(
           <path d="M6 9l6 6 6-6" />
         </svg>
       </div>
+    </div>
+
+    <div class="form-row">
+      <label>推荐执行 Agent</label>
+      <input
+        v-model="draft.recommendedAgentId"
+        type="text"
+        placeholder="agent id"
+      >
+    </div>
+
+    <div class="form-row">
+      <label>推荐执行模型</label>
+      <input
+        v-model="draft.recommendedModelId"
+        type="text"
+        placeholder="可留空"
+      >
+    </div>
+
+    <div class="form-row">
+      <label>推荐理由</label>
+      <textarea
+        v-model="draft.recommendationReason"
+        rows="2"
+        placeholder="说明为什么推荐该 Agent"
+      />
     </div>
 
     <div class="form-row">

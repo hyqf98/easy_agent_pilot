@@ -22,6 +22,12 @@ pub struct Task {
     pub agent_id: Option<String>,
     /// 执行模型 ID */
     pub model_id: Option<String>,
+    /// 推荐执行智能体 ID */
+    pub recommended_agent_id: Option<String>,
+    /// 推荐执行模型 ID */
+    pub recommended_model_id: Option<String>,
+    /// 推荐原因 */
+    pub recommendation_reason: Option<String>,
     pub session_id: Option<String>,
     pub progress_file: Option<String>,
     pub dependencies: Option<Vec<String>>,
@@ -54,6 +60,9 @@ pub struct RustTask {
     pub agent_id: Option<String>,
     /// 执行模型 ID */
     pub model_id: Option<String>,
+    pub recommended_agent_id: Option<String>,
+    pub recommended_model_id: Option<String>,
+    pub recommendation_reason: Option<String>,
     pub session_id: Option<String>,
     pub progress_file: Option<String>,
     pub dependencies: Option<String>, // JSON 字符串
@@ -93,6 +102,9 @@ pub struct CreateTaskInput {
     pub agent_id: Option<String>,
     /// 执行模型 ID */
     pub model_id: Option<String>,
+    pub recommended_agent_id: Option<String>,
+    pub recommended_model_id: Option<String>,
+    pub recommendation_reason: Option<String>,
     pub dependencies: Option<Vec<String>>,
     pub order: Option<i32>,
     pub max_retries: Option<i32>,
@@ -118,6 +130,12 @@ pub struct UpdateTaskInput {
     pub agent_id: UpdateField<String>,
     #[serde(default)]
     pub model_id: UpdateField<String>,
+    #[serde(default)]
+    pub recommended_agent_id: UpdateField<String>,
+    #[serde(default)]
+    pub recommended_model_id: UpdateField<String>,
+    #[serde(default)]
+    pub recommendation_reason: UpdateField<String>,
     #[serde(default)]
     pub session_id: UpdateField<String>,
     #[serde(default)]
@@ -202,7 +220,8 @@ fn bind_update_json<T: Serialize>(
 
 const TASK_SELECT_BY_ID_SQL: &str = r#"
     SELECT id, plan_id, parent_id, title, description, status, priority,
-           assignee, agent_id, model_id, session_id, progress_file, dependencies, task_order,
+           assignee, agent_id, model_id, recommended_agent_id, recommended_model_id, recommendation_reason,
+           session_id, progress_file, dependencies, task_order,
            retry_count, max_retries, error_message,
            implementation_steps, test_steps, acceptance_criteria,
            block_reason, input_request, input_response,
@@ -212,7 +231,8 @@ const TASK_SELECT_BY_ID_SQL: &str = r#"
 "#;
 const TASK_SELECT_BY_PLAN_SQL: &str = r#"
     SELECT id, plan_id, parent_id, title, description, status, priority,
-           assignee, agent_id, model_id, session_id, progress_file, dependencies, task_order,
+           assignee, agent_id, model_id, recommended_agent_id, recommended_model_id, recommendation_reason,
+           session_id, progress_file, dependencies, task_order,
            retry_count, max_retries, error_message,
            implementation_steps, test_steps, acceptance_criteria,
            block_reason, input_request, input_response,
@@ -223,7 +243,8 @@ const TASK_SELECT_BY_PLAN_SQL: &str = r#"
 "#;
 const TASK_SELECT_BY_PARENT_SQL: &str = r#"
     SELECT id, plan_id, parent_id, title, description, status, priority,
-           assignee, agent_id, model_id, session_id, progress_file, dependencies, task_order,
+           assignee, agent_id, model_id, recommended_agent_id, recommended_model_id, recommendation_reason,
+           session_id, progress_file, dependencies, task_order,
            retry_count, max_retries, error_message,
            implementation_steps, test_steps, acceptance_criteria,
            block_reason, input_request, input_response,
@@ -234,7 +255,8 @@ const TASK_SELECT_BY_PARENT_SQL: &str = r#"
 "#;
 const TASK_SELECT_BY_SESSION_SQL: &str = r#"
     SELECT id, plan_id, parent_id, title, description, status, priority,
-           assignee, agent_id, model_id, session_id, progress_file, dependencies, task_order,
+           assignee, agent_id, model_id, recommended_agent_id, recommended_model_id, recommendation_reason,
+           session_id, progress_file, dependencies, task_order,
            retry_count, max_retries, error_message,
            implementation_steps, test_steps, acceptance_criteria,
            block_reason, input_request, input_response,
@@ -256,21 +278,24 @@ fn map_rust_task_row(row: &Row<'_>) -> rusqlite::Result<RustTask> {
         assignee: row.get(7)?,
         agent_id: row.get(8)?,
         model_id: row.get(9)?,
-        session_id: row.get(10)?,
-        progress_file: row.get(11)?,
-        dependencies: row.get(12)?,
-        task_order: row.get(13)?,
-        retry_count: row.get(14)?,
-        max_retries: row.get(15)?,
-        error_message: row.get(16)?,
-        implementation_steps: row.get(17)?,
-        test_steps: row.get(18)?,
-        acceptance_criteria: row.get(19)?,
-        block_reason: row.get(20)?,
-        input_request: row.get(21)?,
-        input_response: row.get(22)?,
-        created_at: row.get(23)?,
-        updated_at: row.get(24)?,
+        recommended_agent_id: row.get(10)?,
+        recommended_model_id: row.get(11)?,
+        recommendation_reason: row.get(12)?,
+        session_id: row.get(13)?,
+        progress_file: row.get(14)?,
+        dependencies: row.get(15)?,
+        task_order: row.get(16)?,
+        retry_count: row.get(17)?,
+        max_retries: row.get(18)?,
+        error_message: row.get(19)?,
+        implementation_steps: row.get(20)?,
+        test_steps: row.get(21)?,
+        acceptance_criteria: row.get(22)?,
+        block_reason: row.get(23)?,
+        input_request: row.get(24)?,
+        input_response: row.get(25)?,
+        created_at: row.get(26)?,
+        updated_at: row.get(27)?,
     })
 }
 
@@ -344,6 +369,9 @@ fn transform_task(rust_task: RustTask) -> Task {
         assignee: rust_task.assignee,
         agent_id: rust_task.agent_id,
         model_id: rust_task.model_id,
+        recommended_agent_id: rust_task.recommended_agent_id,
+        recommended_model_id: rust_task.recommended_model_id,
+        recommendation_reason: rust_task.recommendation_reason,
         session_id: rust_task.session_id,
         progress_file: rust_task.progress_file,
         dependencies,
@@ -411,11 +439,12 @@ pub fn create_task(input: CreateTaskInput) -> Result<Task, String> {
 
     conn.execute(
         "INSERT INTO tasks (id, plan_id, parent_id, title, description, status, priority,
-         assignee, agent_id, model_id, session_id, progress_file, dependencies, task_order,
+         assignee, agent_id, model_id, recommended_agent_id, recommended_model_id, recommendation_reason,
+         session_id, progress_file, dependencies, task_order,
          retry_count, max_retries, error_message,
          implementation_steps, test_steps, acceptance_criteria,
          created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
         rusqlite::params![
             &id,
             &input.plan_id,
@@ -427,6 +456,9 @@ pub fn create_task(input: CreateTaskInput) -> Result<Task, String> {
             &input.assignee,
             &input.agent_id,
             &input.model_id,
+            &input.recommended_agent_id,
+            &input.recommended_model_id,
+            &input.recommendation_reason,
             &None::<String>, // session_id
             &None::<String>, // progress_file
             &dependencies_json,
@@ -461,6 +493,9 @@ pub fn create_task(input: CreateTaskInput) -> Result<Task, String> {
         assignee: input.assignee,
         agent_id: input.agent_id,
         model_id: input.model_id,
+        recommended_agent_id: input.recommended_agent_id,
+        recommended_model_id: input.recommended_model_id,
+        recommendation_reason: input.recommendation_reason,
         session_id: None,
         progress_file: None,
         dependencies: input.dependencies,
@@ -494,6 +529,9 @@ pub fn update_task(id: String, input: UpdateTaskInput) -> Result<Task, String> {
     push_update(&mut updates, "assignee", &input.assignee);
     push_update(&mut updates, "agent_id", &input.agent_id);
     push_update(&mut updates, "model_id", &input.model_id);
+    push_update(&mut updates, "recommended_agent_id", &input.recommended_agent_id);
+    push_update(&mut updates, "recommended_model_id", &input.recommended_model_id);
+    push_update(&mut updates, "recommendation_reason", &input.recommendation_reason);
     push_update(&mut updates, "session_id", &input.session_id);
     push_update(&mut updates, "progress_file", &input.progress_file);
     push_update(&mut updates, "dependencies", &input.dependencies);
@@ -530,6 +568,12 @@ pub fn update_task(id: String, input: UpdateTaskInput) -> Result<Task, String> {
     bind_update_field(&mut stmt, &mut param_count, &input.assignee).map_err(|e| e.to_string())?;
     bind_update_field(&mut stmt, &mut param_count, &input.agent_id).map_err(|e| e.to_string())?;
     bind_update_field(&mut stmt, &mut param_count, &input.model_id).map_err(|e| e.to_string())?;
+    bind_update_field(&mut stmt, &mut param_count, &input.recommended_agent_id)
+        .map_err(|e| e.to_string())?;
+    bind_update_field(&mut stmt, &mut param_count, &input.recommended_model_id)
+        .map_err(|e| e.to_string())?;
+    bind_update_field(&mut stmt, &mut param_count, &input.recommendation_reason)
+        .map_err(|e| e.to_string())?;
     bind_update_field(&mut stmt, &mut param_count, &input.session_id).map_err(|e| e.to_string())?;
     bind_update_field(&mut stmt, &mut param_count, &input.progress_file)
         .map_err(|e| e.to_string())?;
@@ -727,11 +771,12 @@ pub fn batch_create_tasks(
 
         tx.execute(
             "INSERT INTO tasks (id, plan_id, parent_id, title, description, status, priority,
-             assignee, session_id, progress_file, dependencies, task_order,
+             assignee, agent_id, model_id, recommended_agent_id, recommended_model_id, recommendation_reason,
+             session_id, progress_file, dependencies, task_order,
              retry_count, max_retries, error_message,
              implementation_steps, test_steps, acceptance_criteria,
              created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
             rusqlite::params![
                 &id,
                 &plan_id,
@@ -741,6 +786,11 @@ pub fn batch_create_tasks(
                 &status,
                 &priority,
                 &task_input.assignee,
+                &task_input.agent_id,
+                &task_input.model_id,
+                &task_input.recommended_agent_id,
+                &task_input.recommended_model_id,
+                &task_input.recommendation_reason,
                 &None::<String>, // session_id
                 &None::<String>, // progress_file
                 &dependencies_json,
@@ -768,6 +818,9 @@ pub fn batch_create_tasks(
             assignee: task_input.assignee,
             agent_id: task_input.agent_id,
             model_id: task_input.model_id,
+            recommended_agent_id: task_input.recommended_agent_id,
+            recommended_model_id: task_input.recommended_model_id,
+            recommendation_reason: task_input.recommendation_reason,
             session_id: None,
             progress_file: None,
             dependencies: task_input.dependencies,

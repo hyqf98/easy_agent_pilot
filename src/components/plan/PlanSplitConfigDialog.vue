@@ -7,6 +7,7 @@ const props = defineProps<{
   visible: boolean
   plan: Plan | null
   form: PlanSplitConfigFormState
+  teamOptions: AgentOption[]
   agentOptions: AgentOption[]
   modelOptions: ModelOption[]
   canStart: boolean
@@ -60,6 +61,50 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
             计划「{{ props.plan?.name }}」尚未配置拆分智能体和模型，请先选择后继续。
           </p>
           <div class="form-field">
+            <label>拆解方式 <span class="required">*</span></label>
+            <select
+              :value="props.form.executionMode"
+              class="project-select"
+              @change="updateField('executionMode', ($event.target as HTMLSelectElement).value as PlanSplitConfigFormState['executionMode'])"
+            >
+              <option value="single">
+                单 Agent 拆解
+              </option>
+              <option value="coordinator_subagents">
+                主控 + 研究子代理
+              </option>
+            </select>
+          </div>
+
+          <div
+            v-if="props.form.executionMode === 'coordinator_subagents'"
+            class="form-field"
+          >
+            <label>Agent Team <span class="required">*</span></label>
+            <select
+              :value="props.form.teamId ?? ''"
+              class="project-select"
+              @change="updateField('teamId', (($event.target as HTMLSelectElement).value || null))"
+            >
+              <option value="">
+                请选择团队
+              </option>
+              <option
+                v-for="option in props.teamOptions"
+                :key="option.value"
+                :value="option.value"
+              >
+                {{ option.label }}
+              </option>
+            </select>
+            <span
+              v-if="props.teamOptions.length === 0"
+              class="field-hint"
+            >请先在 Agent 管理中创建团队</span>
+          </div>
+
+          <template v-else>
+            <div class="form-field">
             <label>拆分智能体 <span class="required">*</span></label>
             <select
               :value="props.form.agentId ?? ''"
@@ -74,8 +119,8 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
                 {{ option.label }}
               </option>
             </select>
-          </div>
-          <div class="form-field">
+            </div>
+            <div class="form-field">
             <label>拆分模型 <span class="required">*</span></label>
             <select
               :value="props.form.modelId"
@@ -91,7 +136,8 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
                 {{ option.label }}
               </option>
             </select>
-          </div>
+            </div>
+          </template>
         </div>
         <div class="dialog-footer">
           <button

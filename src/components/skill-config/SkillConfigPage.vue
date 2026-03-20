@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useAgentStore } from '@/stores/agent'
+import { useAgentStore, type AgentConfig } from '@/stores/agent'
 import { useSkillConfigStore, type UnifiedMcpConfig, type UnifiedSkillConfig, type UnifiedPluginConfig } from '@/stores/skillConfig'
 import AgentSelector from './AgentSelector.vue'
 import McpConfigTab from './tabs/McpConfigTab.vue'
@@ -19,6 +19,16 @@ import type { CliSyncResult, CreateVisualSkillInput, SyncConfigType } from '@/st
 const { t } = useI18n()
 const agentStore = useAgentStore()
 const skillConfigStore = useSkillConfigStore()
+
+const props = withDefaults(defineProps<{
+  embeddedAgent?: AgentConfig | null
+  hideAgentSelector?: boolean
+  compact?: boolean
+}>(), {
+  embeddedAgent: null,
+  hideAgentSelector: false,
+  compact: false
+})
 
 // 当前标签页
 const activeTab = ref<'mcp' | 'skills' | 'plugins'>('mcp')
@@ -65,8 +75,24 @@ const showDeleteConfirm = ref(false)
 const deletingConfig = ref<{ type: 'mcp' | 'skills' | 'plugins'; config: UnifiedMcpConfig | UnifiedSkillConfig | UnifiedPluginConfig } | null>(null)
 
 // 加载智能体列表
+watch(
+  () => props.embeddedAgent,
+  (agent) => {
+    if (agent) {
+      void handleSelectAgent(agent)
+    }
+  },
+  { immediate: true }
+)
+
 onMounted(async () => {
-  await agentStore.loadAgents()
+  if (agentStore.agents.length === 0) {
+    await agentStore.loadAgents()
+  }
+
+  if (props.embeddedAgent) {
+    await handleSelectAgent(props.embeddedAgent)
+  }
 })
 
 // 选择智能体
@@ -255,9 +281,16 @@ function handleSyncCompleted(payload: { targetAgentId: string; result: CliSyncRe
 </script>
 
 <template>
-  <div class="skill-config-page">
+  <div
+    class="skill-config-page"
+    :class="{
+      'skill-config-page--compact': props.compact,
+      'skill-config-page--embedded': props.hideAgentSelector
+    }"
+  >
     <!-- 智能体选择器 -->
     <AgentSelector
+      v-if="!props.hideAgentSelector"
       :model-value="skillConfigStore.selectedAgent"
       @update:model-value="handleSelectAgent"
     />
@@ -419,6 +452,17 @@ function handleSyncCompleted(payload: { targetAgentId: string; result: CliSyncRe
   height: 100%;
   padding: var(--spacing-4);
   overflow: hidden;
+  width: 100%;
+  min-width: 0;
+}
+
+.skill-config-page--embedded {
+  padding: 0;
+  height: 100%;
+}
+
+.skill-config-page--compact .skill-config-page__tabs {
+  margin-bottom: var(--spacing-3);
 }
 
 .skill-config-page__tabs {

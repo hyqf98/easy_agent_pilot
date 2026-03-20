@@ -440,6 +440,36 @@ fn normalize_task(task: &Value) -> Result<Value, String> {
     normalized.insert("title".to_string(), Value::String(title));
     normalized.insert("description".to_string(), Value::String(description));
     normalized.insert("priority".to_string(), Value::String(priority));
+    if let Some(recommended_agent_id) = as_non_empty_string(
+        task_obj
+            .get("recommendedAgentId")
+            .or_else(|| task_obj.get("recommended_agent_id")),
+    ) {
+        normalized.insert(
+            "recommendedAgentId".to_string(),
+            Value::String(recommended_agent_id),
+        );
+    }
+    if let Some(recommended_model_id) = as_non_empty_string(
+        task_obj
+            .get("recommendedModelId")
+            .or_else(|| task_obj.get("recommended_model_id")),
+    ) {
+        normalized.insert(
+            "recommendedModelId".to_string(),
+            Value::String(recommended_model_id),
+        );
+    }
+    if let Some(recommendation_reason) = as_non_empty_string(
+        task_obj
+            .get("recommendationReason")
+            .or_else(|| task_obj.get("recommendation_reason")),
+    ) {
+        normalized.insert(
+            "recommendationReason".to_string(),
+            Value::String(recommendation_reason),
+        );
+    }
     normalized.insert(
         "implementationSteps".to_string(),
         Value::Array(

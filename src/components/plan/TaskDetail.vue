@@ -83,7 +83,9 @@ const executionConfig = computed(() => {
     return {
       agentLabel: '未指定',
       modelLabel: '使用默认模型',
-      sourceLabel: ''
+      sourceLabel: '',
+      recommendedLabel: '',
+      recommendationReason: ''
     }
   }
 
@@ -102,7 +104,11 @@ const executionConfig = computed(() => {
   return {
     agentLabel: agent?.name || selection.agentId || '未指定',
     modelLabel: selection.modelId || '使用默认模型',
-    sourceLabel: selection.source === 'plan' ? '来源于计划默认配置' : ''
+    sourceLabel: selection.source === 'plan' ? '来源于计划默认配置' : '',
+    recommendedLabel: currentTask.value.recommendedAgentId
+      ? `${currentTask.value.recommendedAgentId}${currentTask.value.recommendedModelId ? ` / ${currentTask.value.recommendedModelId}` : ''}`
+      : '',
+    recommendationReason: currentTask.value.recommendationReason || ''
   }
 })
 
@@ -175,6 +181,19 @@ function goToDependency(task: Task) {
             class="info-hint"
           >
             {{ executionConfig.sourceLabel }}
+          </p>
+          <div
+            v-if="executionConfig.recommendedLabel"
+            class="info-item"
+          >
+            <span class="info-label">推荐执行</span>
+            <span class="info-value">{{ executionConfig.recommendedLabel }}</span>
+          </div>
+          <p
+            v-if="executionConfig.recommendationReason"
+            class="info-hint"
+          >
+            {{ executionConfig.recommendationReason }}
           </p>
         </div>
 

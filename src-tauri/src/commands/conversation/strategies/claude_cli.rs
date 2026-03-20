@@ -83,6 +83,61 @@ fn is_meaningful_event_type(event_type: &str) -> bool {
     )
 }
 
+fn build_mcp_config_json(servers: &[crate::commands::conversation::types::McpServerConfig]) -> String {
+    let mut mcp_servers = serde_json::Map::new();
+
+    for server in servers {
+        let mut server_config = serde_json::json!({});
+
+        match server.transport_type.as_str() {
+            "stdio" => {
+                let args = server
+                    .args
+                    .as_deref()
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .filter(|item| !item.is_empty())
+                    .map(|item| item.to_string())
+                    .collect::<Vec<_>>();
+
+                let env = server
+                    .env
+                    .as_deref()
+                    .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+                    .and_then(|value| value.as_object().cloned())
+                    .unwrap_or_default();
+
+                server_config = serde_json::json!({
+                    "command": server.command.clone().unwrap_or_default(),
+                    "args": args,
+                    "env": env
+                });
+            }
+            "http" | "sse" => {
+                let headers = server
+                    .headers
+                    .as_deref()
+                    .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+                    .and_then(|value| value.as_object().cloned())
+                    .unwrap_or_default();
+
+                server_config = serde_json::json!({
+                    "url": server.url.clone().unwrap_or_default(),
+                    "headers": headers
+                });
+            }
+            _ => {}
+        }
+
+        mcp_servers.insert(server.name.clone(), server_config);
+    }
+
+    serde_json::json!({
+        "mcpServers": mcp_servers
+    })
+    .to_string()
+}
+
 fn is_rmcp_transport_closed_warning(line: &str) -> bool {
     let normalized = line.to_lowercase();
     normalized.contains("rmcp::transport::worker")
@@ -168,6 +223,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
         let json_schema = request.json_schema.clone();
         let extra_cli_args = request.extra_cli_args.clone();
         let messages = request.messages.clone();
+        let mcp_servers = request.mcp_servers.clone();
         let is_stream_json = cli_output_format == "stream-json";
         let schema_text = json_schema
             .as_deref()
@@ -201,15 +257,14 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
             }
         }
 
-        // MCP 配置暂时禁用，不传递给 Claude CLI
-        // if let Some(servers) = &mcp_servers {
-        //     if !servers.is_empty() {
-        //         let mcp_config = build_mcp_config_json(servers);
-        //         log_info!("MCP 配置: {}", mcp_config);
-        //         args.push("--mcp-config".to_string());
-        //         args.push(mcp_config);
-        //     }
-        // }
+        if let Some(servers) = &mcp_servers {
+            if !servers.is_empty() {
+                let mcp_config = build_mcp_config_json(servers);
+                log_info!("MCP 配置: {}", mcp_config);
+                args.push("--mcp-config".to_string());
+                args.push(mcp_config);
+            }
+        }
 
         if let Some(schema) = schema_text {
             args.push("--json-schema".to_string());

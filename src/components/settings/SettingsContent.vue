@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { useUIStore } from '@/stores/ui'
 import GeneralSettings from './tabs/GeneralSettings.vue'
-import AgentSettings from './tabs/AgentSettings.vue'
-import SkillConfigPage from '@/components/skill-config/SkillConfigPage.vue'
-import ProviderSwitch from './tabs/ProviderSwitch.vue'
+import AgentStudioSettings from './tabs/AgentStudioSettings.vue'
+import ModelManagement from './tabs/ModelManagement.vue'
 import ThemeSettings from './tabs/ThemeSettings.vue'
 import DataSettings from './tabs/DataSettings.vue'
 import LspSettings from './tabs/LspSettings.vue'
@@ -15,14 +14,17 @@ const uiStore = useUIStore()
 
 <template>
   <div class="settings-content">
-    <!-- SkillConfigPage 需要更大的空间 -->
-    <SkillConfigPage
-      v-if="uiStore.activeSettingsTab === 'agentConfig'"
-      class="settings-content__full"
-    />
     <!-- MarketplacePage 需要更大的空间 -->
     <MarketplacePage
-      v-else-if="uiStore.activeSettingsTab === 'marketplace'"
+      v-if="uiStore.activeSettingsTab === 'marketplace'"
+      class="settings-content__full"
+    />
+    <AgentStudioSettings
+      v-else-if="uiStore.activeSettingsTab === 'agentStudio'"
+      class="settings-content__full"
+    />
+    <ModelManagement
+      v-else-if="uiStore.activeSettingsTab === 'modelManagement' || uiStore.activeSettingsTab === 'agents' || uiStore.activeSettingsTab === 'agentConfig' || uiStore.activeSettingsTab === 'providerSwitch'"
       class="settings-content__full"
     />
     <!-- 其他设置页面使用固定宽度 -->
@@ -31,8 +33,6 @@ const uiStore = useUIStore()
       class="settings-content__inner"
     >
       <GeneralSettings v-if="uiStore.activeSettingsTab === 'general'" />
-      <AgentSettings v-else-if="uiStore.activeSettingsTab === 'agents'" />
-      <ProviderSwitch v-else-if="uiStore.activeSettingsTab === 'providerSwitch'" />
       <SessionManagementSettings v-else-if="uiStore.activeSettingsTab === 'sessions'" />
       <ThemeSettings v-else-if="uiStore.activeSettingsTab === 'theme'" />
       <LspSettings v-else-if="uiStore.activeSettingsTab === 'lsp'" />
@@ -59,6 +59,7 @@ const uiStore = useUIStore()
   flex: 1;
   width: 100%;
   height: 100%;
+  min-width: 0;
 }
 
 /* 自定义滚动条 */

@@ -343,7 +343,9 @@ export default {
     title: 'Settings',
     nav: {
       general: 'General',
-      agents: 'Agent Config',
+      agentStudio: 'Agent Management',
+      modelManagement: 'Model Management',
+      agents: 'Model Management',
       agentConfig: 'Skills Config',
       integration: 'Agent Integration',
       mcp: 'MCP Servers',
@@ -478,11 +480,11 @@ export default {
       }
     },
     agent: {
-      title: 'Agent Configuration',
-      addAgent: 'Add Agent',
+      title: 'Runtime Configuration',
+      addAgent: 'Add Runtime',
       editAgent: 'Edit Agent',
-      noAgents: 'No agents configured',
-      noAgentsHint: 'Click the button above to add your first agent',
+      noAgents: 'No runtimes configured',
+      noAgentsHint: 'Click the button above to add your first runtime',
       confirmDeleteMessage: 'Are you sure you want to delete this agent? This action cannot be undone.',
       statusOnline: 'Online',
       statusOffline: 'Offline',
@@ -570,7 +572,7 @@ export default {
     },
     // Agent List Page
     agentList: {
-      title: 'Agent Management',
+      title: 'Runtime Management',
       searchPlaceholder: 'Search agents by name, provider, model...',
       allTypes: 'All Types',
       typeCli: 'CLI',

@@ -12,6 +12,8 @@ interface RustPlan {
   name: string
   description?: string
   split_mode: string
+  split_execution_mode?: string
+  split_team_id?: string
   split_agent_id?: string
   split_model_id?: string
   status: string
@@ -30,6 +32,8 @@ export interface PlanSplitDialogContext {
   planId: string
   agentId: string
   modelId: string
+  splitExecutionMode?: Plan['splitExecutionMode']
+  splitTeamId?: string
   entry: 'create_start_split' | 'list_split' | 'resume_split'
 }
 
@@ -50,6 +54,8 @@ function transformPlan(rustPlan: RustPlan): Plan {
     name: rustPlan.name,
     description: rustPlan.description,
     splitMode: (rustPlan.split_mode || 'ai') as PlanSplitMode,
+    splitExecutionMode: (rustPlan.split_execution_mode || 'single') as Plan['splitExecutionMode'],
+    splitTeamId: rustPlan.split_team_id,
     splitAgentId: rustPlan.split_agent_id,
     splitModelId: rustPlan.split_model_id,
     status: rustPlan.status as PlanStatus,
@@ -140,6 +146,8 @@ export const usePlanStore = defineStore('plan', () => {
       name: input.name,
       description: input.description ?? null,
       split_mode: input.splitMode ?? 'ai',
+      split_execution_mode: input.splitExecutionMode ?? 'single',
+      split_team_id: input.splitTeamId ?? null,
       split_agent_id: input.splitAgentId ?? null,
       split_model_id: input.splitModelId ?? null,
       agent_team: input.agentTeam ?? null,
@@ -171,6 +179,8 @@ export const usePlanStore = defineStore('plan', () => {
     if ('name' in updates) input.name = updates.name ?? null
     if ('description' in updates) input.description = updates.description ?? null
     if ('splitMode' in updates) input.split_mode = updates.splitMode ?? null
+    if ('splitExecutionMode' in updates) input.split_execution_mode = updates.splitExecutionMode ?? null
+    if ('splitTeamId' in updates) input.split_team_id = updates.splitTeamId ?? null
     if ('splitAgentId' in updates) input.split_agent_id = updates.splitAgentId ?? null
     if ('splitModelId' in updates) input.split_model_id = updates.splitModelId ?? null
     if ('status' in updates) input.status = updates.status ?? null

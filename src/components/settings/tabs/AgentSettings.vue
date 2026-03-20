@@ -14,6 +14,7 @@ const {
   PAGE_SIZE,
   addingToolName,
   agentStore,
+  activeAgentId,
   currentPage,
   searchQuery,
   showModal,
@@ -37,6 +38,7 @@ const {
   handleMigration,
   handleMigrationLater,
   handleQuickAdd,
+  handleFocusAgent,
   handleAdd,
   handleEdit,
   handleDelete,
@@ -234,6 +236,7 @@ const {
 
     <AgentSettingsTable
       :agents="paginatedAgents"
+      :active-agent-id="activeAgentId"
       :search-query="searchQuery"
       :filtered-count="filteredAgents.length"
       :current-page="currentPage"
@@ -241,6 +244,7 @@ const {
       :page-numbers="pageNumbers"
       :page-size="PAGE_SIZE"
       :testing-agent-id="agentStore.testingAgentId"
+      @focus-agent="handleFocusAgent"
       @test="handleTest"
       @manage-models="handleOpenModelManage"
       @edit="handleEdit"
@@ -307,6 +311,8 @@ const {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-4);
+  width: 100%;
+  min-width: 0;
 }
 
 .agent-list-page__header {
@@ -404,9 +410,19 @@ const {
 }
 
 .agent-count {
-  margin-left: auto;
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+@media (max-width: 960px) {
+  .toolbar-actions {
+    margin-left: 0;
+  }
+
+  .agent-count {
+    width: 100%;
+  }
 }
 
 /* 测试结果提示 */

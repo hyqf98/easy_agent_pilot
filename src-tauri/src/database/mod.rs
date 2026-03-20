@@ -248,6 +248,8 @@ const INIT_SQL: &str = r#"
         project_id TEXT NOT NULL,
         name TEXT NOT NULL,
         description TEXT,
+        split_execution_mode TEXT NOT NULL DEFAULT 'single',
+        split_team_id TEXT,
         split_agent_id TEXT,
         split_model_id TEXT,
         status TEXT NOT NULL DEFAULT 'draft',
@@ -269,10 +271,24 @@ const INIT_SQL: &str = r#"
         status TEXT NOT NULL DEFAULT 'pending',
         priority TEXT NOT NULL DEFAULT 'medium',
         assignee TEXT,
+        agent_id TEXT,
+        model_id TEXT,
+        recommended_agent_id TEXT,
+        recommended_model_id TEXT,
+        recommendation_reason TEXT,
         session_id TEXT,
         progress_file TEXT,
         dependencies TEXT,
         task_order INTEGER NOT NULL DEFAULT 0,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        max_retries INTEGER NOT NULL DEFAULT 3,
+        error_message TEXT,
+        implementation_steps TEXT,
+        test_steps TEXT,
+        acceptance_criteria TEXT,
+        block_reason TEXT,
+        input_request TEXT,
+        input_response TEXT,
         last_result_status TEXT,
         last_result_summary TEXT,
         last_result_files TEXT,
@@ -302,6 +318,154 @@ const INIT_SQL: &str = r#"
         FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_agent_models_agent ON agent_models(agent_id);
+
+    CREATE TABLE IF NOT EXISTS agent_profiles (
+        agent_id TEXT PRIMARY KEY,
+        system_prompt TEXT,
+        role_definition TEXT,
+        working_style TEXT,
+        output_style TEXT,
+        tool_usage_policy TEXT,
+        domain_tags TEXT,
+        capability_tags TEXT,
+        readonly_researcher INTEGER NOT NULL DEFAULT 0,
+        planning_capability INTEGER NOT NULL DEFAULT 0,
+        execution_capability INTEGER NOT NULL DEFAULT 1,
+        default_execution_mode TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_profiles_updated ON agent_profiles(updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS agent_teams (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        mode TEXT NOT NULL DEFAULT 'coordinator_subagents',
+        coordinator_agent_id TEXT,
+        coordinator_model_id TEXT,
+        subagent_max_concurrent INTEGER NOT NULL DEFAULT 3,
+        max_children_per_task INTEGER NOT NULL DEFAULT 5,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (coordinator_agent_id) REFERENCES agents(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_teams_updated ON agent_teams(updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS agent_team_members (
+        id TEXT PRIMARY KEY,
+        team_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        model_id TEXT,
+        role TEXT NOT NULL,
+        capability_preset TEXT NOT NULL DEFAULT 'readonly_research',
+        display_name TEXT,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (team_id) REFERENCES agent_teams(id) ON DELETE CASCADE,
+        FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_team_members_team ON agent_team_members(team_id, sort_order ASC);
+
+    CREATE TABLE IF NOT EXISTS agent_team_relations (
+        id TEXT PRIMARY KEY,
+        team_id TEXT NOT NULL,
+        parent_member_id TEXT NOT NULL,
+        child_member_id TEXT NOT NULL,
+        relation_type TEXT NOT NULL DEFAULT 'delegates_to',
+        auto_dispatch_allowed INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (team_id) REFERENCES agent_teams(id) ON DELETE CASCADE,
+        FOREIGN KEY (parent_member_id) REFERENCES agent_team_members(id) ON DELETE CASCADE,
+        FOREIGN KEY (child_member_id) REFERENCES agent_team_members(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_team_relations_team ON agent_team_relations(team_id);
+
+    CREATE TABLE IF NOT EXISTS studio_agents (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        specialization TEXT,
+        role_type TEXT NOT NULL DEFAULT 'custom',
+        runtime_agent_id TEXT NOT NULL,
+        runtime_model_id TEXT,
+        system_prompt TEXT,
+        instruction_note TEXT,
+        readonly_researcher INTEGER NOT NULL DEFAULT 0,
+        planning_capability INTEGER NOT NULL DEFAULT 0,
+        execution_capability INTEGER NOT NULL DEFAULT 1,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (runtime_agent_id) REFERENCES agents(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_studio_agents_runtime ON studio_agents(runtime_agent_id);
+    CREATE INDEX IF NOT EXISTS idx_studio_agents_updated ON studio_agents(updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS studio_agent_resource_bindings (
+        id TEXT PRIMARY KEY,
+        studio_agent_id TEXT NOT NULL,
+        resource_type TEXT NOT NULL,
+        resource_id TEXT NOT NULL,
+        resource_name TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (studio_agent_id) REFERENCES studio_agents(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_studio_agent_bindings_agent
+        ON studio_agent_resource_bindings(studio_agent_id, resource_type, sort_order ASC);
+
+    CREATE TABLE IF NOT EXISTS studio_agent_teams (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        mode TEXT NOT NULL DEFAULT 'coordinator_subagents',
+        coordinator_agent_id TEXT,
+        coordinator_model_id TEXT,
+        subagent_max_concurrent INTEGER NOT NULL DEFAULT 3,
+        max_children_per_task INTEGER NOT NULL DEFAULT 5,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (coordinator_agent_id) REFERENCES studio_agents(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_studio_agent_teams_updated ON studio_agent_teams(updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS studio_agent_team_members (
+        id TEXT PRIMARY KEY,
+        team_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        model_id TEXT,
+        role TEXT NOT NULL,
+        capability_preset TEXT NOT NULL DEFAULT 'readonly_research',
+        display_name TEXT,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (team_id) REFERENCES studio_agent_teams(id) ON DELETE CASCADE,
+        FOREIGN KEY (agent_id) REFERENCES studio_agents(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_studio_agent_team_members_team
+        ON studio_agent_team_members(team_id, sort_order ASC);
+
+    CREATE TABLE IF NOT EXISTS studio_agent_team_relations (
+        id TEXT PRIMARY KEY,
+        team_id TEXT NOT NULL,
+        parent_member_id TEXT NOT NULL,
+        child_member_id TEXT NOT NULL,
+        relation_type TEXT NOT NULL DEFAULT 'delegates_to',
+        auto_dispatch_allowed INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (team_id) REFERENCES studio_agent_teams(id) ON DELETE CASCADE,
+        FOREIGN KEY (parent_member_id) REFERENCES studio_agent_team_members(id) ON DELETE CASCADE,
+        FOREIGN KEY (child_member_id) REFERENCES studio_agent_team_members(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_studio_agent_team_relations_team ON studio_agent_team_relations(team_id);
 
     -- 搴旂敤鐘舵€佽〃锛堢獥鍙ｇ姸鎬佹仮澶嶏級
     CREATE TABLE IF NOT EXISTS app_state (
@@ -684,12 +848,245 @@ pub fn init_database() -> Result<()> {
         }
     }
 
+    let agent_teams_table_sql = r#"
+        CREATE TABLE IF NOT EXISTS agent_teams (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            mode TEXT NOT NULL DEFAULT 'coordinator_subagents',
+            coordinator_agent_id TEXT,
+            coordinator_model_id TEXT,
+            subagent_max_concurrent INTEGER NOT NULL DEFAULT 3,
+            max_children_per_task INTEGER NOT NULL DEFAULT 5,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (coordinator_agent_id) REFERENCES agents(id) ON DELETE SET NULL
+        )
+    "#;
+    if let Err(e) = conn.execute(agent_teams_table_sql, []) {
+        println!("Agent teams table migration warning: {}", e);
+    }
+
+    let agent_teams_indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_agent_teams_updated ON agent_teams(updated_at DESC)",
+    ];
+    for migration in agent_teams_indexes {
+        if let Err(e) = conn.execute(migration, []) {
+            println!("Agent teams index migration warning: {}", e);
+        }
+    }
+
+    let agent_team_members_table_sql = r#"
+        CREATE TABLE IF NOT EXISTS agent_team_members (
+            id TEXT PRIMARY KEY,
+            team_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            model_id TEXT,
+            role TEXT NOT NULL,
+            capability_preset TEXT NOT NULL DEFAULT 'readonly_research',
+            display_name TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (team_id) REFERENCES agent_teams(id) ON DELETE CASCADE,
+            FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+        )
+    "#;
+    if let Err(e) = conn.execute(agent_team_members_table_sql, []) {
+        println!("Agent team members table migration warning: {}", e);
+    }
+
+    let agent_team_members_indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_agent_team_members_team ON agent_team_members(team_id, sort_order ASC)",
+    ];
+    for migration in agent_team_members_indexes {
+        if let Err(e) = conn.execute(migration, []) {
+            println!("Agent team members index migration warning: {}", e);
+        }
+    }
+
+    let agent_team_relations_table_sql = r#"
+        CREATE TABLE IF NOT EXISTS agent_team_relations (
+            id TEXT PRIMARY KEY,
+            team_id TEXT NOT NULL,
+            parent_member_id TEXT NOT NULL,
+            child_member_id TEXT NOT NULL,
+            relation_type TEXT NOT NULL DEFAULT 'delegates_to',
+            auto_dispatch_allowed INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (team_id) REFERENCES agent_teams(id) ON DELETE CASCADE,
+            FOREIGN KEY (parent_member_id) REFERENCES agent_team_members(id) ON DELETE CASCADE,
+            FOREIGN KEY (child_member_id) REFERENCES agent_team_members(id) ON DELETE CASCADE
+        )
+    "#;
+    if let Err(e) = conn.execute(agent_team_relations_table_sql, []) {
+        println!("Agent team relations table migration warning: {}", e);
+    }
+
+    let agent_team_relations_indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_agent_team_relations_team ON agent_team_relations(team_id)",
+    ];
+    for migration in agent_team_relations_indexes {
+        if let Err(e) = conn.execute(migration, []) {
+            println!("Agent team relations index migration warning: {}", e);
+        }
+    }
+
+    let studio_agents_table_sql = r#"
+        CREATE TABLE IF NOT EXISTS studio_agents (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            specialization TEXT,
+            role_type TEXT NOT NULL DEFAULT 'custom',
+            runtime_agent_id TEXT NOT NULL,
+            runtime_model_id TEXT,
+            system_prompt TEXT,
+            instruction_note TEXT,
+            readonly_researcher INTEGER NOT NULL DEFAULT 0,
+            planning_capability INTEGER NOT NULL DEFAULT 0,
+            execution_capability INTEGER NOT NULL DEFAULT 1,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (runtime_agent_id) REFERENCES agents(id) ON DELETE CASCADE
+        )
+    "#;
+    if let Err(e) = conn.execute(studio_agents_table_sql, []) {
+        println!("Studio agents table migration warning: {}", e);
+    }
+
+    let studio_agent_indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_studio_agents_runtime ON studio_agents(runtime_agent_id)",
+        "CREATE INDEX IF NOT EXISTS idx_studio_agents_updated ON studio_agents(updated_at DESC)",
+    ];
+    for migration in studio_agent_indexes {
+        if let Err(e) = conn.execute(migration, []) {
+            println!("Studio agents index migration warning: {}", e);
+        }
+    }
+
+    let studio_agent_bindings_table_sql = r#"
+        CREATE TABLE IF NOT EXISTS studio_agent_resource_bindings (
+            id TEXT PRIMARY KEY,
+            studio_agent_id TEXT NOT NULL,
+            resource_type TEXT NOT NULL,
+            resource_id TEXT NOT NULL,
+            resource_name TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (studio_agent_id) REFERENCES studio_agents(id) ON DELETE CASCADE
+        )
+    "#;
+    if let Err(e) = conn.execute(studio_agent_bindings_table_sql, []) {
+        println!("Studio agent bindings table migration warning: {}", e);
+    }
+
+    let studio_agent_bindings_indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_studio_agent_bindings_agent ON studio_agent_resource_bindings(studio_agent_id, resource_type, sort_order ASC)",
+    ];
+    for migration in studio_agent_bindings_indexes {
+        if let Err(e) = conn.execute(migration, []) {
+            println!("Studio agent bindings index migration warning: {}", e);
+        }
+    }
+
+    let studio_agent_teams_table_sql = r#"
+        CREATE TABLE IF NOT EXISTS studio_agent_teams (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            mode TEXT NOT NULL DEFAULT 'coordinator_subagents',
+            coordinator_agent_id TEXT,
+            coordinator_model_id TEXT,
+            subagent_max_concurrent INTEGER NOT NULL DEFAULT 3,
+            max_children_per_task INTEGER NOT NULL DEFAULT 5,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (coordinator_agent_id) REFERENCES studio_agents(id) ON DELETE SET NULL
+        )
+    "#;
+    if let Err(e) = conn.execute(studio_agent_teams_table_sql, []) {
+        println!("Studio agent teams table migration warning: {}", e);
+    }
+
+    let studio_agent_team_indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_studio_agent_teams_updated ON studio_agent_teams(updated_at DESC)",
+    ];
+    for migration in studio_agent_team_indexes {
+        if let Err(e) = conn.execute(migration, []) {
+            println!("Studio agent teams index migration warning: {}", e);
+        }
+    }
+
+    let studio_agent_team_members_table_sql = r#"
+        CREATE TABLE IF NOT EXISTS studio_agent_team_members (
+            id TEXT PRIMARY KEY,
+            team_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            model_id TEXT,
+            role TEXT NOT NULL,
+            capability_preset TEXT NOT NULL DEFAULT 'readonly_research',
+            display_name TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (team_id) REFERENCES studio_agent_teams(id) ON DELETE CASCADE,
+            FOREIGN KEY (agent_id) REFERENCES studio_agents(id) ON DELETE CASCADE
+        )
+    "#;
+    if let Err(e) = conn.execute(studio_agent_team_members_table_sql, []) {
+        println!("Studio agent team members table migration warning: {}", e);
+    }
+
+    let studio_agent_team_members_indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_studio_agent_team_members_team ON studio_agent_team_members(team_id, sort_order ASC)",
+    ];
+    for migration in studio_agent_team_members_indexes {
+        if let Err(e) = conn.execute(migration, []) {
+            println!("Studio agent team members index migration warning: {}", e);
+        }
+    }
+
+    let studio_agent_team_relations_table_sql = r#"
+        CREATE TABLE IF NOT EXISTS studio_agent_team_relations (
+            id TEXT PRIMARY KEY,
+            team_id TEXT NOT NULL,
+            parent_member_id TEXT NOT NULL,
+            child_member_id TEXT NOT NULL,
+            relation_type TEXT NOT NULL DEFAULT 'delegates_to',
+            auto_dispatch_allowed INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (team_id) REFERENCES studio_agent_teams(id) ON DELETE CASCADE,
+            FOREIGN KEY (parent_member_id) REFERENCES studio_agent_team_members(id) ON DELETE CASCADE,
+            FOREIGN KEY (child_member_id) REFERENCES studio_agent_team_members(id) ON DELETE CASCADE
+        )
+    "#;
+    if let Err(e) = conn.execute(studio_agent_team_relations_table_sql, []) {
+        println!("Studio agent team relations table migration warning: {}", e);
+    }
+
+    let studio_agent_team_relations_indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_studio_agent_team_relations_team ON studio_agent_team_relations(team_id)",
+    ];
+    for migration in studio_agent_team_relations_indexes {
+        if let Err(e) = conn.execute(migration, []) {
+            println!("Studio agent team relations index migration warning: {}", e);
+        }
+    }
+
     // plans 琛ㄦ坊鍔犳柊瀛楁锛堜换鍔℃媶鍒嗛绮掑害銆佹渶澶ч噸璇曟鏁般€佹墽琛岀姸鎬併€佸綋鍓嶄换鍔D锛?
     let plans_migrations = [
         "ALTER TABLE plans ADD COLUMN granularity INTEGER DEFAULT 20",
         "ALTER TABLE plans ADD COLUMN max_retry_count INTEGER DEFAULT 3",
         "ALTER TABLE plans ADD COLUMN execution_status TEXT DEFAULT 'idle'",
         "ALTER TABLE plans ADD COLUMN current_task_id TEXT",
+        "ALTER TABLE plans ADD COLUMN split_execution_mode TEXT DEFAULT 'single'",
+        "ALTER TABLE plans ADD COLUMN split_team_id TEXT",
         "ALTER TABLE plans ADD COLUMN split_agent_id TEXT",
         "ALTER TABLE plans ADD COLUMN split_model_id TEXT",
         "ALTER TABLE plans ADD COLUMN scheduled_at TEXT",
@@ -710,6 +1107,9 @@ pub fn init_database() -> Result<()> {
     let tasks_migrations = [
         "ALTER TABLE tasks ADD COLUMN agent_id TEXT",
         "ALTER TABLE tasks ADD COLUMN model_id TEXT",
+        "ALTER TABLE tasks ADD COLUMN recommended_agent_id TEXT",
+        "ALTER TABLE tasks ADD COLUMN recommended_model_id TEXT",
+        "ALTER TABLE tasks ADD COLUMN recommendation_reason TEXT",
         "ALTER TABLE tasks ADD COLUMN retry_count INTEGER DEFAULT 0",
         "ALTER TABLE tasks ADD COLUMN max_retries INTEGER DEFAULT 3",
         "ALTER TABLE tasks ADD COLUMN error_message TEXT",

@@ -7,6 +7,9 @@ export * from './project'
 export * from './session'
 export * from './agent'
 export * from './agentConfig'
+export * from './agentProfile'
+export * from './agentStudio'
+export * from './agentTeam'
 // 从 message 导出，但排除 CompressionStrategy（已在 token 中定义）
 export {
   useMessageStore,

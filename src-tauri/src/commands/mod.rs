@@ -1,5 +1,8 @@
 pub mod agent;
 pub mod agent_config;
+pub mod agent_profile;
+pub mod agent_studio;
+pub mod agent_team;
 pub mod app_state;
 pub mod builtin_mcp;
 pub mod cli;

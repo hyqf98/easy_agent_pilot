@@ -13,6 +13,7 @@ export type ScheduleStatus = 'none' | 'scheduled' | 'triggered' | 'cancelled'
 
 // 计划拆分模式
 export type PlanSplitMode = 'ai' | 'manual'
+export type PlanSplitExecutionMode = 'single' | 'coordinator_subagents'
 
 // 任务状态
 export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'blocked' | 'failed' | 'cancelled'
@@ -40,6 +41,8 @@ export interface Plan {
   name: string
   description?: string
   splitMode: PlanSplitMode    // 拆分模式: ai | manual
+  splitExecutionMode?: PlanSplitExecutionMode
+  splitTeamId?: string
   splitAgentId?: string
   splitModelId?: string
   status: PlanStatus
@@ -68,6 +71,12 @@ export interface Task {
   agentId?: string
   /** 执行模型 ID */
   modelId?: string
+  /** 推荐执行智能体 ID */
+  recommendedAgentId?: string
+  /** 推荐执行模型 ID */
+  recommendedModelId?: string
+  /** 推荐原因 */
+  recommendationReason?: string
   sessionId?: string
   progressFile?: string
   dependencies?: string[]
@@ -91,6 +100,8 @@ export interface CreatePlanInput {
   name: string
   description?: string
   splitMode?: PlanSplitMode    // 拆分模式: ai | manual
+  splitExecutionMode?: PlanSplitExecutionMode
+  splitTeamId?: string
   splitAgentId?: string
   splitModelId?: string
   agentTeam?: AgentRole[]
@@ -104,6 +115,8 @@ export interface UpdatePlanInput {
   name?: string
   description?: string
   splitMode?: PlanSplitMode    // 拆分模式: ai | manual
+  splitExecutionMode?: PlanSplitExecutionMode
+  splitTeamId?: string
   splitAgentId?: string
   splitModelId?: string
   status?: PlanStatus
@@ -128,6 +141,9 @@ export interface CreateTaskInput {
   agentId?: string
   /** 执行模型 ID */
   modelId?: string
+  recommendedAgentId?: string
+  recommendedModelId?: string
+  recommendationReason?: string
   dependencies?: string[]
   order?: number
   maxRetries?: number
@@ -147,6 +163,9 @@ export interface UpdateTaskInput {
   agentId?: string
   /** 执行模型 ID */
   modelId?: string
+  recommendedAgentId?: string
+  recommendedModelId?: string
+  recommendationReason?: string
   sessionId?: string
   progressFile?: string
   dependencies?: string[]
@@ -339,6 +358,9 @@ export interface AITaskItem {
   agentId?: string
   /** 执行模型 ID */
   modelId?: string
+  recommendedAgentId?: string
+  recommendedModelId?: string
+  recommendationReason?: string
   implementationSteps: string[]
   testSteps: string[]
   acceptanceCriteria: string[]

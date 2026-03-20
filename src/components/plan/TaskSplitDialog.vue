@@ -671,6 +671,8 @@ async function initializeDialogSession() {
     granularity: plan.granularity,
     agentId: dialogContext.agentId,
     modelId: dialogContext.modelId,
+    splitExecutionMode: dialogContext.splitExecutionMode ?? plan.splitExecutionMode,
+    splitTeamId: dialogContext.splitTeamId ?? plan.splitTeamId,
     workingDirectory: project?.path
   })
 }
@@ -748,8 +750,11 @@ async function confirmSplit() {
       title: task.title,
       description: task.description,
       priority: task.priority,
-      agentId: task.agentId,
-      modelId: task.modelId,
+      agentId: task.agentId || task.recommendedAgentId,
+      modelId: task.modelId || task.recommendedModelId,
+      recommendedAgentId: task.recommendedAgentId,
+      recommendedModelId: task.recommendedModelId,
+      recommendationReason: task.recommendationReason,
       implementationSteps: task.implementationSteps,
       testSteps: task.testSteps,
       acceptanceCriteria: task.acceptanceCriteria,

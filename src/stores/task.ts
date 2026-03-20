@@ -25,6 +25,9 @@ interface RustTask {
   assignee?: string
   agent_id?: string
   model_id?: string
+  recommended_agent_id?: string
+  recommended_model_id?: string
+  recommendation_reason?: string
   session_id?: string
   progress_file?: string
   dependencies?: string | string[] // JSON 字符串或数组
@@ -100,6 +103,9 @@ function transformTask(rustTask: RustTask): Task {
     assignee: rustTask.assignee as AgentRole | undefined,
     agentId: rustTask.agent_id,
     modelId: rustTask.model_id,
+    recommendedAgentId: rustTask.recommended_agent_id,
+    recommendedModelId: rustTask.recommended_model_id,
+    recommendationReason: rustTask.recommendation_reason,
     sessionId: rustTask.session_id,
     progressFile: rustTask.progress_file,
     dependencies,
@@ -270,6 +276,9 @@ export const useTaskStore = defineStore('task', () => {
       assignee: input.assignee ?? null,
       agent_id: input.agentId ?? null,
       model_id: input.modelId ?? null,
+      recommended_agent_id: input.recommendedAgentId ?? null,
+      recommended_model_id: input.recommendedModelId ?? null,
+      recommendation_reason: input.recommendationReason ?? null,
       dependencies: input.dependencies ?? null,
       order: input.order ?? null,
       max_retries: input.maxRetries ?? null,
@@ -307,6 +316,9 @@ export const useTaskStore = defineStore('task', () => {
     if ('assignee' in updates) input.assignee = updates.assignee ?? null
     if ('agentId' in updates) input.agent_id = updates.agentId ?? null
     if ('modelId' in updates) input.model_id = updates.modelId ?? null
+    if ('recommendedAgentId' in updates) input.recommended_agent_id = updates.recommendedAgentId ?? null
+    if ('recommendedModelId' in updates) input.recommended_model_id = updates.recommendedModelId ?? null
+    if ('recommendationReason' in updates) input.recommendation_reason = updates.recommendationReason ?? null
     if ('sessionId' in updates) input.session_id = updates.sessionId ?? null
     if ('progressFile' in updates) input.progress_file = updates.progressFile ?? null
     if ('dependencies' in updates) input.dependencies = updates.dependencies ?? null
@@ -606,6 +618,9 @@ export const useTaskStore = defineStore('task', () => {
       assignee: input.assignee ?? null,
       agent_id: input.agentId ?? null,
       model_id: input.modelId ?? null,
+      recommended_agent_id: input.recommendedAgentId ?? null,
+      recommended_model_id: input.recommendedModelId ?? null,
+      recommendation_reason: input.recommendationReason ?? null,
       dependencies: null, // 先不设置依赖，创建后再更新
       order: input.order ?? null,
       max_retries: input.maxRetries ?? null,

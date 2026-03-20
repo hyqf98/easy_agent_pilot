@@ -39,6 +39,9 @@ const form = ref({
   priority: props.task.priority,
   agentId: props.task.agentId || undefined,
   modelId: props.task.modelId || undefined,
+  recommendedAgentId: props.task.recommendedAgentId || undefined,
+  recommendedModelId: props.task.recommendedModelId || undefined,
+  recommendationReason: props.task.recommendationReason || '',
   implementationSteps: [...(props.task.implementationSteps || [])],
   testSteps: [...(props.task.testSteps || [])],
   acceptanceCriteria: [...(props.task.acceptanceCriteria || [])],
@@ -101,6 +104,9 @@ function buildFormState(task: Task) {
     priority: task.priority,
     agentId: task.agentId || relatedPlan?.splitAgentId || undefined,
     modelId: task.modelId ?? relatedPlan?.splitModelId ?? '',
+    recommendedAgentId: task.recommendedAgentId || undefined,
+    recommendedModelId: task.recommendedModelId || undefined,
+    recommendationReason: task.recommendationReason || '',
     implementationSteps: sanitizeTextList(task.implementationSteps),
     testSteps: sanitizeTextList(task.testSteps),
     acceptanceCriteria: sanitizeTextList(task.acceptanceCriteria),
@@ -136,6 +142,14 @@ const executionConfigHint = computed(() => {
   const agentName = getAgentName(currentPlan.value.splitAgentId)
   const modelLabel = currentPlan.value.splitModelId ? ` / ${currentPlan.value.splitModelId}` : ''
   return `默认来源于计划配置：${agentName}${modelLabel}`
+})
+
+const recommendationHint = computed(() => {
+  if (!form.value.recommendedAgentId) {
+    return ''
+  }
+
+  return `${form.value.recommendedAgentId}${form.value.recommendedModelId ? ` / ${form.value.recommendedModelId}` : ''}`
 })
 
 // 监听 task 变化，更新表单
@@ -312,6 +326,9 @@ async function handleSave() {
     priority: form.value.priority,
     agentId: form.value.agentId,
     modelId: form.value.modelId || undefined,
+    recommendedAgentId: form.value.recommendedAgentId,
+    recommendedModelId: form.value.recommendedModelId || undefined,
+    recommendationReason: sanitizeText(form.value.recommendationReason),
     implementationSteps: form.value.implementationSteps.map(sanitizeText).filter(s => s.trim()),
     testSteps: form.value.testSteps.map(sanitizeText).filter(s => s.trim()),
     acceptanceCriteria: form.value.acceptanceCriteria.map(sanitizeText).filter(s => s.trim()),
@@ -499,6 +516,10 @@ function close() {
                 </option>
               </select>
               <span class="field-hint">{{ executionConfigHint }}</span>
+              <span
+                v-if="recommendationHint"
+                class="field-hint"
+              >推荐：{{ recommendationHint }}</span>
             </div>
 
             <div class="form-field full-width">
@@ -522,6 +543,15 @@ function close() {
                   {{ opt.label }}
                 </option>
               </select>
+            </div>
+
+            <div class="form-field full-width">
+              <label>推荐原因</label>
+              <textarea
+                v-model="form.recommendationReason"
+                rows="2"
+                placeholder="说明推荐该执行 Agent 的原因"
+              />
             </div>
           </div>
         </div>

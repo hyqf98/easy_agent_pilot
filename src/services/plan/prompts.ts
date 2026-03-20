@@ -2,6 +2,11 @@ export interface PlanSplitPromptContext {
   planName: string
   planDescription?: string
   minTaskCount: number
+  executionMode?: 'single' | 'coordinator_subagents'
+  teamName?: string
+  coordinatorLabel?: string
+  teamSummary?: string
+  agentCatalog?: string
 }
 
 export interface TaskResplitPromptContext {
@@ -32,6 +37,7 @@ export function buildPlanSplitSystemPrompt(): string {
 6. 信息充分后输出 task_split（status=DONE）
 7. 任务需可执行、有明确边界、包含实现/测试步骤和验收标准
 8. 用 dependsOn 指定任务依赖关系
+9. 如果提供了可用执行智能体目录，请为每个任务输出 recommendedAgentId、recommendedModelId、recommendationReason
 9. 最终回答内容必须是单个 JSON 对象，不要夹带解释文字
 
 禁止事项：
@@ -43,6 +49,11 @@ export function buildPlanSplitKickoffPrompt(context: PlanSplitPromptContext): st
   return `计划名称: ${context.planName}
 计划描述: ${context.planDescription?.trim() || '（无）'}
 最少任务数: ${context.minTaskCount}
+拆解执行模式: ${context.executionMode === 'coordinator_subagents' ? '主控 + 只读研究型子代理' : '单 Agent'}
+${context.teamName ? `团队名称: ${context.teamName}` : ''}
+${context.coordinatorLabel ? `主控: ${context.coordinatorLabel}` : ''}
+${context.teamSummary ? `团队摘要:\n${context.teamSummary}` : ''}
+${context.agentCatalog ? `可用执行智能体目录:\n${context.agentCatalog}` : ''}
 
 请开始拆分：若信息不足则输出 form_request 收集信息；若信息已足够则直接输出 task_split。`.trim()
 }
@@ -192,6 +203,9 @@ function buildPlanSplitTaskSchema() {
       title: { type: 'string', minLength: 1 },
       description: { type: 'string', minLength: 1 },
       priority: { type: 'string', enum: ['high', 'medium', 'low'] },
+      recommendedAgentId: { type: 'string', minLength: 1 },
+      recommendedModelId: { type: 'string' },
+      recommendationReason: { type: 'string' },
       implementationSteps: {
         type: 'array',
         minItems: 1,
@@ -316,6 +330,9 @@ function buildCodexPlanSplitTaskSchema() {
       title: { type: 'string', minLength: 1 },
       description: { type: 'string', minLength: 1 },
       priority: { type: 'string', enum: ['high', 'medium', 'low'] },
+      recommendedAgentId: { type: ['string', 'null'] },
+      recommendedModelId: { type: ['string', 'null'] },
+      recommendationReason: { type: ['string', 'null'] },
       implementationSteps: {
         type: 'array',
         minItems: 1,

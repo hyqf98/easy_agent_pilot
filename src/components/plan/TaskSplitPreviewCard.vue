@@ -118,6 +118,22 @@ function getPriorityLabel(priority: TaskPriority) {
       <span class="deps-label">{{ t('task.dependencies') }}:</span>
       <span class="deps-list">{{ task.dependsOn.join(', ') }}</span>
     </div>
+
+    <div
+      v-if="task.recommendedAgentId || task.recommendationReason"
+      class="task-recommendation"
+    >
+      <span class="deps-label">推荐执行:</span>
+      <span class="deps-list">
+        {{ task.recommendedAgentId || '未指定' }}<template v-if="task.recommendedModelId"> / {{ task.recommendedModelId }}</template>
+      </span>
+      <p
+        v-if="task.recommendationReason"
+        class="task-recommendation__reason"
+      >
+        {{ task.recommendationReason }}
+      </p>
+    </div>
   </div>
 </template>
 
@@ -250,5 +266,16 @@ function getPriorityLabel(priority: TaskPriority) {
 
 .task-deps {
   margin-top: var(--spacing-2, 0.5rem);
+}
+
+.task-recommendation {
+  margin-top: var(--spacing-2, 0.5rem);
+}
+
+.task-recommendation__reason {
+  margin: 4px 0 0;
+  font-size: var(--font-size-xs, 12px);
+  color: var(--color-text-secondary, #64748b);
+  line-height: 1.5;
 }
 </style>

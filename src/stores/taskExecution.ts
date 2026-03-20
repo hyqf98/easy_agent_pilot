@@ -10,12 +10,13 @@ import type {
   PlanExecutionProgress
 } from '@/types/taskExecution'
 import type { ToolCall } from '@/stores/message'
-import type { StreamEvent, McpServerConfig } from '@/services/conversation/strategies/types'
+import type { StreamEvent } from '@/services/conversation/strategies/types'
 import type { AIFormRequest } from '@/types/plan'
 import { useTaskStore } from '@/stores/task'
 import { usePlanStore } from '@/stores/plan'
 import { useProjectStore } from '@/stores/project'
 import { useAgentStore } from '@/stores/agent'
+import { buildAgentProfileSystemPrompt, useAgentProfileStore } from '@/stores/agentProfile'
 import { agentExecutor } from '@/services/conversation/AgentExecutor'
 import type { ConversationContext } from '@/services/conversation/strategies/types'
 import { extractFirstFormRequest } from '@/utils/structuredContent'
@@ -301,6 +302,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
     const planStore = usePlanStore()
     const projectStore = useProjectStore()
     const agentStore = useAgentStore()
+    const agentProfileStore = useAgentProfileStore()
 
     // 获取任务信息
     const task = taskStore.tasks.find(t => t.id === taskId)
@@ -368,6 +370,8 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
         ...baseAgent,
         modelId: selection.modelId || baseAgent.modelId
       }
+      const executionProfile = await agentProfileStore.resolveExecutionProfile(agent.id)
+      const agentSystemPrompt = buildAgentProfileSystemPrompt(executionProfile)
 
       // 检查策略支持
       if (!agentExecutor.isSupported(agent)) {
@@ -381,23 +385,32 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
       // 构建执行提示
       const prompt = buildExecutionPrompt(task, recentResults, planProgress)
 
-      // 获取 MCP 配置（暂时使用空配置）
-      const mcpServers: McpServerConfig[] = []
-
       // 构建对话上下文
       const context: ConversationContext = {
         sessionId: `task-${taskId}`,
         agent,
-        messages: [{
-          id: `task-prompt-${taskId}`,
-          sessionId: `task-${taskId}`,
-          role: 'user',
-          content: prompt,
-          status: 'completed',
-          createdAt: new Date().toISOString()
-        }],
+        messages: [
+          ...(agentSystemPrompt
+            ? [{
+                id: `task-system-${taskId}`,
+                sessionId: `task-${taskId}`,
+                role: 'system' as const,
+                content: agentSystemPrompt,
+                status: 'completed' as const,
+                createdAt: new Date().toISOString()
+              }]
+            : []),
+          {
+            id: `task-prompt-${taskId}`,
+            sessionId: `task-${taskId}`,
+            role: 'user',
+            content: prompt,
+            status: 'completed',
+            createdAt: new Date().toISOString()
+          }
+        ],
         workingDirectory,
-        mcpServers: mcpServers.length > 0 ? mcpServers : undefined,
+        mcpServers: executionProfile.mcpServers.length > 0 ? executionProfile.mcpServers : undefined,
         executionMode: 'chat',
         responseMode: 'stream_text'
       }

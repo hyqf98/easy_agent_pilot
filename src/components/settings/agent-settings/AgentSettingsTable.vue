@@ -6,6 +6,7 @@ import { EaButton, EaIcon, EaStateBlock } from '@/components/common'
 
 interface Props {
   agents: AgentConfig[]
+  activeAgentId?: string | null
   searchQuery: string
   filteredCount: number
   currentPage: number
@@ -18,6 +19,7 @@ interface Props {
 const props = defineProps<Props>()
 
 const emit = defineEmits<{
+  focusAgent: [agent: AgentConfig]
   test: [id: string]
   manageModels: [agent: AgentConfig]
   edit: [agent: AgentConfig]
@@ -91,6 +93,8 @@ function changePage(page: number) {
             v-for="agent in agents"
             :key="agent.id"
             class="agent-table__row"
+            :class="{ 'agent-table__row--active': props.activeAgentId === agent.id }"
+            @click="emit('focusAgent', agent)"
           >
             <td class="agent-table__td agent-table__td--name">
               <div class="agent-name-cell">
@@ -141,7 +145,7 @@ function changePage(page: number) {
                   type="ghost"
                   size="small"
                   :loading="testingAgentId === agent.id"
-                  @click="emit('test', agent.id)"
+                  @click.stop="emit('test', agent.id)"
                 >
                   <EaIcon
                     name="wifi"
@@ -151,7 +155,7 @@ function changePage(page: number) {
                 <EaButton
                   type="ghost"
                   size="small"
-                  @click="emit('manageModels', agent)"
+                  @click.stop="emit('manageModels', agent)"
                 >
                   <EaIcon
                     name="cpu"
@@ -161,7 +165,7 @@ function changePage(page: number) {
                 <EaButton
                   type="ghost"
                   size="small"
-                  @click="emit('edit', agent)"
+                  @click.stop="emit('edit', agent)"
                 >
                   <EaIcon
                     name="edit-2"
@@ -172,7 +176,7 @@ function changePage(page: number) {
                   type="ghost"
                   size="small"
                   class="action-buttons__delete"
-                  @click="emit('delete', agent)"
+                  @click.stop="emit('delete', agent)"
                 >
                   <EaIcon
                     name="trash-2"
@@ -282,6 +286,10 @@ function changePage(page: number) {
 
 .agent-table__row:hover {
   background-color: var(--color-surface-hover);
+}
+
+.agent-table__row--active {
+  background-color: var(--color-primary-light);
 }
 
 .agent-table__td {

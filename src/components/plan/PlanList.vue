@@ -4,6 +4,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { useConfirmDialog } from '@/composables'
 import { useAgentConfigStore } from '@/stores/agentConfig'
 import { inferAgentProvider, useAgentStore } from '@/stores/agent'
+import { useAgentStudioStore } from '@/stores/agentStudio'
+import { useAgentTeamStore } from '@/stores/agentTeam'
 import { usePlanStore } from '@/stores/plan'
 import { useProjectStore } from '@/stores/project'
 import type { Plan, PlanStatus, TaskStatus, UpdatePlanInput } from '@/types/plan'
@@ -41,6 +43,8 @@ const EMPTY_PLAN_TASK_STATS: PlanTaskStats = {
 const planStore = usePlanStore()
 const projectStore = useProjectStore()
 const agentStore = useAgentStore()
+const agentStudioStore = useAgentStudioStore()
+const agentTeamStore = useAgentTeamStore()
 const agentConfigStore = useAgentConfigStore()
 const confirmDialog = useConfirmDialog()
 const emit = defineEmits<{
@@ -65,6 +69,8 @@ const createForm = reactive<PlanCreateFormState>({
   name: '',
   description: '',
   splitMode: 'ai',
+  splitExecutionMode: 'single',
+  splitTeamId: null,
   granularity: 20,
   maxRetryCount: 3,
   splitAgentId: null,
@@ -74,6 +80,8 @@ const createForm = reactive<PlanCreateFormState>({
 })
 
 const splitConfigForm = reactive<PlanSplitConfigFormState>({
+  executionMode: 'single',
+  teamId: null,
   agentId: null,
   modelId: ''
 })
@@ -82,6 +90,8 @@ const editForm = reactive<PlanEditFormState>({
   name: '',
   description: '',
   splitMode: 'ai',
+  splitExecutionMode: 'single',
+  splitTeamId: null,
   granularity: 20,
   maxRetryCount: 3,
   splitAgentId: null,
@@ -142,6 +152,13 @@ const agentOptions = computed<AgentOption[]>(() =>
   }))
 )
 
+const teamOptions = computed<AgentOption[]>(() =>
+  agentTeamStore.sortedTeams.map(team => ({
+    label: `${team.name}${team.members.length > 0 ? ` (${team.members.length} agents)` : ''}`,
+    value: team.id
+  }))
+)
+
 const plans = computed(() => {
   if (!projectStore.currentProject) return []
   return planStore.plansByProject(projectStore.currentProject.id)
@@ -193,12 +210,14 @@ const canStartSplitFromCreate = computed(() =>
 )
 
 const canStartSplitFromList = computed(() =>
-  Boolean(
-    splitConfigPlan.value &&
-    splitConfigForm.agentId &&
-    splitConfigModelOptions.value.length > 0 &&
-    isModelSelectionValid(splitConfigForm.agentId, splitConfigForm.modelId)
-  )
+  splitConfigForm.executionMode === 'coordinator_subagents'
+    ? Boolean(splitConfigPlan.value && splitConfigForm.teamId)
+    : Boolean(
+      splitConfigPlan.value &&
+      splitConfigForm.agentId &&
+      splitConfigModelOptions.value.length > 0 &&
+      isModelSelectionValid(splitConfigForm.agentId, splitConfigForm.modelId)
+    )
 )
 
 async function loadEnabledModels(agentId: string): Promise<ModelOption[]> {
@@ -294,6 +313,8 @@ function resetCreateForm() {
     name: '',
     description: '',
     splitMode: 'ai',
+    splitExecutionMode: 'single',
+    splitTeamId: null,
     granularity: 20,
     maxRetryCount: 3,
     splitAgentId: null,
@@ -395,6 +416,8 @@ function resetEditForm() {
     name: '',
     description: '',
     splitMode: 'ai',
+    splitExecutionMode: 'single',
+    splitTeamId: null,
     granularity: 20,
     maxRetryCount: 3,
     splitAgentId: null,
@@ -471,6 +494,8 @@ function updateSplitConfigForm(patch: Partial<PlanSplitConfigFormState>) {
 
 function resetSplitConfigForm() {
   updateSplitConfigForm({
+    executionMode: 'single',
+    teamId: null,
     agentId: null,
     modelId: ''
   })
@@ -480,6 +505,36 @@ function resetSplitConfigForm() {
 async function startSplitTasks(plan: Plan) {
   if (agentStore.agents.length === 0) {
     await agentStore.loadAgents()
+  }
+  if (agentTeamStore.teams.length === 0) {
+    await agentTeamStore.loadTeams().catch(() => {})
+  }
+  if (agentStudioStore.agents.length === 0) {
+    await agentStudioStore.loadAgents().catch(() => {})
+  }
+
+  if (plan.splitExecutionMode === 'coordinator_subagents' && plan.splitTeamId) {
+    const team = agentTeamStore.getTeam(plan.splitTeamId)
+    const coordinatorRuntimeAgentId = team?.coordinatorAgentId
+      ? agentStudioStore.getAgent(team.coordinatorAgentId)?.runtimeAgentId
+      : null
+    const coordinatorModelId = team?.coordinatorModelId
+      || (team?.coordinatorAgentId ? agentStudioStore.getAgent(team.coordinatorAgentId)?.runtimeModelId : null)
+
+    if (team?.coordinatorAgentId && coordinatorRuntimeAgentId) {
+      await planStore.updatePlan(plan.id, {
+        status: 'planning'
+      })
+      planStore.openSplitDialog({
+        planId: plan.id,
+        agentId: coordinatorRuntimeAgentId,
+        modelId: coordinatorModelId ?? '',
+        splitExecutionMode: 'coordinator_subagents',
+        splitTeamId: team.id,
+        entry: plan.status === 'planning' ? 'resume_split' : 'list_split'
+      })
+      return
+    }
   }
 
   const configuredAgent = plan.splitAgentId
@@ -504,7 +559,11 @@ async function startSplitTasks(plan: Plan) {
   }
 
   splitConfigPlan.value = plan
-  updateSplitConfigForm({ agentId: plan.splitAgentId || agentOptions.value[0]?.value || null })
+  updateSplitConfigForm({
+    executionMode: plan.splitExecutionMode ?? 'single',
+    teamId: plan.splitTeamId ?? null,
+    agentId: plan.splitAgentId || agentOptions.value[0]?.value || null
+  })
   showSplitConfigDialog.value = true
 }
 
@@ -515,22 +574,53 @@ function closeSplitConfigDialog() {
 }
 
 async function confirmSplitConfigAndStart() {
-  if (!splitConfigPlan.value || !splitConfigForm.agentId) return
-  if (splitConfigModelOptions.value.length === 0) return
+  if (!splitConfigPlan.value) return
 
   try {
-    const updatedPlan = await planStore.updatePlan(splitConfigPlan.value.id, {
-      splitAgentId: splitConfigForm.agentId,
-      splitModelId: splitConfigForm.modelId,
-      status: 'planning'
-    })
+    if (splitConfigForm.executionMode === 'coordinator_subagents') {
+      const team = agentTeamStore.getTeam(splitConfigForm.teamId)
+      const coordinatorRuntimeAgentId = team?.coordinatorAgentId
+        ? agentStudioStore.getAgent(team.coordinatorAgentId)?.runtimeAgentId
+        : null
+      const coordinatorModelId = team?.coordinatorModelId
+        || (team?.coordinatorAgentId ? agentStudioStore.getAgent(team.coordinatorAgentId)?.runtimeModelId : null)
+      if (!team?.coordinatorAgentId || !coordinatorRuntimeAgentId) return
 
-    planStore.openSplitDialog({
-      planId: updatedPlan.id,
-      agentId: splitConfigForm.agentId,
-      modelId: splitConfigForm.modelId,
-      entry: splitConfigPlan.value.status === 'planning' ? 'resume_split' : 'list_split'
-    })
+      const updatedPlan = await planStore.updatePlan(splitConfigPlan.value.id, {
+        splitExecutionMode: 'coordinator_subagents',
+        splitTeamId: team.id,
+        splitAgentId: coordinatorRuntimeAgentId,
+        splitModelId: coordinatorModelId ?? undefined,
+        status: 'planning'
+      })
+
+      planStore.openSplitDialog({
+        planId: updatedPlan.id,
+        agentId: coordinatorRuntimeAgentId,
+        modelId: coordinatorModelId ?? '',
+        splitExecutionMode: 'coordinator_subagents',
+        splitTeamId: team.id,
+        entry: splitConfigPlan.value.status === 'planning' ? 'resume_split' : 'list_split'
+      })
+    } else {
+      if (!splitConfigForm.agentId || splitConfigModelOptions.value.length === 0) return
+
+      const updatedPlan = await planStore.updatePlan(splitConfigPlan.value.id, {
+        splitExecutionMode: 'single',
+        splitTeamId: undefined,
+        splitAgentId: splitConfigForm.agentId,
+        splitModelId: splitConfigForm.modelId,
+        status: 'planning'
+      })
+
+      planStore.openSplitDialog({
+        planId: updatedPlan.id,
+        agentId: splitConfigForm.agentId,
+        modelId: splitConfigForm.modelId,
+        splitExecutionMode: 'single',
+        entry: splitConfigPlan.value.status === 'planning' ? 'resume_split' : 'list_split'
+      })
+    }
 
     closeSplitConfigDialog()
   } catch (error) {
@@ -614,6 +704,8 @@ function getPreferredStatusTab(planList: Plan[], preferredPlanId: string | null)
 
 onMounted(() => {
   void agentStore.loadAgents()
+  void agentStudioStore.loadAgents()
+  void agentTeamStore.loadTeams()
 })
 
 watch(
@@ -645,6 +737,12 @@ watch(
 watch(
   () => splitConfigForm.agentId,
   async (agentId) => {
+    if (splitConfigForm.executionMode !== 'single') {
+      splitConfigModelOptions.value = []
+      splitConfigForm.modelId = ''
+      return
+    }
+
     if (!agentId) {
       splitConfigModelOptions.value = []
       splitConfigForm.modelId = ''
@@ -659,6 +757,26 @@ watch(
     splitConfigForm.modelId = splitConfigModelOptions.value.some(option => option.value === preferredModelId)
       ? preferredModelId
       : pickDefaultModel(splitConfigModelOptions.value)
+  },
+  { immediate: true }
+)
+
+watch(
+  () => splitConfigForm.executionMode,
+  (executionMode) => {
+    if (executionMode === 'coordinator_subagents') {
+      splitConfigForm.agentId = null
+      splitConfigForm.modelId = ''
+      if (!splitConfigForm.teamId) {
+        splitConfigForm.teamId = teamOptions.value[0]?.value ?? null
+      }
+      return
+    }
+
+    splitConfigForm.teamId = null
+    if (!splitConfigForm.agentId) {
+      splitConfigForm.agentId = splitConfigPlan.value?.splitAgentId || agentOptions.value[0]?.value || null
+    }
   },
   { immediate: true }
 )
@@ -806,6 +924,7 @@ watch(
       :visible="showSplitConfigDialog"
       :plan="splitConfigPlan"
       :form="splitConfigForm"
+      :team-options="teamOptions"
       :agent-options="agentOptions"
       :model-options="splitConfigModelOptions"
       :can-start="canStartSplitFromList"

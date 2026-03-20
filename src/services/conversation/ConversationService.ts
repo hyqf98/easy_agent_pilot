@@ -4,6 +4,7 @@ import { useSessionStore } from '@/stores/session'
 import { useSessionExecutionStore } from '@/stores/sessionExecution'
 import { useProjectStore } from '@/stores/project'
 import { useAgentStore, type AgentConfig } from '@/stores/agent'
+import { buildAgentProfileSystemPrompt, useAgentProfileStore } from '@/stores/agentProfile'
 import { useNotificationStore } from '@/stores/notification'
 import { useTokenStore } from '@/stores/token'
 import { useMemoryStore } from '@/stores/memory'
@@ -68,6 +69,7 @@ export class ConversationService {
     const tokenStore = useTokenStore()
     const projectStore = useProjectStore()
     const agentStore = useAgentStore()
+    const agentProfileStore = useAgentProfileStore()
     const memoryStore = useMemoryStore()
 
     // 获取智能体配置
@@ -133,6 +135,7 @@ export class ConversationService {
       const executionAgent = (!agent.modelId?.trim() && usageModelHint)
         ? { ...agent, modelId: usageModelHint }
         : agent
+      const executionProfile = await agentProfileStore.resolveExecutionProfile(executionAgent.id)
 
       const environmentNotice = await buildCliEnvironmentNotice(executionAgent)
       if (environmentNotice) {
@@ -172,6 +175,7 @@ export class ConversationService {
       }
 
       const projectMemoryPrompt = await this.buildProjectMemoryPrompt(targetProject?.memoryLibraryIds ?? [])
+      const agentSystemPrompt = buildAgentProfileSystemPrompt(executionProfile)
 
       // 构建对话上下文
       const messages = buildConversationMessages(
@@ -179,7 +183,10 @@ export class ConversationService {
         {
           fallbackUserContent: content,
           sessionId,
-          injectedSystemMessages: projectMemoryPrompt ? [projectMemoryPrompt] : []
+          injectedSystemMessages: [
+            agentSystemPrompt,
+            projectMemoryPrompt
+          ].filter((item): item is string => Boolean(item))
         }
       )
       const userMessages = messages.filter(message => message.role === 'user')
@@ -199,7 +206,7 @@ export class ConversationService {
         agent: executionAgent,
         messages,
         workingDirectory,
-        mcpServers: undefined, // MCP 配置暂时禁用
+        mcpServers: executionProfile.mcpServers.length > 0 ? executionProfile.mcpServers : undefined,
         executionMode: 'chat',
         responseMode: 'stream_text'
       }
