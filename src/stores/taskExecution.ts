@@ -56,6 +56,16 @@ import {
   markTaskStopRequested,
   shouldKeepInMemoryLogs
 } from './taskExecutionTaskRuntime'
+import { loadAgentMcpServers } from '@/utils/mcpServerConfig'
+import { mergeToolInputArguments } from '@/utils/toolInput'
+
+function finalizeRunningToolCalls(toolCalls: ToolCall[]): void {
+  for (const toolCall of toolCalls) {
+    if (toolCall.status === 'running') {
+      toolCall.status = 'success'
+    }
+  }
+}
 
 /**
  * 任务执行状态管理 Store
@@ -381,8 +391,10 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
       // 构建执行提示
       const prompt = buildExecutionPrompt(task, recentResults, planProgress)
 
-      // 获取 MCP 配置（暂时使用空配置）
-      const mcpServers: McpServerConfig[] = []
+      const mcpServers = await loadAgentMcpServers(agent).catch((error) => {
+        console.warn('[TaskExecution] Failed to load MCP servers:', error)
+        return [] as McpServerConfig[]
+      })
 
       // 构建对话上下文
       const context: ConversationContext = {
@@ -416,6 +428,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
       }
 
       // 执行完成
+      finalizeRunningToolCalls(state.toolCalls)
       state.status = 'completed'
       state.completedAt = new Date().toISOString()
 
@@ -450,6 +463,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
 
       if (wasStopped) {
         // 用户主动停止
+        finalizeRunningToolCalls(state.toolCalls)
         state.status = 'stopped'
         state.completedAt = new Date().toISOString()
         await addExecutionLog({
@@ -488,6 +502,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
           await persistTaskResult(taskId, 'failed', `任务执行失败: ${errorMessage}`, errorMessage)
 
           // 重新加入队列执行（延迟一小段时间）
+          finalizeRunningToolCalls(state.toolCalls)
           state.status = 'queued'
           state.completedAt = new Date().toISOString()
           skipQueueAdvance = true
@@ -501,6 +516,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
           return
         } else {
           // 超过最大重试次数，标记为执行失败
+          finalizeRunningToolCalls(state.toolCalls)
           state.status = 'failed'
           state.completedAt = new Date().toISOString()
 
@@ -551,6 +567,14 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
         }
         break
 
+      case 'thinking_start':
+        void addExecutionLog({
+          taskId,
+          type: 'thinking_start',
+          content: ''
+        })
+        break
+
       case 'thinking':
         if (event.content) {
           state.accumulatedThinking += event.content
@@ -581,11 +605,39 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
             content: JSON.stringify(event.toolInput, null, 2),
             metadata: {
               toolName: event.toolName,
-              toolCallId: event.toolCallId
+              toolCallId: event.toolCallId,
+              toolInput: JSON.stringify(event.toolInput ?? {})
             }
           })
         }
         break
+
+      case 'tool_input_delta': {
+        const targetToolCall = (event.toolCallId
+          ? state.toolCalls.find(tool => tool.id === event.toolCallId)
+          : null) || [...state.toolCalls].reverse().find(tool => tool.status === 'running')
+
+        if (targetToolCall) {
+          targetToolCall.arguments = mergeToolInputArguments(targetToolCall.arguments, event.toolInput)
+        }
+
+        if (event.toolInput) {
+          void addExecutionLog({
+            taskId,
+            type: 'tool_input_delta',
+            content: typeof event.toolInput.raw === 'string'
+              ? event.toolInput.raw
+              : JSON.stringify(event.toolInput),
+            metadata: {
+              toolCallId: event.toolCallId,
+              toolInput: typeof event.toolInput.raw === 'string'
+                ? event.toolInput.raw
+                : JSON.stringify(event.toolInput)
+            }
+          })
+        }
+        break
+      }
 
       case 'tool_result':
         if (event.toolCallId) {
@@ -609,6 +661,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
             content: result,
             metadata: {
               toolCallId: event.toolCallId,
+              toolResult: result,
               isError
             }
           })

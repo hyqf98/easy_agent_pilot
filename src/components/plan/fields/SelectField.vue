@@ -31,7 +31,7 @@ const dropdownPosition = ref({
   top: 0,
   left: 0,
   width: 0,
-  maxHeight: 240
+  maxHeight: 220
 })
 const hasExplicitOtherOption = computed(() =>
   props.field.options?.some(option => String(option.value) === OTHER_VALUE) ?? false
@@ -129,11 +129,11 @@ function updateDropdownPosition() {
 
   const rect = triggerRef.value.getBoundingClientRect()
   const safeGap = 12
-  const estimatedHeight = dropdownRef.value?.offsetHeight ?? 240
-  const spaceBelow = Math.max(120, window.innerHeight - rect.bottom - safeGap)
-  const spaceAbove = Math.max(120, rect.top - safeGap)
-  const shouldOpenUpward = spaceBelow < Math.min(estimatedHeight, 220) && spaceAbove > spaceBelow
-  const maxHeight = Math.max(120, Math.floor(shouldOpenUpward ? spaceAbove : spaceBelow))
+  const estimatedHeight = dropdownRef.value?.offsetHeight ?? 220
+  const spaceBelow = Math.max(110, window.innerHeight - rect.bottom - safeGap)
+  const spaceAbove = Math.max(110, rect.top - safeGap)
+  const shouldOpenUpward = spaceBelow < Math.min(estimatedHeight, 200) && spaceAbove > spaceBelow
+  const maxHeight = Math.max(110, Math.floor(shouldOpenUpward ? spaceAbove : spaceBelow))
   const top = shouldOpenUpward
     ? Math.max(safeGap, rect.top - Math.min(estimatedHeight, maxHeight) - 6)
     : Math.min(window.innerHeight - safeGap - Math.min(estimatedHeight, maxHeight), rect.bottom + 6)
@@ -519,9 +519,9 @@ onUnmounted(() => {
   position: fixed;
   z-index: var(--z-select-menu, 1200);
   display: grid;
-  gap: 0.2rem;
-  padding: 0.35rem;
-  border-radius: 0.85rem;
+  gap: 0.14rem;
+  padding: 0.28rem;
+  border-radius: 0.78rem;
   border: 1px solid color-mix(in srgb, var(--form-accent, #4f46e5) 20%, #d3dce8);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
   box-shadow: 0 18px 36px rgba(15, 23, 42, 0.12);
@@ -531,12 +531,12 @@ onUnmounted(() => {
 
 .select-option {
   width: 100%;
-  padding: 0.5rem 0.65rem;
+  padding: 0.42rem 0.56rem;
   border: none;
-  border-radius: 0.65rem;
+  border-radius: 0.58rem;
   background: transparent;
   color: var(--color-text-primary, #0f172a);
-  font-size: 0.8rem;
+  font-size: 0.76rem;
   text-align: left;
   cursor: pointer;
   transition: background-color 0.14s ease, color 0.14s ease, transform 0.14s ease;
@@ -557,7 +557,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.6rem;
+  gap: 0.48rem;
 }
 
 .select-option__label {
@@ -567,21 +567,21 @@ onUnmounted(() => {
 .select-option__badge {
   display: inline-flex;
   align-items: center;
-  padding: 0.1rem 0.38rem;
+  padding: 0.08rem 0.34rem;
   border-radius: 999px;
   background: color-mix(in srgb, var(--form-accent, #4f46e5) 18%, #ffffff);
   color: color-mix(in srgb, var(--form-accent, #4f46e5) 80%, #1d4ed8);
-  font-size: 0.62rem;
+  font-size: 0.58rem;
   font-weight: 700;
   letter-spacing: 0.02em;
 }
 
 .select-option__reason {
   display: block;
-  margin-top: 0.18rem;
+  margin-top: 0.12rem;
   color: #64748b;
-  font-size: 0.7rem;
-  line-height: 1.45;
+  font-size: 0.66rem;
+  line-height: 1.35;
 }
 
 .other-input {

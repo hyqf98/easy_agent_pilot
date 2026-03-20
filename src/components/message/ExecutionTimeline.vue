@@ -7,6 +7,7 @@ import ToolCallDisplay from './ToolCallDisplay.vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 import RuntimeNoticeList from './RuntimeNoticeList.vue'
 import { buildRuntimeNoticeFromSystemContent } from '@/utils/runtimeNotice'
+import type { ToolCall } from '@/stores/message'
 
 defineProps<{
   entries: TimelineEntry[]
@@ -30,6 +31,17 @@ function handleMessageFormCancel(formId: string) {
 function toRuntimeNotices(content?: string) {
   const notice = buildRuntimeNoticeFromSystemContent(content)
   return notice ? [notice] : []
+}
+
+function getToolCallRenderKey(toolCall: ToolCall) {
+  const argumentsSignature = JSON.stringify(toolCall.arguments ?? {})
+  return [
+    toolCall.id,
+    toolCall.status,
+    argumentsSignature,
+    toolCall.result?.length ?? 0,
+    toolCall.errorMessage?.length ?? 0
+  ].join(':')
 }
 </script>
 
@@ -63,14 +75,15 @@ function toRuntimeNotices(content?: string) {
       </div>
 
       <ThinkingDisplay
-        v-else-if="entry.type === 'thinking' && entry.content"
-        :thinking="entry.content"
+        v-else-if="entry.type === 'thinking'"
+        :thinking="entry.content || ''"
         :live="entry.animate"
         :default-expanded="false"
       />
 
       <ToolCallDisplay
         v-else-if="entry.type === 'tool' && entry.toolCall"
+        :key="getToolCallRenderKey(entry.toolCall)"
         :tool-call="entry.toolCall"
         :live="entry.animate"
         :compact="entry.toolCompact"

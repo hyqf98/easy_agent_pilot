@@ -76,7 +76,7 @@ export interface ConversationContext {
 /**
  * 流式事件类型
  */
-export type StreamEventType = 'content' | 'tool_use' | 'tool_result' | 'error' | 'done' | 'thinking' | 'file_edit' | 'usage' | 'system'
+export type StreamEventType = 'content' | 'tool_use' | 'tool_input_delta' | 'tool_result' | 'error' | 'done' | 'thinking' | 'thinking_start' | 'file_edit' | 'usage' | 'system'
 
 /**
  * 流式事件

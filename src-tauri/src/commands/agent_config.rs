@@ -113,11 +113,11 @@ const MODELS_SELECT_BY_ID_SQL: &str = r#"
 
 const CODEX_BUILTIN_MODELS: &[BuiltinModelDef] = &[
     ("", "使用默认模型", 0, true, None),
-    ("gpt-5.4", "GPT-5.4", 1, false, Some(128000)),
-    ("gpt-5.3-codex", "GPT-5.3 Codex", 2, false, Some(128000)),
-    ("gpt-5.2", "GPT-5.2", 3, false, Some(128000)),
-    ("gpt-5.1", "GPT-5.1", 4, false, Some(128000)),
-    ("gpt-5", "GPT-5", 5, false, Some(128000)),
+    ("gpt-5.4", "GPT-5.4", 1, false, Some(400000)),
+    ("gpt-5.3-codex", "GPT-5.3 Codex", 2, false, Some(400000)),
+    ("gpt-5.2", "GPT-5.2", 3, false, Some(400000)),
+    ("gpt-5.1", "GPT-5.1", 4, false, Some(400000)),
+    ("gpt-5", "GPT-5", 5, false, Some(400000)),
 ];
 
 const CLAUDE_BUILTIN_MODELS: &[BuiltinModelDef] = &[

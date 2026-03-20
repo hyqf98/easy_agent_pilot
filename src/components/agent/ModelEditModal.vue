@@ -10,6 +10,7 @@ import { EaButton } from '@/components/common'
 const CONTEXT_WINDOW_PRESETS = [
   { label: '32K', value: 32000 },
   { label: '128K (默认)', value: 128000 },
+  { label: '400K', value: 400000 },
   { label: '200K', value: 200000 },
   { label: '1M', value: 1000000 },
   { label: '自定义', value: 'custom' }

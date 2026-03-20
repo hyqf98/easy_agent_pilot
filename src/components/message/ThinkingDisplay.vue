@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, toRef } from 'vue'
+import { computed, ref, toRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useTypewriterText } from '@/composables/useTypewriterText'
 
@@ -20,6 +20,7 @@ const { displayedText } = useTypewriterText(
 )
 
 const isExpanded = ref(props.defaultExpanded)
+const placeholderText = computed(() => props.live ? '正在思考...' : '')
 
 // 切换展开状态
 const toggleExpand = () => {
@@ -55,7 +56,7 @@ const toggleExpand = () => {
       class="thinking-display__content"
     >
       <div class="thinking-display__scroll">
-        <pre class="thinking-display__text">{{ displayedText }}</pre>
+        <pre class="thinking-display__text">{{ displayedText || placeholderText }}</pre>
       </div>
     </div>
   </div>

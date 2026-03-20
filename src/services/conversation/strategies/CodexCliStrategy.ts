@@ -48,7 +48,7 @@ export class CodexCliStrategy extends BaseAgentStrategy {
         : undefined,
       messages: this.toMessageInputs(messages),
       workingDirectory,
-      allowedTools: ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash', 'WebFetch', 'WebSearch'],
+      allowedTools: ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash'],
       mcpServers,
       cliOutputFormat: cliOutputFormat ?? (responseMode === 'json_once' ? 'json' : 'stream-json'),
       jsonSchema,

@@ -5,7 +5,7 @@
 import type { ToolCall } from '@/stores/message'
 
 // 执行日志条目类型
-export type ExecutionLogType = 'content' | 'thinking' | 'tool_use' | 'tool_result' | 'error' | 'system'
+export type ExecutionLogType = 'content' | 'thinking' | 'thinking_start' | 'tool_use' | 'tool_input_delta' | 'tool_result' | 'error' | 'system'
 
 // 执行状态
 export type ExecutionStatus = 'idle' | 'queued' | 'running' | 'waiting_input' | 'completed' | 'failed' | 'stopped'
@@ -20,6 +20,8 @@ export interface ExecutionLogEntry {
   metadata?: {
     toolName?: string
     toolCallId?: string
+    toolInput?: string
+    toolResult?: string
     isError?: boolean
   }
 }
@@ -52,6 +54,8 @@ export interface CreateExecutionLogInput {
   metadata?: {
     toolName?: string
     toolCallId?: string
+    toolInput?: string
+    toolResult?: string
     isError?: boolean
   }
 }

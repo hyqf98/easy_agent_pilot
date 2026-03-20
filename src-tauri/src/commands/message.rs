@@ -84,6 +84,112 @@ pub struct UpdateMessageInput {
     pub compression_metadata: Option<String>,
 }
 
+fn build_message_updates(input: &UpdateMessageInput) -> Vec<String> {
+    let mut updates: Vec<String> = vec![];
+    let mut param_index = 1;
+
+    if input.content.is_some() {
+        updates.push(format!("content = ?{}", param_index));
+        param_index += 1;
+    }
+    if input.attachments.is_some() {
+        updates.push(format!("attachments = ?{}", param_index));
+        param_index += 1;
+    }
+    if input.status.is_some() {
+        updates.push(format!("status = ?{}", param_index));
+        param_index += 1;
+    }
+    if input.tokens.is_some() {
+        updates.push(format!("tokens = ?{}", param_index));
+        param_index += 1;
+    }
+    if input.error_message.is_some() {
+        updates.push(format!("error_message = ?{}", param_index));
+        param_index += 1;
+    }
+    if input.tool_calls.is_some() {
+        updates.push(format!("tool_calls = ?{}", param_index));
+        param_index += 1;
+    }
+    if input.thinking.is_some() {
+        updates.push(format!("thinking = ?{}", param_index));
+        param_index += 1;
+    }
+    if input.edit_traces.is_some() {
+        updates.push(format!("edit_traces = ?{}", param_index));
+        param_index += 1;
+    }
+    if input.runtime_notices.is_some() {
+        updates.push(format!("runtime_notices = ?{}", param_index));
+        param_index += 1;
+    }
+    if input.compression_metadata.is_some() {
+        updates.push(format!("compression_metadata = ?{}", param_index));
+    }
+
+    updates
+}
+
+fn bind_message_update_parameters(
+    stmt: &mut rusqlite::CachedStatement<'_>,
+    input: &UpdateMessageInput,
+) -> Result<usize, String> {
+    let mut param_count = 1;
+    if let Some(ref content) = input.content {
+        stmt.raw_bind_parameter(param_count, content)
+            .map_err(|e| e.to_string())?;
+        param_count += 1;
+    }
+    if let Some(ref attachments) = input.attachments {
+        stmt.raw_bind_parameter(param_count, attachments)
+            .map_err(|e| e.to_string())?;
+        param_count += 1;
+    }
+    if let Some(ref status) = input.status {
+        stmt.raw_bind_parameter(param_count, status)
+            .map_err(|e| e.to_string())?;
+        param_count += 1;
+    }
+    if let Some(tokens) = input.tokens {
+        stmt.raw_bind_parameter(param_count, tokens)
+            .map_err(|e| e.to_string())?;
+        param_count += 1;
+    }
+    if let Some(ref error_message) = input.error_message {
+        stmt.raw_bind_parameter(param_count, error_message)
+            .map_err(|e| e.to_string())?;
+        param_count += 1;
+    }
+    if let Some(ref tool_calls) = input.tool_calls {
+        stmt.raw_bind_parameter(param_count, tool_calls)
+            .map_err(|e| e.to_string())?;
+        param_count += 1;
+    }
+    if let Some(ref thinking) = input.thinking {
+        stmt.raw_bind_parameter(param_count, thinking)
+            .map_err(|e| e.to_string())?;
+        param_count += 1;
+    }
+    if let Some(ref edit_traces) = input.edit_traces {
+        stmt.raw_bind_parameter(param_count, edit_traces)
+            .map_err(|e| e.to_string())?;
+        param_count += 1;
+    }
+    if let Some(ref runtime_notices) = input.runtime_notices {
+        stmt.raw_bind_parameter(param_count, runtime_notices)
+            .map_err(|e| e.to_string())?;
+        param_count += 1;
+    }
+    if let Some(ref compression_metadata) = input.compression_metadata {
+        stmt.raw_bind_parameter(param_count, compression_metadata)
+            .map_err(|e| e.to_string())?;
+        param_count += 1;
+    }
+
+    Ok(param_count)
+}
+
 /// 分页消息结果
 #[derive(Debug, Serialize)]
 pub struct PaginatedMessages {
@@ -382,51 +488,7 @@ pub fn create_message(input: CreateMessageInput) -> Result<Message, String> {
 #[tauri::command]
 pub fn update_message(id: String, input: UpdateMessageInput) -> Result<Message, String> {
     let conn = open_db_connection().map_err(|e| e.to_string())?;
-
-    // 构建动态更新语句
-    let mut updates: Vec<String> = vec![];
-    let mut param_index = 1;
-
-    if input.content.is_some() {
-        updates.push(format!("content = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.attachments.is_some() {
-        updates.push(format!("attachments = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.status.is_some() {
-        updates.push(format!("status = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.tokens.is_some() {
-        updates.push(format!("tokens = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.error_message.is_some() {
-        updates.push(format!("error_message = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.tool_calls.is_some() {
-        updates.push(format!("tool_calls = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.thinking.is_some() {
-        updates.push(format!("thinking = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.edit_traces.is_some() {
-        updates.push(format!("edit_traces = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.runtime_notices.is_some() {
-        updates.push(format!("runtime_notices = ?{}", param_index));
-        param_index += 1;
-    }
-    if input.compression_metadata.is_some() {
-        updates.push(format!("compression_metadata = ?{}", param_index));
-        param_index += 1;
-    }
+    let updates = build_message_updates(&input);
 
     if updates.is_empty() {
         // 没有更新内容，直接返回当前消息
@@ -436,63 +498,12 @@ pub fn update_message(id: String, input: UpdateMessageInput) -> Result<Message, 
     let sql = format!(
         "UPDATE messages SET {} WHERE id = ?{}",
         updates.join(", "),
-        param_index
+        updates.len() + 1
     );
 
     let mut stmt = conn.prepare_cached(&sql).map_err(|e| e.to_string())?;
 
-    // 绑定参数
-    let mut param_count = 1;
-    if let Some(ref content) = input.content {
-        stmt.raw_bind_parameter(param_count, content)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref attachments) = input.attachments {
-        stmt.raw_bind_parameter(param_count, attachments)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref status) = input.status {
-        stmt.raw_bind_parameter(param_count, status)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(tokens) = input.tokens {
-        stmt.raw_bind_parameter(param_count, tokens)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref error_message) = input.error_message {
-        stmt.raw_bind_parameter(param_count, error_message)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref tool_calls) = input.tool_calls {
-        stmt.raw_bind_parameter(param_count, tool_calls)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref thinking) = input.thinking {
-        stmt.raw_bind_parameter(param_count, thinking)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref edit_traces) = input.edit_traces {
-        stmt.raw_bind_parameter(param_count, edit_traces)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref runtime_notices) = input.runtime_notices {
-        stmt.raw_bind_parameter(param_count, runtime_notices)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
-    if let Some(ref compression_metadata) = input.compression_metadata {
-        stmt.raw_bind_parameter(param_count, compression_metadata)
-            .map_err(|e| e.to_string())?;
-        param_count += 1;
-    }
+    let param_count = bind_message_update_parameters(&mut stmt, &input)?;
 
     stmt.raw_bind_parameter(param_count, &id)
         .map_err(|e| e.to_string())?;
@@ -503,6 +514,29 @@ pub fn update_message(id: String, input: UpdateMessageInput) -> Result<Message, 
     let message = get_message_by_id(&conn, &id)?;
 
     Ok(message)
+}
+
+#[tauri::command]
+pub fn update_message_fields(id: String, input: UpdateMessageInput) -> Result<(), String> {
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
+    let updates = build_message_updates(&input);
+
+    if updates.is_empty() {
+        return Ok(());
+    }
+
+    let sql = format!(
+        "UPDATE messages SET {} WHERE id = ?{}",
+        updates.join(", "),
+        updates.len() + 1
+    );
+
+    let mut stmt = conn.prepare_cached(&sql).map_err(|e| e.to_string())?;
+    let param_count = bind_message_update_parameters(&mut stmt, &input)?;
+    stmt.raw_bind_parameter(param_count, &id)
+        .map_err(|e| e.to_string())?;
+    stmt.raw_execute().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// 获取单个消息

@@ -14,6 +14,7 @@ import {
 import type { ExecutionRequest, MessageInput } from '@/services/conversation/strategies/types'
 import type { RuntimeNotice } from '@/utils/runtimeNotice'
 import { buildCliEnvironmentNotice } from '@/utils/runtimeNotice'
+import { appendClaudeMcpAllowedTools, loadAgentMcpServers } from '@/utils/mcpServerConfig'
 import type {
   AITaskItem,
   DynamicFormSchema,
@@ -42,11 +43,21 @@ interface SubmittedFormSnapshot {
   submittedAt: string
 }
 
-function getAllowedTools(provider: string): string[] {
+interface PlanSplitRuntimeMetrics {
+  startedAt: number
+  firstEventAt?: number
+  firstRenderableAt?: number
+  doneAt?: number
+}
+
+function getAllowedTools(provider: string, mcpServers?: ExecutionRequest['mcpServers']): string[] {
   if ((provider || '').toLowerCase() === 'codex') {
     return ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash']
   }
-  return ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash', 'WebFetch', 'WebSearch']
+  return appendClaudeMcpAllowedTools(
+    ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash', 'WebFetch', 'WebSearch'],
+    mcpServers
+  )
 }
 
 function formatOptionValue(field: DynamicFormSchema['fields'][number], value: unknown): string {
@@ -79,7 +90,8 @@ function parseJson<T>(raw?: string | null, fallback?: T): T {
 function buildExecutionRequest(
   context: TaskSplitContext,
   agent: AgentConfig,
-  llmMessages: MessageInput[]
+  llmMessages: MessageInput[],
+  mcpServers: ExecutionRequest['mcpServers']
 ): ExecutionRequest {
   const provider = agent.provider || 'claude'
   return {
@@ -93,9 +105,10 @@ function buildExecutionRequest(
     modelId: context.modelId || undefined,
     messages: llmMessages,
     workingDirectory: context.workingDirectory,
-    allowedTools: agent.type === 'cli' ? getAllowedTools(provider) : undefined,
+    allowedTools: agent.type === 'cli' ? getAllowedTools(provider, mcpServers) : undefined,
     systemPrompt: llmMessages.find(message => message.role === 'system')?.content,
     maxTokens: agent.type === 'sdk' ? 4096 : undefined,
+    mcpServers,
     cliOutputFormat: agent.type === 'cli' ? 'stream-json' : undefined,
     jsonSchema: agent.type === 'cli'
       ? buildPlanSplitJsonSchema(context.granularity, provider.toLowerCase() === 'codex' ? 'codex' : 'claude')
@@ -146,6 +159,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
   const context = ref<TaskSplitContext | null>(null)
   const streamUnlisten = ref<UnlistenFn | null>(null)
   const runtimeNotices = ref<RuntimeNotice[]>([])
+  const runtimeMetrics = ref<PlanSplitRuntimeMetrics | null>(null)
 
   const subSplitMode = ref(false)
   const subSplitTargetIndex = ref<number | null>(null)
@@ -176,6 +190,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     session.value = null
     context.value = null
     runtimeNotices.value = []
+    runtimeMetrics.value = null
     subSplitMode.value = false
     subSplitTargetIndex.value = null
     subSplitOriginalTasks.value = []
@@ -220,13 +235,53 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     streamUnlisten.value = await listen<PlanSplitStreamPayload>(`plan-split-stream-${planId}`, async (event) => {
       const payload = event.payload
       if (payload.type === 'session_updated' && payload.session) {
+        if (
+          runtimeMetrics.value
+          && !runtimeMetrics.value.doneAt
+          && ['completed', 'failed', 'stopped'].includes(payload.session.status)
+        ) {
+          runtimeMetrics.value = {
+            ...runtimeMetrics.value,
+            doneAt: performance.now()
+          }
+          ;(globalThis as { __EASY_AGENT_LAST_PLAN_SPLIT_METRICS?: PlanSplitRuntimeMetrics | null }).__EASY_AGENT_LAST_PLAN_SPLIT_METRICS = runtimeMetrics.value
+        }
         applySessionSnapshot(payload.session, true)
         return
       }
 
       if (payload.type === 'done') {
+        if (runtimeMetrics.value && !runtimeMetrics.value.doneAt) {
+          runtimeMetrics.value = {
+            ...runtimeMetrics.value,
+            doneAt: performance.now()
+          }
+          ;(globalThis as { __EASY_AGENT_LAST_PLAN_SPLIT_METRICS?: PlanSplitRuntimeMetrics | null }).__EASY_AGENT_LAST_PLAN_SPLIT_METRICS = runtimeMetrics.value
+        }
         return
       }
+
+      if (!runtimeMetrics.value) {
+        runtimeMetrics.value = {
+          startedAt: performance.now()
+        }
+      }
+
+      if (!runtimeMetrics.value.firstEventAt) {
+        runtimeMetrics.value = {
+          ...runtimeMetrics.value,
+          firstEventAt: performance.now()
+        }
+      }
+
+      if (!runtimeMetrics.value.firstRenderableAt && ['content', 'thinking', 'thinking_start', 'tool_use', 'tool_input_delta', 'tool_result', 'system'].includes(payload.type)) {
+        runtimeMetrics.value = {
+          ...runtimeMetrics.value,
+          firstRenderableAt: performance.now()
+        }
+      }
+
+      ;(globalThis as { __EASY_AGENT_LAST_PLAN_SPLIT_METRICS?: PlanSplitRuntimeMetrics | null }).__EASY_AGENT_LAST_PLAN_SPLIT_METRICS = runtimeMetrics.value
 
       const content = payload.content ?? payload.error ?? payload.toolResult ?? payload.toolInput ?? ''
       logs.value.push({
@@ -235,7 +290,13 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
         sessionId: payload.sessionId || '',
         type: payload.type as PlanSplitLogRecord['type'],
         content,
-        metadata: payload.metadata ?? null,
+        metadata: JSON.stringify({
+          ...(payload.metadata ? { rawMetadata: payload.metadata } : {}),
+          toolName: payload.toolName,
+          toolCallId: payload.toolCallId,
+          toolInput: payload.toolInput,
+          toolResult: payload.toolResult
+        }),
         createdAt: payload.createdAt || new Date().toISOString()
       })
     })
@@ -259,7 +320,19 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     }
 
     logs.value = []
-    const executionRequest = buildExecutionRequest(nextContext, agent, llmMessages)
+    runtimeMetrics.value = {
+      startedAt: performance.now()
+    }
+    const mcpServers = await loadAgentMcpServers(agent).catch((error) => {
+      logger.warn('[TaskSplit] Failed to load MCP servers:', error)
+      return []
+    })
+    const executionRequest = buildExecutionRequest(
+      nextContext,
+      agent,
+      llmMessages,
+      mcpServers.length > 0 ? mcpServers : undefined
+    )
     const snapshot = await invoke<PlanSplitSessionRecord>('start_plan_split', {
       input: {
         planId: nextContext.planId,
@@ -533,6 +606,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     session,
     context,
     runtimeNotices,
+    runtimeMetrics,
     subSplitMode,
     subSplitTargetIndex,
     subSplitOriginalTasks,

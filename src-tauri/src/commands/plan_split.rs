@@ -884,6 +884,25 @@ pub fn record_plan_split_event(
         .or_else(|| event.tool_input.clone())
         .unwrap_or_default();
 
+    let payload = PlanSplitStreamPayload {
+        event_type: event.event_type.clone(),
+        plan_id: plan_id.to_string(),
+        session_id: session_id.to_string(),
+        content: event.content,
+        tool_name: event.tool_name,
+        tool_call_id: event.tool_call_id,
+        tool_input: event.tool_input,
+        tool_result: event.tool_result,
+        error: event.error,
+        input_tokens: event.input_tokens,
+        output_tokens: event.output_tokens,
+        model: event.model,
+        metadata: metadata.clone(),
+        created_at: now.clone(),
+    };
+    let event_name = format!("plan-split-stream-{plan_id}");
+    let _ = app.emit(&event_name, &payload);
+
     if event.event_type != "done" {
         conn.execute(
             "INSERT INTO plan_split_logs (id, plan_id, session_id, log_type, content, metadata, created_at)
@@ -900,25 +919,6 @@ pub fn record_plan_split_event(
         )
         .map_err(|error| error.to_string())?;
     }
-
-    let payload = PlanSplitStreamPayload {
-        event_type: event.event_type.clone(),
-        plan_id: plan_id.to_string(),
-        session_id: session_id.to_string(),
-        content: event.content,
-        tool_name: event.tool_name,
-        tool_call_id: event.tool_call_id,
-        tool_input: event.tool_input,
-        tool_result: event.tool_result,
-        error: event.error,
-        input_tokens: event.input_tokens,
-        output_tokens: event.output_tokens,
-        model: event.model,
-        metadata,
-        created_at: now,
-    };
-    let event_name = format!("plan-split-stream-{plan_id}");
-    let _ = app.emit(&event_name, &payload);
 
     if let Some(raw_output) = structured_output {
         if finalize_session_from_structured_output(app, plan_id, session_id, &raw_output)? {

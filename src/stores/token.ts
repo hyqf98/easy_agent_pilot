@@ -5,6 +5,7 @@ import { useAgentConfigStore } from './agentConfig'
 import { useAgentStore } from './agent'
 import { useSessionStore } from './session'
 import { useSettingsStore } from './settings'
+import { resolveKnownContextWindow } from '@/utils/modelContextWindow'
 import { resolveSessionAgent } from '@/utils/sessionAgent'
 
 // 默认上下文窗口大小 (128K)
@@ -48,6 +49,15 @@ interface SessionTokenCache {
   sessionId: string
   totalTokens: number
   lastUpdated: number
+}
+
+function estimateMessageTokens(content: string): number {
+  const normalized = content.trim()
+  if (!normalized) {
+    return 0
+  }
+
+  return Math.ceil(normalized.length / 4)
 }
 
 function loadPersistedSessionTokenCaches(): Map<string, SessionTokenCache> {
@@ -131,38 +141,49 @@ export const useTokenStore = defineStore('token', () => {
       // 获取会话的智能体
       const agent = resolveSessionAgent(session, agentStore.agents)
 
+      const realtimeData = realtimeTokens.value.get(sessionId)
+      const realtimeModel = realtimeData?.model?.trim()
+
       // 获取智能体的模型配置
       let contextWindow = DEFAULT_CONTEXT_WINDOW
       if (agent) {
         const enabledModels = agentConfigStore.getModelsConfigs(agent.id).filter(m => m.enabled)
         const activeModel = enabledModels.find(m => m.isDefault) ?? enabledModels[0]
-        if (activeModel?.contextWindow) {
-          contextWindow = activeModel.contextWindow
+        const configuredContextWindow = activeModel?.contextWindow
+          ?? resolveKnownContextWindow(activeModel?.modelId, agent.provider)
+        const runtimeContextWindow = resolveKnownContextWindow(realtimeModel, agent.provider)
+
+        if (runtimeContextWindow) {
+          contextWindow = runtimeContextWindow
+        } else if (configuredContextWindow) {
+          contextWindow = configuredContextWindow
+        } else if (agent.modelId?.trim()) {
+          contextWindow = resolveKnownContextWindow(agent.modelId, agent.provider) ?? DEFAULT_CONTEXT_WINDOW
         }
+      } else if (realtimeModel) {
+        contextWindow = resolveKnownContextWindow(realtimeModel) ?? DEFAULT_CONTEXT_WINDOW
       }
 
       let estimatedTokens = 0
       const messages = messageStore.messagesBySession(sessionId)
       for (const message of messages) {
-        if (message.tokens) {
-          estimatedTokens += message.tokens
-        } else {
-          estimatedTokens += Math.ceil(message.content.length / 4)
-        }
+        estimatedTokens += estimateMessageTokens(message.content)
       }
 
       // 计算已使用的 token
       // 优先使用实时 token 数据，没有时回退到消息估算。
-      const realtimeData = realtimeTokens.value.get(sessionId)
       const realtimeTotal = hasMeaningfulRealtimeUsage(realtimeData)
         ? (realtimeData?.inputTokens ?? 0) + (realtimeData?.outputTokens ?? 0)
         : 0
       const persistedTotal = sessionTokenCaches.value.get(sessionId)?.totalTokens ?? 0
+      const hasLoadedMessages = messages.length > 0
       const usedTokens = realtimeTotal > 0
         ? realtimeTotal
-        : persistedTotal > 0
-          ? persistedTotal
-          : estimatedTokens
+        : hasLoadedMessages
+          ? estimatedTokens
+          : persistedTotal > 0
+            ? persistedTotal
+            : estimatedTokens
 
       const percentage = Math.min(100, (usedTokens / contextWindow) * 100)
       const level = getLevel(percentage)
@@ -238,11 +259,7 @@ export const useTokenStore = defineStore('token', () => {
 
     let estimatedTokens = 0
     for (const message of messages) {
-      if (message.tokens) {
-        estimatedTokens += message.tokens
-      } else {
-        estimatedTokens += Math.ceil(message.content.length / 4)
-      }
+      estimatedTokens += estimateMessageTokens(message.content)
     }
 
     const realtimeData = realtimeTokens.value.get(sessionId)
@@ -250,7 +267,14 @@ export const useTokenStore = defineStore('token', () => {
       ? (realtimeData?.inputTokens ?? 0) + (realtimeData?.outputTokens ?? 0)
       : 0
     const persistedTotal = sessionTokenCaches.value.get(sessionId)?.totalTokens ?? 0
-    const totalTokens = Math.max(estimatedTokens, realtimeTotal, persistedTotal)
+    const hasLoadedMessages = messages.length > 0
+    const totalTokens = realtimeTotal > 0
+      ? realtimeTotal
+      : hasLoadedMessages
+        ? estimatedTokens
+        : persistedTotal > 0
+          ? persistedTotal
+          : estimatedTokens
 
     sessionTokenCaches.value.set(sessionId, {
       sessionId,

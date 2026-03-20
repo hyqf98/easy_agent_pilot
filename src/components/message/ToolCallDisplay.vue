@@ -221,6 +221,7 @@ const toolSummary = computed(() => {
 <style scoped>
 .tool-call {
   align-self: flex-start;
+  flex: 0 0 auto;
   width: min(100%, var(--thinking-display-width, var(--timeline-entry-width, clamp(18rem, 40%, 34rem))));
   min-width: 0;
   max-width: 100%;

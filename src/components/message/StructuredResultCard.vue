@@ -139,4 +139,14 @@ const fileGroups = computed(() => [
 :global(.dark) .structured-result-card__label {
   color: color-mix(in srgb, var(--color-primary) 76%, #e2e8f0);
 }
+
+:global([data-theme='dark']) .structured-result-card {
+  border-color: rgba(96, 165, 250, 0.2);
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(17, 24, 39, 0.94));
+}
+
+:global([data-theme='dark']) .structured-result-card__label {
+  color: color-mix(in srgb, var(--color-primary) 76%, #e2e8f0);
+}
 </style>

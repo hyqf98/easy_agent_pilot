@@ -128,8 +128,11 @@ function handleScroll() {
 }
 
 const timelineEntries = computed<TimelineEntry[]>(() => {
+  let lastThinkingEntry: TimelineEntry | null = null
+  let lastContentEntry: TimelineEntry | null = null
+
   return logs.value.reduce<TimelineEntry[]>((entries, log) => {
-    if (log.type === 'tool_result') {
+    if (log.type === 'tool_result' || log.type === 'tool_input_delta') {
       return entries
     }
 
@@ -139,17 +142,77 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
       && isWaitingInput.value
       && containsFormSchema(log.content, activeFormId)
     ) {
+      lastThinkingEntry = null
+      lastContentEntry = null
       return entries
     }
 
+    if (log.type === 'thinking_start') {
+      if (!lastThinkingEntry) {
+        lastThinkingEntry = {
+          id: `entry-${log.id}`,
+          type: 'thinking',
+          content: '',
+          timestamp: log.timestamp,
+          animate: isRunning.value
+        }
+        entries.push(lastThinkingEntry)
+      }
+      return entries
+    }
+
+    if (log.type === 'thinking') {
+      if (lastThinkingEntry) {
+        lastThinkingEntry.content = `${lastThinkingEntry.content || ''}${log.content}`
+        lastThinkingEntry.timestamp = log.timestamp
+        lastThinkingEntry.animate = isRunning.value
+      } else {
+        lastThinkingEntry = {
+          id: `entry-${log.id}`,
+          type: 'thinking',
+          content: log.content,
+          timestamp: log.timestamp,
+          animate: isRunning.value
+        }
+        entries.push(lastThinkingEntry)
+      }
+      lastContentEntry = null
+      return entries
+    }
+
+    if (log.type === 'content') {
+      if (lastContentEntry) {
+        lastContentEntry.content = `${lastContentEntry.content || ''}${log.content}`
+        lastContentEntry.timestamp = log.timestamp
+        lastContentEntry.animate = isRunning.value
+      } else {
+        lastContentEntry = {
+          id: `entry-${log.id}`,
+          type: 'content',
+          content: log.content,
+          timestamp: log.timestamp,
+          animate: isRunning.value
+        }
+        entries.push(lastContentEntry)
+      }
+      lastThinkingEntry = null
+      return entries
+    }
+
+    lastThinkingEntry = null
+    lastContentEntry = null
+
     if (log.type === 'tool_use') {
-      const toolCall = buildToolCallFromLogs(log, logs.value)
+      const toolCall = buildToolCallFromLogs(log, logs.value, {
+        fallbackStatus: isRunning.value ? 'running' : 'success'
+      })
       if (toolCall) {
         entries.push({
           id: `tool-${log.id}`,
           type: 'tool',
           toolCall,
-          timestamp: log.timestamp
+          timestamp: log.timestamp,
+          animate: isRunning.value
         })
       }
       return entries
@@ -157,16 +220,10 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
 
     entries.push({
       id: `entry-${log.id}`,
-      type:
-        log.type === 'content'
-          ? 'content'
-          : log.type === 'thinking'
-            ? 'thinking'
-            : log.type === 'error'
-              ? 'error'
-              : 'system',
+      type: log.type === 'error' ? 'error' : 'system',
       content: log.content,
-      timestamp: log.timestamp
+      timestamp: log.timestamp,
+      animate: isRunning.value
     })
     return entries
   }, [])
@@ -306,19 +363,33 @@ watch(
 
 <style scoped>
 .task-execution-log {
+  --task-log-surface: var(--color-surface, #ffffff);
+  --task-log-border: color-mix(in srgb, var(--color-border) 72%, transparent);
+  --task-log-shadow: 0 16px 32px rgba(15, 23, 42, 0.08);
+  --task-log-content-bg:
+    linear-gradient(
+      180deg,
+      transparent 0%,
+      color-mix(in srgb, var(--color-bg-secondary, #f8fafc) 56%, transparent) 100%
+    );
+  --task-log-width: min(100%, calc(var(--detail-panel-width, 380px) - 1.5rem));
+  --timeline-panel-width: var(--task-log-width);
+  --timeline-panel-max-width: var(--task-log-width);
   display: flex;
   flex-direction: column;
+  width: 100%;
+  min-width: 0;
   height: 100%;
   background:
     linear-gradient(
       180deg,
-      color-mix(in srgb, var(--color-surface-elevated, #fff) 96%, #ffffff) 0%,
-      color-mix(in srgb, var(--color-surface, #fff) 92%, var(--color-bg-secondary, #f8fafc)) 100%
+      color-mix(in srgb, var(--color-surface-elevated, #fff) 96%, var(--task-log-surface)) 0%,
+      color-mix(in srgb, var(--task-log-surface) 92%, var(--color-bg-secondary, #f8fafc)) 100%
     );
   border-radius: var(--radius-lg, 12px);
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
-  box-shadow: 0 16px 32px rgba(15, 23, 42, 0.08);
+  border: 1px solid var(--task-log-border);
+  box-shadow: var(--task-log-shadow);
 }
 
 .log-header {
@@ -422,18 +493,16 @@ watch(
 
 .log-content {
   flex: 1;
+  min-width: 0;
   overflow-y: auto;
   padding: var(--spacing-3, 0.75rem);
-  background:
-    linear-gradient(
-      180deg,
-      transparent 0%,
-      color-mix(in srgb, var(--color-bg-secondary, #f8fafc) 56%, transparent) 100%
-    );
+  background: var(--task-log-content-bg);
 }
 
 .result-summary {
   margin-bottom: var(--spacing-3, 0.75rem);
+  width: 100%;
+  min-width: 0;
 }
 
 .empty-state {
@@ -584,14 +653,21 @@ watch(
 }
 
 [data-theme='dark'] .task-execution-log {
+  --task-log-surface: rgba(15, 23, 42, 0.96);
+  --task-log-border: rgba(96, 165, 250, 0.14);
+  --task-log-shadow: 0 22px 38px rgba(2, 6, 23, 0.42);
+  --task-log-content-bg:
+    linear-gradient(
+      180deg,
+      rgba(15, 23, 42, 0.12),
+      rgba(2, 6, 23, 0.22)
+    );
   background:
     linear-gradient(
       180deg,
       rgba(15, 23, 42, 0.96) 0%,
       rgba(15, 23, 42, 0.9) 100%
     );
-  border-color: rgba(96, 165, 250, 0.14);
-  box-shadow: 0 22px 38px rgba(2, 6, 23, 0.42);
 }
 
 [data-theme='dark'] .log-header {
@@ -612,15 +688,6 @@ watch(
 
 [data-theme='dark'] .btn-clear:hover {
   background-color: rgba(71, 85, 105, 0.95);
-}
-
-[data-theme='dark'] .log-content {
-  background:
-    linear-gradient(
-      180deg,
-      rgba(15, 23, 42, 0.12),
-      rgba(2, 6, 23, 0.22)
-    );
 }
 
 [data-theme='dark'] .running-indicator {
@@ -655,5 +722,99 @@ watch(
 [data-theme='dark'] .btn-skip:hover {
   background-color: rgba(120, 53, 15, 0.24);
   border-color: rgba(251, 191, 36, 0.42);
+}
+
+[data-theme='dark'] .log-title,
+[data-theme='dark'] .empty-state,
+[data-theme='dark'] .log-content-text {
+  color: #e2e8f0;
+}
+
+[data-theme='dark'] .log-entry--system {
+  background-color: rgba(30, 41, 59, 0.7);
+  color: rgba(226, 232, 240, 0.78);
+}
+
+[data-theme='dark'] .result-summary,
+[data-theme='dark'] .log-entries {
+  color: #e2e8f0;
+}
+
+[data-theme='dark'] .task-execution-log .result-summary {
+  padding: 0.25rem;
+  border-radius: var(--radius-lg, 12px);
+  background: rgba(15, 23, 42, 0.82);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  box-shadow: 0 14px 30px rgba(2, 6, 23, 0.24);
+}
+
+[data-theme='dark'] .task-execution-log .result-summary :deep(.timeline-message__content),
+[data-theme='dark'] .task-execution-log .result-summary :deep(.timeline-entry),
+[data-theme='dark'] .task-execution-log .result-summary :deep(.structured-content-renderer),
+[data-theme='dark'] .task-execution-log .result-summary :deep(.structured-renderer),
+[data-theme='dark'] .task-execution-log .result-summary :deep(.markdown-content) {
+  background: rgba(15, 23, 42, 0.88);
+  color: #e2e8f0;
+  border-color: rgba(148, 163, 184, 0.18);
+}
+
+[data-theme='dark'] .task-execution-log .result-summary :deep(.structured-content__result),
+[data-theme='dark'] .task-execution-log .result-summary :deep(.structured-result-card) {
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.94), rgba(15, 23, 42, 0.88));
+  border-color: rgba(148, 163, 184, 0.18);
+  box-shadow: 0 12px 28px rgba(2, 6, 23, 0.26);
+  color: #e2e8f0;
+}
+
+[data-theme='dark'] .task-execution-log .result-summary :deep(.structured-result-card__label) {
+  color: rgba(96, 165, 250, 0.92);
+  border-color: rgba(96, 165, 250, 0.32);
+}
+
+[data-theme='dark'] .task-execution-log .result-summary :deep(.structured-result-card__summary),
+[data-theme='dark'] .task-execution-log .result-summary :deep(.structured-result-card__section),
+[data-theme='dark'] .task-execution-log .result-summary :deep(.structured-result-card__section p) {
+  color: #e2e8f0;
+}
+
+[data-theme='dark'] .task-execution-log :deep(.timeline-message__content),
+[data-theme='dark'] .task-execution-log :deep(.timeline-entry),
+[data-theme='dark'] .task-execution-log :deep(.tool-call),
+[data-theme='dark'] .task-execution-log :deep(.thinking-display),
+[data-theme='dark'] .task-execution-log :deep(.structured-renderer),
+[data-theme='dark'] .task-execution-log :deep(.markdown-content) {
+  color: #e2e8f0;
+}
+
+[data-theme='dark'] .task-execution-log :deep(.execution-timeline) {
+  --timeline-bubble-bg: rgba(15, 23, 42, 0.88);
+  --timeline-bubble-border: rgba(148, 163, 184, 0.18);
+  --timeline-bubble-shadow: 0 14px 30px rgba(2, 6, 23, 0.3);
+  --timeline-user-bubble-bg: linear-gradient(135deg, rgba(37, 99, 235, 0.28), rgba(14, 165, 233, 0.16));
+  --timeline-user-bubble-border: rgba(96, 165, 250, 0.24);
+  --timeline-entry-bg: rgba(15, 23, 42, 0.78);
+  --timeline-entry-border: rgba(148, 163, 184, 0.18);
+}
+
+[data-theme='dark'] .task-execution-log :deep(.timeline-message__content) {
+  background: rgba(15, 23, 42, 0.88);
+  border-color: rgba(148, 163, 184, 0.18);
+  box-shadow: 0 14px 30px rgba(2, 6, 23, 0.3);
+  color: #e2e8f0;
+}
+
+[data-theme='dark'] .task-execution-log :deep(.timeline-message--user .timeline-message__content) {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.28), rgba(14, 165, 233, 0.16));
+  border-color: rgba(96, 165, 250, 0.24);
+  color: #f8fafc;
+}
+
+[data-theme='dark'] .task-execution-log :deep(.timeline-message__text),
+[data-theme='dark'] .task-execution-log :deep(.markdown-content),
+[data-theme='dark'] .task-execution-log :deep(.markdown-content p),
+[data-theme='dark'] .task-execution-log :deep(.markdown-content li),
+[data-theme='dark'] .task-execution-log :deep(.markdown-content strong),
+[data-theme='dark'] .task-execution-log :deep(.structured-content-renderer) {
+  color: #e2e8f0;
 }
 </style>

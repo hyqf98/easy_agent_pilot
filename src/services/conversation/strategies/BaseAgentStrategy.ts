@@ -161,10 +161,14 @@ export abstract class BaseAgentStrategy implements AgentStrategy {
           ...baseEvent
         }
       case 'thinking':
-      case 'thinking_start':
         return {
           type: 'thinking',
           content: event.content,
+          ...baseEvent
+        }
+      case 'thinking_start':
+        return {
+          type: 'thinking_start',
           ...baseEvent
         }
       case 'tool_use':
@@ -176,7 +180,12 @@ export abstract class BaseAgentStrategy implements AgentStrategy {
           ...baseEvent
         }
       case 'tool_input_delta':
-        return null
+        return {
+          type: 'tool_input_delta',
+          toolCallId: event.toolCallId,
+          toolInput: parseToolPayload(event.toolInput),
+          ...baseEvent
+        }
       case 'tool_result':
         return {
           type: 'tool_result',
@@ -240,6 +249,7 @@ export abstract class BaseAgentStrategy implements AgentStrategy {
       case 'thinking':
       case 'system':
       case 'tool_use':
+      case 'tool_input_delta':
       case 'tool_result':
       case 'file_edit':
         state.sawMeaningfulOutput = true

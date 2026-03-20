@@ -241,7 +241,26 @@ function toFormBlocks(value: Record<string, unknown>): StructuredContentBlock[] 
   }))
 }
 
+function parseNestedStructuredJsonValue(value: Record<string, unknown>): StructuredContentBlock[] | null {
+  const nestedKeys = ['payload', 'data', 'response', 'result', 'form_request', 'formRequest']
+
+  for (const key of nestedKeys) {
+    const nested = value[key]
+    const parsed = parseStructuredJsonValue(nested)
+    if (parsed && parsed.length > 0) {
+      return parsed
+    }
+  }
+
+  return null
+}
+
 function parseStructuredJsonValue(value: unknown): StructuredContentBlock[] | null {
+  if (Array.isArray(value)) {
+    const blocks = value.flatMap(item => parseStructuredJsonValue(item) ?? [])
+    return blocks.length > 0 ? blocks : null
+  }
+
   if (!isRecord(value)) {
     return null
   }
@@ -254,6 +273,11 @@ function parseStructuredJsonValue(value: unknown): StructuredContentBlock[] | nu
   const resultBlock = toResultBlock(value)
   if (resultBlock) {
     return [resultBlock]
+  }
+
+  const nestedBlocks = parseNestedStructuredJsonValue(value)
+  if (nestedBlocks) {
+    return nestedBlocks
   }
 
   return null
@@ -378,7 +402,7 @@ export function parseStructuredContent(content: string): StructuredContentBlock[
   }
 
   const blocks: StructuredContentBlock[] = []
-  const codeBlockPattern = /```json\s*([\s\S]*?)```/g
+  const codeBlockPattern = /```(?:json|JSON)?\s*([\s\S]*?)```/g
   let lastIndex = 0
   let matchedJsonCodeBlock = false
 

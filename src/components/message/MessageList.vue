@@ -84,6 +84,7 @@ const currentMessageSignature = computed(() => currentMessages.value
     message.editTraces?.length ?? 0,
     message.attachments?.length ?? 0,
     message.thinking?.length ?? 0,
+    message.thinkingActive ? 1 : 0,
     message.runtimeNotices?.map(notice => `${notice.id}:${notice.title}:${notice.content.length}`).join(',') ?? ''
   ].join(':'))
   .join('|'))

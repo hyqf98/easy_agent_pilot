@@ -370,7 +370,9 @@ export type PlanSplitSessionStatus =
 export type PlanSplitLogType =
   | 'content'
   | 'thinking'
+  | 'thinking_start'
   | 'tool_use'
+  | 'tool_input_delta'
   | 'tool_result'
   | 'usage'
   | 'message_start'
@@ -410,7 +412,7 @@ export interface PlanSplitLogRecord {
 }
 
 export interface PlanSplitStreamPayload {
-  type: 'content' | 'thinking' | 'tool_use' | 'tool_result' | 'usage' | 'message_start' | 'error' | 'system' | 'done' | 'session_updated'
+  type: 'content' | 'thinking' | 'thinking_start' | 'tool_use' | 'tool_input_delta' | 'tool_result' | 'usage' | 'message_start' | 'error' | 'system' | 'done' | 'session_updated'
   planId: string
   sessionId?: string
   content?: string

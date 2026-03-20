@@ -100,11 +100,15 @@ export function buildToolCallFromLogs<T extends ToolCallLogLike>(
   logs: T[],
   options: {
     toolUseType?: string
+    toolInputDeltaType?: string
     toolResultType?: string
+    fallbackStatus?: ToolCall['status']
   } = {}
 ): ToolCall | null {
   const toolUseType = options.toolUseType ?? 'tool_use'
+  const toolInputDeltaType = options.toolInputDeltaType ?? 'tool_input_delta'
   const toolResultType = options.toolResultType ?? 'tool_result'
+  const fallbackStatus = options.fallbackStatus ?? 'running'
 
   if (log.type !== toolUseType) {
     return null
@@ -123,12 +127,26 @@ export function buildToolCallFromLogs<T extends ToolCallLogLike>(
 
   const resultMetadata = toToolCallMetadata(resultLog?.metadata)
   const isError = Boolean(resultMetadata.isError)
+  const inputDeltaLogs = logs.filter(item => {
+    if (item.type !== toolInputDeltaType) return false
+    const inputMetadata = toToolCallMetadata(item.metadata)
+    return inputMetadata.toolCallId === metadata.toolCallId
+  })
+  const mergedToolInput = [
+    metadata.toolInput,
+    ...inputDeltaLogs.map(item => {
+      const inputMetadata = toToolCallMetadata(item.metadata)
+      return inputMetadata.toolInput || item.content
+    })
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join('')
 
   return {
     id: metadata.toolCallId || log.id,
     name: metadata.toolName,
-    arguments: toToolCallArguments(metadata.toolInput, log.content),
-    status: resultLog ? (isError ? 'error' : 'success') : 'running',
+    arguments: toToolCallArguments(mergedToolInput || metadata.toolInput, log.content),
+    status: resultLog ? (isError ? 'error' : 'success') : fallbackStatus,
     result: resultLog?.content,
     errorMessage: isError ? resultLog?.content : undefined
   }

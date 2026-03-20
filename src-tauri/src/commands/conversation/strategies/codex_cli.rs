@@ -21,9 +21,7 @@ use crate::commands::conversation::abort::{
     clear_abort_flag, register_session_pid, set_abort_flag, should_abort, unregister_session_pid,
 };
 use crate::commands::conversation::strategy::AgentExecutionStrategy;
-use crate::commands::conversation::types::{
-    CliStreamEvent, ExecutionRequest, McpServerConfig, MessageInput,
-};
+use crate::commands::conversation::types::{CliStreamEvent, ExecutionRequest, MessageInput};
 
 /// Codex CLI 策略
 pub struct CodexCliStrategy;
@@ -57,69 +55,6 @@ fn is_benign_stderr_warning(line: &str) -> bool {
     normalized.contains("rmcp::transport::worker")
         && normalized.contains("unexpectedcontenttype")
         && normalized.contains("missing-content-type")
-}
-
-/// 构建 MCP 配置 JSON
-fn build_mcp_config_json(servers: &[McpServerConfig]) -> String {
-    let mut mcp_servers = serde_json::Map::new();
-
-    for server in servers {
-        let server_name = &server.name;
-        let mut server_config = serde_json::json!({});
-
-        match server.transport_type.as_str() {
-            "stdio" => {
-                let mut args_list = Vec::new();
-                if let Some(args_str) = &server.args {
-                    args_list.extend(args_str.split_whitespace().map(|s: &str| s.to_string()));
-                }
-
-                let mut env_map = serde_json::Map::new();
-                if let Some(env_str) = &server.env {
-                    if let Ok(env_obj) = serde_json::from_str::<serde_json::Value>(env_str) {
-                        if let Some(obj) = env_obj.as_object() {
-                            for (k, v) in obj {
-                                env_map.insert(k.clone(), v.clone());
-                            }
-                        }
-                    }
-                }
-
-                server_config = serde_json::json!({
-                    "command": server.command.clone().unwrap_or_default(),
-                    "args": args_list,
-                    "env": env_map
-                });
-            }
-            "http" | "sse" => {
-                let mut headers_map = serde_json::Map::new();
-                if let Some(headers_str) = &server.headers {
-                    if let Ok(headers_obj) = serde_json::from_str::<serde_json::Value>(headers_str)
-                    {
-                        if let Some(obj) = headers_obj.as_object() {
-                            for (k, v) in obj {
-                                headers_map.insert(k.clone(), v.clone());
-                            }
-                        }
-                    }
-                }
-
-                server_config = serde_json::json!({
-                    "url": server.url.clone().unwrap_or_default(),
-                    "headers": headers_map
-                });
-            }
-            _ => {}
-        }
-
-        mcp_servers.insert(server_name.clone(), server_config);
-    }
-
-    let mcp_config = serde_json::json!({
-        "mcpServers": mcp_servers
-    });
-
-    serde_json::to_string(&mcp_config).unwrap_or_else(|_| "{}".to_string())
 }
 
 struct StdoutReadOutcome {
@@ -157,7 +92,14 @@ fn is_successful_event_type(event_type: &str) -> bool {
 fn is_meaningful_event_type(event_type: &str) -> bool {
     matches!(
         event_type,
-        "content" | "thinking" | "tool_use" | "tool_result" | "file_edit" | "system"
+        "content"
+            | "thinking"
+            | "thinking_start"
+            | "tool_use"
+            | "tool_input_delta"
+            | "tool_result"
+            | "file_edit"
+            | "system"
     )
 }
 
@@ -316,15 +258,13 @@ impl AgentExecutionStrategy for CodexCliStrategy {
             global_args.push("--search".to_string());
         }
 
-        // 添加 MCP 服务器配置
+        // Codex CLI 0.115.x 不支持 `--mcp-config`，MCP 需要依赖其原生配置文件。
         if let Some(servers) = &mcp_servers {
             if !servers.is_empty() {
-                let mcp_config = build_mcp_config_json(servers);
-                log_info!("MCP 配置: {}", mcp_config);
-                args.push("--mcp-config".to_string());
-                args.push(mcp_config);
-                // 使用严格模式，只使用传入的 MCP 配置
-                args.push("--strict-mcp-config".to_string());
+                log_info!(
+                    "检测到 {} 个 MCP 配置；当前 Codex CLI 版本不注入 --mcp-config，改为依赖本地 Codex 配置文件",
+                    servers.len()
+                );
             }
         }
 
@@ -733,6 +673,42 @@ fn build_thinking_event(session_id: &str, content: String) -> CliStreamEvent {
     }
 }
 
+fn build_thinking_start_event(session_id: &str) -> CliStreamEvent {
+    CliStreamEvent {
+        event_type: "thinking_start".to_string(),
+        session_id: session_id.to_string(),
+        content: None,
+        tool_name: None,
+        tool_call_id: None,
+        tool_input: None,
+        tool_result: None,
+        error: None,
+        input_tokens: None,
+        output_tokens: None,
+        model: None,
+    }
+}
+
+fn build_tool_input_delta_event(
+    session_id: &str,
+    tool_call_id: Option<String>,
+    partial_json: String,
+) -> CliStreamEvent {
+    CliStreamEvent {
+        event_type: "tool_input_delta".to_string(),
+        session_id: session_id.to_string(),
+        content: None,
+        tool_name: None,
+        tool_call_id,
+        tool_input: Some(partial_json),
+        tool_result: None,
+        error: None,
+        input_tokens: None,
+        output_tokens: None,
+        model: None,
+    }
+}
+
 fn build_usage_event(
     session_id: &str,
     input_tokens: Option<u32>,
@@ -857,6 +833,7 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
 
             match item_type {
                 "command_execution" => build_command_execution_tool_use_event(session_id, item),
+                "reasoning" => Some(build_thinking_start_event(session_id)),
                 _ => None,
             }
         }
@@ -878,6 +855,17 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
             }
         }
         "item.delta" => {
+            let item_type = json
+                .pointer("/item/type")
+                .and_then(|value| value.as_str())
+                .or_else(|| json.get("item_type").and_then(|value| value.as_str()));
+
+            if matches!(item_type, Some("reasoning")) {
+                if let Some(text) = extract_text_value(json.get("delta")) {
+                    return Some(build_thinking_event(session_id, text));
+                }
+            }
+
             if let Some(text) = extract_text_value(json.get("delta")) {
                 return Some(build_content_event(session_id, text));
             }
@@ -924,7 +912,20 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                 }
                 "input_json_delta" => {
                     let partial_json = delta.get("partial_json").and_then(|j| j.as_str())?;
-                    Some(build_content_event(session_id, partial_json.to_string()))
+                    let tool_call_id = json
+                        .pointer("/content_block/id")
+                        .and_then(|value| value.as_str())
+                        .map(|value| value.to_string())
+                        .or_else(|| {
+                            json.get("index")
+                                .and_then(|value| value.as_u64())
+                                .map(|value| value.to_string())
+                        });
+                    Some(build_tool_input_delta_event(
+                        session_id,
+                        tool_call_id,
+                        partial_json.to_string(),
+                    ))
                 }
                 _ => None,
             }
@@ -939,13 +940,21 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
             match block_type {
                 "tool_use" => {
                     let tool_name = content_block.get("name").and_then(|n| n.as_str())?;
-                    let tool_id = json.get("index").and_then(|i| i.as_u64())?;
+                    let tool_id = content_block
+                        .get("id")
+                        .and_then(|value| value.as_str())
+                        .map(|value| value.to_string())
+                        .or_else(|| {
+                            json.get("index")
+                                .and_then(|value| value.as_u64())
+                                .map(|value| value.to_string())
+                        })?;
                     Some(CliStreamEvent {
                         event_type: "tool_use".to_string(),
                         session_id: session_id.to_string(),
                         content: None,
                         tool_name: Some(tool_name.to_string()),
-                        tool_call_id: Some(tool_id.to_string()),
+                        tool_call_id: Some(tool_id),
                         tool_input: None,
                         tool_result: None,
                         error: None,
@@ -956,19 +965,7 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                 }
                 "thinking" => {
                     // thinking 内容块开始
-                    Some(CliStreamEvent {
-                        event_type: "thinking_start".to_string(),
-                        session_id: session_id.to_string(),
-                        content: None,
-                        tool_name: None,
-                        tool_call_id: None,
-                        tool_input: None,
-                        tool_result: None,
-                        error: None,
-                        input_tokens: None,
-                        output_tokens: None,
-                        model: None,
-                    })
+                    Some(build_thinking_start_event(session_id))
                 }
                 _ => None,
             }

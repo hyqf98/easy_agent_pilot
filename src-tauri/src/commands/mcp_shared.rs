@@ -12,13 +12,9 @@ pub fn build_platform_command(command: &str, args: &[String]) -> TokioCommand {
         let script_commands = ["npx", "npm", "yarn", "pnpm", "bun"];
 
         if script_commands.contains(&command) {
-            let full_command = if args.is_empty() {
-                command.to_string()
-            } else {
-                format!("{} {}", command, args.join(" "))
-            };
             let mut cmd = TokioCommand::new("cmd");
-            cmd.arg("/C").arg(&full_command);
+            cmd.arg("/C").arg(command);
+            cmd.args(args);
             return cmd;
         }
     }
@@ -29,13 +25,63 @@ pub fn build_platform_command(command: &str, args: &[String]) -> TokioCommand {
 }
 
 pub fn parse_args_string(args: Option<&str>) -> Vec<String> {
-    args.map(|value| {
-        value
-            .split_whitespace()
-            .map(|item| item.to_string())
-            .collect()
-    })
-    .unwrap_or_default()
+    args.map(parse_args_value).unwrap_or_default()
+}
+
+fn parse_args_value(value: &str) -> Vec<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    if let Ok(items) = serde_json::from_str::<Vec<String>>(trimmed) {
+        return items;
+    }
+
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut chars = trimmed.chars().peekable();
+    let mut quote: Option<char> = None;
+
+    while let Some(ch) = chars.next() {
+        match quote {
+            Some(active_quote) => {
+                if ch == active_quote {
+                    quote = None;
+                    continue;
+                }
+
+                if ch == '\\' {
+                    match chars.peek().copied() {
+                        Some(next) if next == active_quote || next == '\\' => {
+                            current.push(chars.next().unwrap_or(next));
+                        }
+                        _ => current.push(ch),
+                    }
+                    continue;
+                }
+
+                current.push(ch);
+            }
+            None => match ch {
+                '\'' | '"' => {
+                    quote = Some(ch);
+                }
+                ' ' | '\t' | '\n' | '\r' => {
+                    if !current.is_empty() {
+                        parts.push(std::mem::take(&mut current));
+                    }
+                }
+                _ => current.push(ch),
+            },
+        }
+    }
+
+    if !current.is_empty() {
+        parts.push(current);
+    }
+
+    parts
 }
 
 pub fn parse_string_map_json(raw: Option<&str>) -> HashMap<String, String> {
@@ -63,6 +109,31 @@ pub fn build_stdio_command(command: &str, args: Option<&str>, env: Option<&str>)
     }
 
     cmd
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_args_string;
+
+    #[test]
+    fn parse_args_string_supports_quoted_values() {
+        let args = parse_args_string(Some("--flag \"C:\\Program Files\\demo\" 'two words' plain"));
+        assert_eq!(
+            args,
+            vec![
+                "--flag".to_string(),
+                "C:\\Program Files\\demo".to_string(),
+                "two words".to_string(),
+                "plain".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_args_string_supports_json_array() {
+        let args = parse_args_string(Some("[\"--flag\",\"two words\"]"));
+        assert_eq!(args, vec!["--flag".to_string(), "two words".to_string()]);
+    }
 }
 
 pub fn read_json_config_or_default(path: &Path, default_value: Value) -> Result<Value, String> {

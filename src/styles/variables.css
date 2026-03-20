@@ -196,6 +196,14 @@
 
   --tool-call-bg:
     linear-gradient(180deg, rgba(255, 251, 235, 0.98), rgba(250, 245, 236, 0.96));
+  --tool-call-shell-bg:
+    linear-gradient(180deg, rgba(255, 251, 235, 0.9), rgba(255, 255, 255, 0.92));
+  --tool-call-shell-border: rgba(245, 158, 11, 0.18);
+  --tool-call-shell-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
+  --tool-call-shell-title: var(--color-text-secondary);
+  --tool-call-shell-count-bg: rgba(245, 158, 11, 0.12);
+  --tool-call-shell-count-text: #b45309;
+  --tool-call-shell-scrollbar-thumb: rgba(148, 163, 184, 0.42);
   --tool-call-border: rgba(161, 98, 7, 0.2);
   --tool-call-shadow: 0 10px 24px rgba(120, 53, 15, 0.08);
   --tool-call-hover-border: rgba(146, 64, 14, 0.32);
@@ -355,6 +363,14 @@
 
   --tool-call-bg:
     linear-gradient(180deg, rgba(28, 25, 23, 0.94), rgba(41, 37, 36, 0.9));
+  --tool-call-shell-bg:
+    linear-gradient(180deg, rgba(30, 41, 59, 0.92), rgba(15, 23, 42, 0.94));
+  --tool-call-shell-border: rgba(245, 158, 11, 0.22);
+  --tool-call-shell-shadow: 0 10px 24px rgba(2, 6, 23, 0.24);
+  --tool-call-shell-title: #94a3b8;
+  --tool-call-shell-count-bg: rgba(245, 158, 11, 0.18);
+  --tool-call-shell-count-text: #fcd34d;
+  --tool-call-shell-scrollbar-thumb: rgba(148, 163, 184, 0.54);
   --tool-call-border: rgba(217, 119, 6, 0.22);
   --tool-call-shadow: 0 14px 30px rgba(2, 6, 23, 0.24);
   --tool-call-hover-border: rgba(245, 158, 11, 0.3);

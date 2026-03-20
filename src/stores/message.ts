@@ -57,6 +57,7 @@ export interface Message {
   toolCalls?: ToolCall[]
   // 思考内容（扩展思维模型的思考过程）
   thinking?: string
+  thinkingActive?: boolean
   editTraces?: FileEditTrace[]
   runtimeNotices?: RuntimeNotice[]
   createdAt: string
@@ -158,11 +159,48 @@ export interface PaginationState {
   oldestMessageCreatedAt: string | null
 }
 
+interface BufferedMessageUpdateOptions {
+  immediate?: boolean
+}
+
+interface FlushBufferedMessageOptions {
+  notifyOnFailure?: boolean
+}
+
+const MESSAGE_FLUSH_INTERVAL_MS = 300
+
 function serializeToolCalls(toolCalls: ToolCall[]): string {
   return JSON.stringify(toolCalls.map(toolCall => ({
     ...toolCall,
     arguments: JSON.stringify(toolCall.arguments ?? {})
   })))
+}
+
+function finalizeToolCallsForStatus(
+  toolCalls: ToolCall[] | undefined,
+  status: MessageStatus | undefined
+): ToolCall[] | undefined {
+  if (!toolCalls?.length) {
+    return toolCalls
+  }
+
+  if (!status || (status !== 'completed' && status !== 'interrupted' && status !== 'error')) {
+    return toolCalls
+  }
+
+  return toolCalls.map(toolCall => {
+    if (toolCall.status !== 'running') {
+      return toolCall
+    }
+
+    return {
+      ...toolCall,
+      status: status === 'error' ? 'error' : 'success',
+      errorMessage: status === 'error'
+        ? toolCall.errorMessage || '消息执行失败'
+        : toolCall.errorMessage
+    }
+  })
 }
 
 function transformMessage(rustMsg: RustMessage): Message {
@@ -237,6 +275,9 @@ export const useMessageStore = defineStore('message', () => {
   const messages = ref<Message[]>([])
   const isLoading = ref(false)
   const pagination = ref<Map<string, PaginationState>>(new Map())
+  const pendingMessageUpdates = new Map<string, Partial<Message>>()
+  const pendingMessageTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const inFlightMessageFlushes = new Map<string, Promise<void>>()
 
   // 默认分页大小
   const PAGE_SIZE = 20
@@ -316,6 +357,163 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   // Actions
+  function buildUpdateMessageInput(updates: Partial<Message>): UpdateMessageInput {
+    const input: UpdateMessageInput = {}
+    if (updates.content !== undefined) input.content = updates.content
+    if (updates.attachments !== undefined) input.attachments = JSON.stringify(updates.attachments)
+    if (updates.status !== undefined) input.status = updates.status
+    if (updates.tokens !== undefined) input.tokens = updates.tokens
+    if (updates.errorMessage !== undefined) input.error_message = updates.errorMessage
+    if (updates.toolCalls !== undefined) {
+      input.tool_calls = serializeToolCalls(updates.toolCalls)
+    }
+    if (updates.thinking !== undefined) input.thinking = updates.thinking
+    if (updates.editTraces !== undefined) {
+      input.edit_traces = JSON.stringify(updates.editTraces)
+    }
+    if (updates.runtimeNotices !== undefined) {
+      input.runtime_notices = JSON.stringify(updates.runtimeNotices)
+    }
+    if (updates.compressionMetadata !== undefined) {
+      input.compression_metadata = JSON.stringify(updates.compressionMetadata)
+    }
+    return input
+  }
+
+  function applyMessageUpdatesLocally(id: string, updates: Partial<Message>): void {
+    const index = messages.value.findIndex(message => message.id === id)
+    if (index === -1) {
+      return
+    }
+
+    const currentMessage = messages.value[index]
+    const nextStatus = updates.status ?? currentMessage.status
+    const nextToolCalls = finalizeToolCallsForStatus(
+      updates.toolCalls ?? currentMessage.toolCalls,
+      nextStatus
+    )
+
+    messages.value[index] = {
+      ...currentMessage,
+      ...updates,
+      toolCalls: nextToolCalls
+    }
+  }
+
+  function mergeBufferedMessageUpdate(
+    previous: Partial<Message> | undefined,
+    next: Partial<Message>
+  ): Partial<Message> {
+    if (!previous) {
+      return { ...next }
+    }
+
+    return {
+      ...previous,
+      ...next
+    }
+  }
+
+  async function persistMessageUpdates(id: string, updates: Partial<Message>): Promise<void> {
+    const input = buildUpdateMessageInput(updates)
+
+    if (Object.keys(input).length === 0) {
+      return
+    }
+
+    await invoke('update_message_fields', { id, input })
+  }
+
+  function scheduleBufferedMessageFlush(id: string): void {
+    const existingTimer = pendingMessageTimers.get(id)
+    if (existingTimer) {
+      clearTimeout(existingTimer)
+    }
+
+    const timer = setTimeout(() => {
+      pendingMessageTimers.delete(id)
+      void flushBufferedMessageUpdate(id)
+    }, MESSAGE_FLUSH_INTERVAL_MS)
+
+    pendingMessageTimers.set(id, timer)
+  }
+
+  async function flushBufferedMessageUpdate(
+    id: string,
+    options: FlushBufferedMessageOptions = {}
+  ): Promise<void> {
+    const existingTimer = pendingMessageTimers.get(id)
+    if (existingTimer) {
+      clearTimeout(existingTimer)
+      pendingMessageTimers.delete(id)
+    }
+
+    const inFlightFlush = inFlightMessageFlushes.get(id)
+    if (inFlightFlush) {
+      await inFlightFlush
+      if (pendingMessageUpdates.has(id)) {
+        await flushBufferedMessageUpdate(id, options)
+      }
+      return
+    }
+
+    const updates = pendingMessageUpdates.get(id)
+    if (!updates) {
+      return
+    }
+
+    pendingMessageUpdates.delete(id)
+
+    const notificationStore = useNotificationStore()
+    const flushTask = persistMessageUpdates(id, updates)
+      .catch((error) => {
+        pendingMessageUpdates.set(
+          id,
+          mergeBufferedMessageUpdate(pendingMessageUpdates.get(id), updates)
+        )
+
+        if (options.notifyOnFailure) {
+          notificationStore.databaseError(
+            '刷新消息状态失败',
+            getErrorMessage(error),
+            () => flushBufferedMessageUpdate(id, options)
+          )
+        } else {
+          console.warn('[MessageStore] Failed to flush buffered message update:', error)
+          scheduleBufferedMessageFlush(id)
+        }
+      })
+      .finally(() => {
+        inFlightMessageFlushes.delete(id)
+      })
+
+    inFlightMessageFlushes.set(id, flushTask)
+    await flushTask
+
+    if (pendingMessageUpdates.has(id)) {
+      await flushBufferedMessageUpdate(id, options)
+    }
+  }
+
+  function updateMessageBuffered(
+    id: string,
+    updates: Partial<Message>,
+    options: BufferedMessageUpdateOptions = {}
+  ): void {
+    applyMessageUpdatesLocally(id, updates)
+    pendingMessageUpdates.set(
+      id,
+      mergeBufferedMessageUpdate(pendingMessageUpdates.get(id), updates)
+    )
+
+    if (options.immediate) {
+      void flushBufferedMessageUpdate(id)
+      return
+    }
+
+    scheduleBufferedMessageFlush(id)
+  }
+
   async function loadMessages(sessionId: string) {
     const notificationStore = useNotificationStore()
     isLoading.value = true
@@ -455,42 +653,10 @@ export const useMessageStore = defineStore('message', () => {
 
   async function updateMessage(id: string, updates: Partial<Message>) {
     const notificationStore = useNotificationStore()
-    const input: UpdateMessageInput = {}
-    if (updates.content !== undefined) input.content = updates.content
-    if (updates.attachments !== undefined) input.attachments = JSON.stringify(updates.attachments)
-    if (updates.status !== undefined) input.status = updates.status
-    if (updates.tokens !== undefined) input.tokens = updates.tokens
-    if (updates.errorMessage !== undefined) input.error_message = updates.errorMessage
-    if (updates.toolCalls !== undefined) {
-      input.tool_calls = serializeToolCalls(updates.toolCalls)
-      console.log('[MessageStore] 更新工具调用:', {
-        messageId: id,
-        toolCallsCount: updates.toolCalls.length,
-        toolCalls: updates.toolCalls
-      })
-    }
-    if (updates.thinking !== undefined) input.thinking = updates.thinking
-    if (updates.editTraces !== undefined) {
-      input.edit_traces = JSON.stringify(updates.editTraces)
-    }
-    if (updates.runtimeNotices !== undefined) {
-      input.runtime_notices = JSON.stringify(updates.runtimeNotices)
-    }
-    if (updates.compressionMetadata !== undefined) {
-      input.compression_metadata = JSON.stringify(updates.compressionMetadata)
-    }
+    applyMessageUpdatesLocally(id, updates)
 
     try {
-      const rustMsg = await invoke<RustMessage>('update_message', { id, input })
-      const updatedMessage = transformMessage(rustMsg)
-
-      const index = messages.value.findIndex(m => m.id === id)
-      if (index !== -1) {
-        messages.value[index] = updatedMessage
-        console.log('[MessageStore] 消息更新成功, toolCalls:', updatedMessage.toolCalls)
-      } else {
-        console.warn('[MessageStore] 未找到消息, id:', id)
-      }
+      await persistMessageUpdates(id, updates)
     } catch (error) {
       console.error('Failed to update message:', error)
       notificationStore.databaseError(
@@ -574,6 +740,8 @@ export const useMessageStore = defineStore('message', () => {
     loadMoreMessages,
     addMessage,
     updateMessage,
+    updateMessageBuffered,
+    flushBufferedMessageUpdate,
     deleteMessage,
     clearSessionMessages,
     clearProjectMessages

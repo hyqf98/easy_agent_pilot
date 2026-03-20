@@ -111,4 +111,10 @@ function handleFormCancel(formId: string) {
   border-color: rgba(96, 165, 250, 0.22);
   background: linear-gradient(180deg, rgba(17, 24, 39, 0.94), rgba(15, 23, 42, 0.96));
 }
+
+:global([data-theme='dark']) .structured-content__result,
+:global([data-theme='dark']) .structured-content__form {
+  border-color: rgba(96, 165, 250, 0.22);
+  background: linear-gradient(180deg, rgba(17, 24, 39, 0.94), rgba(15, 23, 42, 0.96));
+}
 </style>

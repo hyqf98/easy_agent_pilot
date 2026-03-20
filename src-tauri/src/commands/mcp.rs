@@ -18,7 +18,7 @@ use super::builtin_mcp::{
     call_builtin_tool, get_builtin_tools, BUILTIN_SERVER_ID, BUILTIN_SERVER_NAME,
 };
 use super::mcp_shared::{
-    build_stdio_command, ensure_mcp_servers_object, format_call_tool_result,
+    build_stdio_command, ensure_mcp_servers_object, format_call_tool_result, parse_args_string,
     read_json_config_or_default, write_json_config_pretty,
 };
 
@@ -126,7 +126,7 @@ fn write_mcp_to_config_file(server: &McpServer) -> Result<(), String> {
             });
             if let Some(args) = &server.args {
                 if !args.trim().is_empty() {
-                    cfg["args"] = json!(args.split_whitespace().collect::<Vec<_>>());
+                    cfg["args"] = json!(parse_args_string(Some(args)));
                 }
             }
             if let Some(env) = &server.env {

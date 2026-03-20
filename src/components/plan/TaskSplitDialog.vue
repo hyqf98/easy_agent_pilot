@@ -102,13 +102,23 @@ const runningStatusText = computed(() => {
     return '正在思考并拆分任务...'
   }
 
+  if (latestLog.type === 'thinking_start') {
+    return '正在进入思考阶段...'
+  }
+
   if (latestLog.type === 'system') {
     return '正在加载运行扩展...'
   }
 
   if (latestLog.type === 'tool_use') {
-    const toolCall = buildToolCallFromLogs(latestLog, taskSplitStore.logs)
+    const toolCall = buildToolCallFromLogs(latestLog, taskSplitStore.logs, {
+      fallbackStatus: isSessionRunning.value ? 'running' : 'success'
+    })
     return toolCall ? `正在调用工具 ${toolCall.name}...` : '正在调用工具...'
+  }
+
+  if (latestLog.type === 'tool_input_delta') {
+    return '工具参数正在流式更新...'
   }
 
   if (latestLog.type === 'content') {
@@ -247,6 +257,35 @@ interface FormRequestTurn {
   forms: FormRequestSnapshot[]
 }
 
+function getTimelineEntryPriority(entry: TimelineEntry) {
+  if (entry.type === 'thinking') return 0
+  if (entry.type === 'tool') return 1
+  if (entry.type === 'content') return 2
+  if (entry.type === 'message') {
+    return entry.role === 'user' ? 5 : 3
+  }
+  if (entry.type === 'form') return 4
+  if (entry.type === 'system') return 6
+  if (entry.type === 'error') return 7
+  return 8
+}
+
+function sortTimelineEntries(entries: TimelineEntry[]) {
+  entries.sort((left, right) => {
+    const timeDiff = compareTimestamp(left.timestamp, right.timestamp)
+    if (timeDiff !== 0) {
+      return timeDiff
+    }
+
+    const priorityDiff = getTimelineEntryPriority(left) - getTimelineEntryPriority(right)
+    if (priorityDiff !== 0) {
+      return priorityDiff
+    }
+
+    return left.id.localeCompare(right.id)
+  })
+}
+
 function extractFormRequestTurnFromLog(log: PlanSplitLogRecord): FormRequestTurn | null {
   const toTurn = (
     payload: Record<string, unknown>,
@@ -278,7 +317,9 @@ function extractFormRequestTurnFromLog(log: PlanSplitLogRecord): FormRequestTurn
     }
   }
 
-  const toolCall = buildToolCallFromLogs(log, taskSplitStore.logs)
+  const toolCall = buildToolCallFromLogs(log, taskSplitStore.logs, {
+    fallbackStatus: isSessionRunning.value ? 'running' : 'success'
+  })
   if (!toolCall) {
     return null
   }
@@ -311,6 +352,22 @@ const formRequestTurns = computed<FormRequestTurn[]>(() => {
 const formRequestHistory = computed<FormRequestSnapshot[]>(() =>
   formRequestTurns.value.flatMap(turn => turn.forms)
 )
+
+const activeFormRequestedAt = computed(() => {
+  const activeFormId = activeFormSchema.value?.formId
+  if (!activeFormId) {
+    return null
+  }
+
+  for (let index = formRequestTurns.value.length - 1; index >= 0; index -= 1) {
+    const turn = formRequestTurns.value[index]
+    if (turn.forms.some(form => form.formId === activeFormId)) {
+      return turn.requestedAt
+    }
+  }
+
+  return taskSplitStore.session?.updatedAt || new Date().toISOString()
+})
 
 const suppressAssistantContentLogs = computed(() =>
   formRequestTurns.value.length > 0 || showPreview.value
@@ -416,6 +473,16 @@ const historicalSubmittedForms = computed(() => {
 const timelineEntries = computed<TimelineEntry[]>(() => {
   const entries: TimelineEntry[] = []
   const activeFormId = activeFormSchema.value?.formId ?? null
+  const submittedMessageIds = new Set(
+    historicalSubmittedForms.value
+      .map(item => item.sourceMessageId)
+      .filter((messageId): messageId is string => Boolean(messageId))
+  )
+  const submittedMessagesById = new Map(
+    taskSplitStore.messages
+      .filter(message => message.role === 'user' && message.content.trim())
+      .map(message => [message.id, message] as const)
+  )
   const activeFormPrompt = [...taskSplitStore.messages]
     .slice()
     .reverse()
@@ -427,7 +494,7 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
   let lastAssistantContentEntry: TimelineEntry | null = null
 
   for (const message of taskSplitStore.messages) {
-    if (message.role !== 'user' || !message.content.trim()) {
+    if (message.role !== 'user' || !message.content.trim() || submittedMessageIds.has(message.id)) {
       continue
     }
 
@@ -460,7 +527,7 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
   )
 
   for (const log of sortedLogs) {
-    if (!['content', 'thinking', 'tool_use', 'tool_result', 'usage', 'message_start', 'error', 'system'].includes(log.type)) {
+    if (!['content', 'thinking', 'thinking_start', 'tool_use', 'tool_input_delta', 'tool_result', 'usage', 'message_start', 'error', 'system'].includes(log.type)) {
       lastThinkingEntry = null
       lastAssistantContentEntry = null
       continue
@@ -491,6 +558,21 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
       }
 
       lastThinkingEntry = null
+      continue
+    }
+
+    if (log.type === 'thinking_start') {
+      if (!lastThinkingEntry) {
+        const thinkingEntry: TimelineEntry = {
+          id: `log-${log.id}`,
+          type: 'thinking',
+          content: '',
+          timestamp: log.createdAt,
+          animate: animateLiveEntries
+        }
+        entries.push(thinkingEntry)
+        lastThinkingEntry = thinkingEntry
+      }
       continue
     }
 
@@ -529,7 +611,9 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
     }
 
     if (log.type === 'tool_use') {
-      const toolCall = buildToolCallFromLogs(log, taskSplitStore.logs)
+      const toolCall = buildToolCallFromLogs(log, taskSplitStore.logs, {
+        fallbackStatus: animateLiveEntries ? 'running' : 'success'
+      })
       if (!toolCall) continue
       const normalizedToolName = toolCall.name.toLowerCase()
       const isStructuredOutput = normalizedToolName === 'structuredoutput'
@@ -557,6 +641,10 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
       continue
     }
 
+    if (log.type === 'tool_input_delta') {
+      continue
+    }
+
     if (log.type === 'usage' || log.type === 'message_start') {
       continue
     }
@@ -570,9 +658,7 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
     })
   }
 
-  entries.sort((left, right) =>
-    new Date(left.timestamp || 0).getTime() - new Date(right.timestamp || 0).getTime()
-  )
+  sortTimelineEntries(entries)
 
   for (const submittedForm of historicalSubmittedForms.value) {
     entries.push({
@@ -585,6 +671,20 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
       formVariant: 'submitted',
       timestamp: submittedForm.requestedAt
     })
+
+    const submittedMessage = submittedForm.sourceMessageId
+      ? submittedMessagesById.get(submittedForm.sourceMessageId)
+      : null
+
+    if (submittedMessage?.content.trim()) {
+      entries.push({
+        id: `message-${submittedMessage.id}`,
+        type: 'message',
+        role: 'user',
+        content: submittedMessage.content,
+        timestamp: submittedForm.submittedAt
+      })
+    }
   }
 
   const requestedFormIds = new Set<string>()
@@ -620,13 +720,11 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
       formPrompt: activeFormPrompt,
       formDisabled: taskSplitStore.isProcessing,
       formVariant: 'active',
-      timestamp: taskSplitStore.session?.updatedAt || new Date().toISOString()
+      timestamp: activeFormRequestedAt.value || taskSplitStore.session?.updatedAt || new Date().toISOString()
     })
   }
 
-  entries.sort((left, right) =>
-    new Date(left.timestamp || 0).getTime() - new Date(right.timestamp || 0).getTime()
-  )
+  sortTimelineEntries(entries)
 
   return entries
 })
@@ -999,6 +1097,7 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(close
     var(--color-surface, #fff);
   --split-dialog-border: rgba(148, 163, 184, 0.2);
   --split-dialog-shadow: var(--shadow-xl, 0 20px 25px -5px rgba(0, 0, 0, 0.1));
+  --split-dialog-header-bg-color: rgba(255, 255, 255, 0.92);
   --split-dialog-header-bg: linear-gradient(90deg, rgba(239, 246, 255, 0.92), rgba(238, 242, 255, 0.9));
   --split-dialog-footer-bg: linear-gradient(180deg, #f8fbff, #f1f5ff);
   --split-pane-bg: var(--color-surface, #fff);
@@ -1042,7 +1141,8 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(close
   padding: var(--spacing-4, 1rem) var(--spacing-5, 1.25rem);
   border-bottom: 1px solid var(--color-border, #e2e8f0);
   flex-shrink: 0;
-  background: var(--split-dialog-header-bg);
+  background-color: var(--split-dialog-header-bg-color);
+  background-image: var(--split-dialog-header-bg);
 }
 
 .dialog-header h4 {
@@ -1084,6 +1184,17 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(close
 .btn-close:hover {
   background-color: var(--color-surface-hover, #f8fafc);
   color: var(--color-text-primary, #1e293b);
+}
+
+.split-dialog--dark .dialog-header {
+  background-color: rgba(17, 24, 39, 0.98) !important;
+  background-image: linear-gradient(90deg, rgba(30, 64, 175, 0.2), rgba(49, 46, 129, 0.22)) !important;
+  border-bottom-color: rgba(71, 85, 105, 0.68) !important;
+}
+
+.split-dialog--dark .dialog-header h4,
+.split-dialog--dark .btn-close {
+  color: #e2e8f0 !important;
 }
 
 .dialog-body {
@@ -1445,6 +1556,7 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(close
     linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(15, 23, 42, 0.96));
   --split-dialog-border: rgba(71, 85, 105, 0.72);
   --split-dialog-shadow: 0 28px 56px rgba(2, 6, 23, 0.48);
+  --split-dialog-header-bg-color: rgba(17, 24, 39, 0.98);
   --split-dialog-header-bg: linear-gradient(90deg, rgba(30, 64, 175, 0.2), rgba(49, 46, 129, 0.22));
   --split-dialog-footer-bg: linear-gradient(180deg, rgba(17, 24, 39, 0.98), rgba(15, 23, 42, 0.96));
   --split-pane-bg: rgba(15, 23, 42, 0.86);

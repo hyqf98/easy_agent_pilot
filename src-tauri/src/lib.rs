@@ -164,6 +164,7 @@ pub fn run() {
             commands::message::list_messages,
             commands::message::create_message,
             commands::message::update_message,
+            commands::message::update_message_fields,
             commands::message::delete_message,
             commands::message::clear_session_messages,
             commands::message::upload_session_images,

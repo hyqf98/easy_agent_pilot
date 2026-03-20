@@ -203,6 +203,17 @@ const getTraceParentPath = (relativePath: string) => {
   return segments.slice(0, -1).join('/')
 }
 
+const getToolCallRenderKey = (toolCall: NonNullable<Message['toolCalls']>[number]) => {
+  const argumentsSignature = JSON.stringify(toolCall.arguments ?? {})
+  return [
+    toolCall.id,
+    toolCall.status,
+    argumentsSignature,
+    toolCall.result?.length ?? 0,
+    toolCall.errorMessage?.length ?? 0
+  ].join(':')
+}
+
 const getTraceChangeIcon = (changeType: 'create' | 'modify' | 'delete') => {
   switch (changeType) {
     case 'create':
@@ -213,6 +224,9 @@ const getTraceChangeIcon = (changeType: 'create' | 'modify' | 'delete') => {
       return 'square-pen'
   }
 }
+
+const toolCallCount = computed(() => props.message.toolCalls?.length ?? 0)
+const shouldClampToolCalls = computed(() => toolCallCount.value > 10)
 </script>
 
 <template>
@@ -238,11 +252,11 @@ const getTraceChangeIcon = (changeType: 'create' | 'modify' | 'delete') => {
       <!-- 思考过程显示 -->
       <Transition name="slide-fade">
         <div
-          v-if="isAssistant && message.thinking"
+          v-if="isAssistant && (message.thinkingActive || message.thinking)"
           class="message-bubble__thinking"
         >
           <ThinkingDisplay
-            :thinking="message.thinking"
+            :thinking="message.thinking || ''"
             :live="isStreaming"
             :default-expanded="false"
           />
@@ -302,21 +316,30 @@ const getTraceChangeIcon = (changeType: 'create' | 'modify' | 'delete') => {
       </div>
 
       <!-- 工具调用显示 -->
-      <TransitionGroup
+      <div
         v-if="isAssistant && message.toolCalls && message.toolCalls.length > 0"
-        name="tool-call"
-        tag="div"
-        class="message-bubble__tool-calls"
+        class="message-bubble__tool-calls-shell"
+        :class="{ 'message-bubble__tool-calls-shell--scrollable': shouldClampToolCalls }"
       >
-        <ToolCallDisplay
-          v-for="toolCall in message.toolCalls"
-          :key="toolCall.id"
-          :tool-call="toolCall"
-          :live="isStreaming || toolCall.status === 'running'"
-          :default-expanded="false"
-          :default-result-expanded="false"
-        />
-      </TransitionGroup>
+        <div class="message-bubble__tool-calls-head">
+          <span class="message-bubble__tool-calls-title">工具调用</span>
+          <span class="message-bubble__tool-calls-count">{{ toolCallCount }}</span>
+        </div>
+        <TransitionGroup
+          name="tool-call"
+          tag="div"
+          class="message-bubble__tool-calls"
+        >
+          <ToolCallDisplay
+            v-for="toolCall in message.toolCalls"
+            :key="getToolCallRenderKey(toolCall)"
+            :tool-call="toolCall"
+            :live="isStreaming || toolCall.status === 'running'"
+            :default-expanded="false"
+            :default-result-expanded="false"
+          />
+        </TransitionGroup>
+      </div>
 
       <div
         v-if="assistantVisibleEditTraces.length > 0"
@@ -679,14 +702,86 @@ const getTraceChangeIcon = (changeType: 'create' | 'modify' | 'delete') => {
 }
 
 /* 工具调用显示 - 底部区域，橙色渐变边框 */
-.message-bubble__tool-calls {
+.message-bubble__tool-calls-shell {
+  --tool-call-shell-max-height: min(40rem, calc(3.35rem * 10 + var(--spacing-2) * 9 + 3rem));
   width: var(--message-compact-max-width);
   min-width: min(100%, var(--message-fixed-width));
   max-width: 100%;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
+  padding: 0.75rem;
+  border-radius: 1rem;
+  border: 1px solid var(--tool-call-shell-border);
+  background: var(--tool-call-shell-bg);
+  box-shadow: var(--tool-call-shell-shadow);
+  overflow: hidden;
+}
+
+.message-bubble__tool-calls-shell--scrollable {
+  max-height: var(--tool-call-shell-max-height);
+}
+
+.message-bubble__tool-calls-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0 0.1rem;
+}
+
+.message-bubble__tool-calls-title {
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--tool-call-shell-title);
+}
+
+.message-bubble__tool-calls-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  height: 1.5rem;
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  background: var(--tool-call-shell-count-bg);
+  color: var(--tool-call-shell-count-text);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.message-bubble__tool-calls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-height: 0;
   overflow: visible;
+}
+
+.message-bubble__tool-calls-shell--scrollable .message-bubble__tool-calls {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 0.2rem;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--tool-call-shell-scrollbar-thumb) transparent;
+}
+
+.message-bubble__tool-calls-shell--scrollable .message-bubble__tool-calls::-webkit-scrollbar {
+  width: 6px;
+}
+
+.message-bubble__tool-calls-shell--scrollable .message-bubble__tool-calls::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.message-bubble__tool-calls-shell--scrollable .message-bubble__tool-calls::-webkit-scrollbar-thumb {
+  background: var(--tool-call-shell-scrollbar-thumb);
+  border-radius: 999px;
 }
 
 .message-bubble__runtime {

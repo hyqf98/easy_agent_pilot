@@ -359,28 +359,28 @@ function getOptionReason(value: string | number): string {
 
 .options-grid {
   display: grid;
-  gap: 0.35rem;
+  gap: 0.28rem;
 }
 
 .option-label {
   display: inline-flex;
   align-items: flex-start;
-  gap: 0.45rem;
-  padding: 0.48rem 0.68rem;
+  gap: 0.4rem;
+  padding: 0.42rem 0.58rem;
   border: 1px solid color-mix(in srgb, var(--form-accent, #4f46e5) 28%, #cdd7e5);
-  border-radius: 0.82rem;
+  border-radius: 0.72rem;
   background: linear-gradient(180deg, var(--color-surface, #ffffff), var(--color-bg-secondary, #f8fbff));
   color: var(--color-text-secondary, #475569);
   cursor: pointer;
   transition: all 0.16s ease;
-  font-size: 0.8rem;
+  font-size: 0.76rem;
 }
 
 .option-label::before {
   content: '';
-  width: 0.72rem;
-  height: 0.72rem;
-  margin-top: 0.14rem;
+  width: 0.66rem;
+  height: 0.66rem;
+  margin-top: 0.12rem;
   border-radius: 4px;
   border: 1.5px solid color-mix(in srgb, var(--form-accent, #4f46e5) 44%, #64748b);
   background: var(--color-surface, #ffffff);
@@ -428,7 +428,7 @@ function getOptionReason(value: string | number): string {
 .option-header {
   display: flex;
   align-items: center;
-  gap: 0.45rem;
+  gap: 0.36rem;
 }
 
 .option-header--adder {
@@ -436,7 +436,7 @@ function getOptionReason(value: string | number): string {
 }
 
 .option-text {
-  font-size: 0.78rem;
+  font-size: 0.74rem;
   font-weight: 600;
 }
 
@@ -448,20 +448,20 @@ function getOptionReason(value: string | number): string {
 .option-badge {
   display: inline-flex;
   align-items: center;
-  padding: 0.1rem 0.38rem;
+  padding: 0.08rem 0.32rem;
   border-radius: 999px;
   background: color-mix(in srgb, var(--form-accent, #4f46e5) 14%, #ffffff);
   color: color-mix(in srgb, var(--form-accent, #4f46e5) 82%, #1d4ed8);
-  font-size: 0.62rem;
+  font-size: 0.58rem;
   font-weight: 700;
 }
 
 .option-reason {
   display: block;
-  margin-top: 0.2rem;
+  margin-top: 0.12rem;
   color: #64748b;
-  font-size: 0.72rem;
-  line-height: 1.45;
+  font-size: 0.66rem;
+  line-height: 1.35;
 }
 
 .other-inputs {

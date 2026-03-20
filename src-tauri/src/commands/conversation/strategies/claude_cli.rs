@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
@@ -6,6 +7,7 @@ use async_trait::async_trait;
 use tauri::AppHandle;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio::time::sleep;
+use uuid::Uuid;
 
 use super::cli_common::{
     build_content_event, build_error_event, build_execution_summary, build_system_event,
@@ -19,7 +21,10 @@ use crate::commands::conversation::abort::{
     clear_abort_flag, register_session_pid, set_abort_flag, should_abort, unregister_session_pid,
 };
 use crate::commands::conversation::strategy::AgentExecutionStrategy;
-use crate::commands::conversation::types::{CliStreamEvent, ExecutionRequest, MessageInput};
+use crate::commands::conversation::types::{
+    CliStreamEvent, ExecutionRequest, McpServerConfig, MessageInput,
+};
+use crate::commands::mcp_shared::parse_args_string;
 
 /// Claude CLI 策略
 pub struct ClaudeCliStrategy;
@@ -79,7 +84,14 @@ fn is_successful_event_type(event_type: &str) -> bool {
 fn is_meaningful_event_type(event_type: &str) -> bool {
     matches!(
         event_type,
-        "content" | "thinking" | "tool_use" | "tool_result" | "file_edit" | "system"
+        "content"
+            | "thinking"
+            | "thinking_start"
+            | "tool_use"
+            | "tool_input_delta"
+            | "tool_result"
+            | "file_edit"
+            | "system"
     )
 }
 
@@ -129,6 +141,154 @@ fn render_cli_message(message: &MessageInput) -> String {
     format!("{}:\n{}", message.role, body)
 }
 
+fn build_mcp_config_json(servers: &[McpServerConfig]) -> String {
+    let mut mcp_servers = serde_json::Map::new();
+
+    for server in servers {
+        let server_name = &server.name;
+        let mut server_config: Option<serde_json::Value> = None;
+
+        match server.transport_type.as_str() {
+            "stdio" => {
+                let mut args_list = Vec::new();
+                if let Some(args_str) = &server.args {
+                    args_list.extend(parse_args_string(Some(args_str)));
+                }
+
+                let mut env_map = serde_json::Map::new();
+                if let Some(env_str) = &server.env {
+                    if let Ok(env_obj) = serde_json::from_str::<serde_json::Value>(env_str) {
+                        if let Some(obj) = env_obj.as_object() {
+                            for (key, value) in obj {
+                                env_map.insert(key.clone(), value.clone());
+                            }
+                        }
+                    }
+                }
+
+                server_config = Some(serde_json::json!({
+                    "type": "stdio",
+                    "command": server.command.clone().unwrap_or_default(),
+                    "args": args_list,
+                    "env": env_map
+                }));
+            }
+            "http" | "sse" => {
+                let mut headers_map = serde_json::Map::new();
+                if let Some(headers_str) = &server.headers {
+                    if let Ok(headers_obj) = serde_json::from_str::<serde_json::Value>(headers_str)
+                    {
+                        if let Some(obj) = headers_obj.as_object() {
+                            for (key, value) in obj {
+                                headers_map.insert(key.clone(), value.clone());
+                            }
+                        }
+                    }
+                }
+
+                server_config = Some(serde_json::json!({
+                    "type": server.transport_type,
+                    "url": server.url.clone().unwrap_or_default(),
+                    "headers": headers_map
+                }));
+            }
+            _ => {}
+        }
+
+        if let Some(server_config) = server_config {
+            mcp_servers.insert(server_name.clone(), server_config);
+        }
+    }
+
+    let mcp_config = serde_json::json!({
+        "mcpServers": mcp_servers
+    });
+
+    serde_json::to_string(&mcp_config).unwrap_or_else(|_| "{}".to_string())
+}
+
+fn build_thinking_event(session_id: &str, content: String) -> CliStreamEvent {
+    CliStreamEvent {
+        event_type: "thinking".to_string(),
+        session_id: session_id.to_string(),
+        content: Some(content),
+        tool_name: None,
+        tool_call_id: None,
+        tool_input: None,
+        tool_result: None,
+        error: None,
+        input_tokens: None,
+        output_tokens: None,
+        model: None,
+    }
+}
+
+fn build_thinking_start_event(session_id: &str) -> CliStreamEvent {
+    CliStreamEvent {
+        event_type: "thinking_start".to_string(),
+        session_id: session_id.to_string(),
+        content: None,
+        tool_name: None,
+        tool_call_id: None,
+        tool_input: None,
+        tool_result: None,
+        error: None,
+        input_tokens: None,
+        output_tokens: None,
+        model: None,
+    }
+}
+
+fn build_tool_input_delta_event(
+    session_id: &str,
+    tool_call_id: Option<String>,
+    partial_json: String,
+) -> CliStreamEvent {
+    CliStreamEvent {
+        event_type: "tool_input_delta".to_string(),
+        session_id: session_id.to_string(),
+        content: None,
+        tool_name: None,
+        tool_call_id,
+        tool_input: Some(partial_json),
+        tool_result: None,
+        error: None,
+        input_tokens: None,
+        output_tokens: None,
+        model: None,
+    }
+}
+
+struct TempMcpConfigFile {
+    path: PathBuf,
+}
+
+impl TempMcpConfigFile {
+    async fn create(contents: &str) -> Result<Self> {
+        let path = std::env::temp_dir().join(format!("claude-mcp-config-{}.json", Uuid::new_v4()));
+        tokio::fs::write(&path, contents).await?;
+        Ok(Self { path })
+    }
+
+    fn to_path_string(&self) -> String {
+        self.path.to_string_lossy().to_string()
+    }
+}
+
+impl Drop for TempMcpConfigFile {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_file(&self.path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                log_error!(
+                    "清理临时 MCP 配置文件失败: {} ({})",
+                    self.path.display(),
+                    error
+                );
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl AgentExecutionStrategy for ClaudeCliStrategy {
     fn supports(&self, agent_type: &str, provider: &str) -> bool {
@@ -167,6 +327,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
             .unwrap_or_else(|| "stream-json".to_string());
         let json_schema = request.json_schema.clone();
         let extra_cli_args = request.extra_cli_args.clone();
+        let mcp_servers = request.mcp_servers.clone();
         let messages = request.messages.clone();
         let is_stream_json = cli_output_format == "stream-json";
         let schema_text = json_schema
@@ -201,15 +362,17 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
             }
         }
 
-        // MCP 配置暂时禁用，不传递给 Claude CLI
-        // if let Some(servers) = &mcp_servers {
-        //     if !servers.is_empty() {
-        //         let mcp_config = build_mcp_config_json(servers);
-        //         log_info!("MCP 配置: {}", mcp_config);
-        //         args.push("--mcp-config".to_string());
-        //         args.push(mcp_config);
-        //     }
-        // }
+        let mut mcp_config_file: Option<TempMcpConfigFile> = None;
+        if let Some(servers) = &mcp_servers {
+            if !servers.is_empty() {
+                let mcp_config = build_mcp_config_json(servers);
+                log_info!("MCP 配置: {}", mcp_config);
+                let file = TempMcpConfigFile::create(&mcp_config).await?;
+                args.push("--mcp-config".to_string());
+                args.push(file.to_path_string());
+                mcp_config_file = Some(file);
+            }
+        }
 
         if let Some(schema) = schema_text {
             args.push("--json-schema".to_string());
@@ -538,6 +701,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
 
         // 清理中断标志
         clear_abort_flag(&session_id).await;
+        drop(mcp_config_file);
 
         if let Some(error_message) = timeout_error_message {
             return Err(anyhow::anyhow!(error_message));
@@ -678,21 +842,8 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
 
             match delta_type {
                 "thinking_delta" => {
-                    // 处理思考内容
                     let thinking = delta.get("thinking").and_then(|t| t.as_str())?;
-                    Some(CliStreamEvent {
-                        event_type: "thinking".to_string(),
-                        session_id: session_id.to_string(),
-                        content: Some(thinking.to_string()),
-                        tool_name: None,
-                        tool_call_id: None,
-                        tool_input: None,
-                        tool_result: None,
-                        error: None,
-                        input_tokens: None,
-                        output_tokens: None,
-                        model: None,
-                    })
+                    Some(build_thinking_event(session_id, thinking.to_string()))
                 }
                 "text_delta" => {
                     let text = delta.get("text").and_then(|t| t.as_str())?;
@@ -700,7 +851,20 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                 }
                 "input_json_delta" => {
                     let partial_json = delta.get("partial_json").and_then(|j| j.as_str())?;
-                    Some(build_content_event(session_id, partial_json.to_string()))
+                    let tool_call_id = json
+                        .pointer("/content_block/id")
+                        .and_then(|value| value.as_str())
+                        .map(|value| value.to_string())
+                        .or_else(|| {
+                            json.get("index")
+                                .and_then(|value| value.as_u64())
+                                .map(|value| value.to_string())
+                        });
+                    Some(build_tool_input_delta_event(
+                        session_id,
+                        tool_call_id,
+                        partial_json.to_string(),
+                    ))
                 }
                 _ => None,
             }
@@ -714,30 +878,25 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
 
             match block_type {
                 "thinking" => {
-                    // thinking 内容块开始
-                    Some(CliStreamEvent {
-                        event_type: "thinking_start".to_string(),
-                        session_id: session_id.to_string(),
-                        content: None,
-                        tool_name: None,
-                        tool_call_id: None,
-                        tool_input: None,
-                        tool_result: None,
-                        error: None,
-                        input_tokens: None,
-                        output_tokens: None,
-                        model: None,
-                    })
+                    Some(build_thinking_start_event(session_id))
                 }
                 "tool_use" => {
                     let tool_name = content_block.get("name").and_then(|n| n.as_str())?;
-                    let tool_id = json.get("index").and_then(|i| i.as_u64())?;
+                    let tool_id = content_block
+                        .get("id")
+                        .and_then(|value| value.as_str())
+                        .map(|value| value.to_string())
+                        .or_else(|| {
+                            json.get("index")
+                                .and_then(|value| value.as_u64())
+                                .map(|value| value.to_string())
+                        })?;
                     Some(CliStreamEvent {
                         event_type: "tool_use".to_string(),
                         session_id: session_id.to_string(),
                         content: None,
                         tool_name: Some(tool_name.to_string()),
-                        tool_call_id: Some(tool_id.to_string()),
+                        tool_call_id: Some(tool_id),
                         tool_input: None,
                         tool_result: None,
                         error: None,
@@ -936,17 +1095,10 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                         {
                             log_debug!("[parse] 找到 thinking 内容，长度: {}", thinking_text.len());
                             return Some(CliStreamEvent {
-                                event_type: "thinking".to_string(),
-                                session_id: session_id.to_string(),
-                                content: Some(thinking_text.to_string()),
-                                tool_name: None,
-                                tool_call_id: None,
-                                tool_input: None,
-                                tool_result: None,
-                                error: None,
                                 input_tokens,
                                 output_tokens,
                                 model: model.clone(),
+                                ..build_thinking_event(session_id, thinking_text.to_string())
                             });
                         }
                     }

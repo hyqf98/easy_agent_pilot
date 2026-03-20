@@ -135,7 +135,10 @@ onUnmounted(() => {
     <div
       v-if="rightPanelOpen"
       class="task-detail-container"
-      :style="{ width: rightPanelWidth + 'px' }"
+      :style="{
+        width: rightPanelWidth + 'px',
+        '--detail-panel-width': rightPanelWidth + 'px'
+      }"
     >
       <!-- 拖拽调整宽度手柄 -->
       <div
@@ -214,6 +217,7 @@ onUnmounted(() => {
 }
 
 .task-detail-container {
+  --detail-panel-surface: var(--color-surface, #ffffff);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -221,6 +225,21 @@ onUnmounted(() => {
   position: relative;
   min-width: 280px;
   max-width: 600px;
+  min-height: 0;
+  overflow: hidden;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--detail-panel-surface) 96%, #ffffff) 0%,
+      color-mix(in srgb, var(--detail-panel-surface) 90%, var(--color-bg-secondary, #f8fafc)) 100%
+    );
+}
+
+.task-detail-container > :not(.resize-handle):not(.collapse-button) {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
 }
 
 /* 拖拽调整宽度手柄 */
@@ -292,5 +311,36 @@ onUnmounted(() => {
   top: 0.75rem;
   right: 0.75rem;
   z-index: 10;
+}
+
+[data-theme='dark'] .plan-mode-panel {
+  background-color: rgba(2, 6, 23, 0.92);
+}
+
+[data-theme='dark'] .plan-list-container,
+[data-theme='dark'] .task-board-container--with-right,
+[data-theme='dark'] .task-detail-container {
+  border-color: rgba(148, 163, 184, 0.14);
+}
+
+[data-theme='dark'] .task-detail-container {
+  --detail-panel-surface: rgba(15, 23, 42, 0.96);
+  background:
+    linear-gradient(
+      180deg,
+      rgba(15, 23, 42, 0.98) 0%,
+      rgba(2, 6, 23, 0.94) 100%
+    );
+}
+
+[data-theme='dark'] .collapse-button {
+  background-color: rgba(15, 23, 42, 0.96);
+  border-color: rgba(148, 163, 184, 0.18);
+  color: rgba(226, 232, 240, 0.78);
+}
+
+[data-theme='dark'] .collapse-button:hover {
+  background-color: rgba(30, 41, 59, 0.96);
+  color: #f8fafc;
 }
 </style>

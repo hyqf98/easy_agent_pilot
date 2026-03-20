@@ -521,139 +521,72 @@ fn parse_skill_description(skill_md_path: &PathBuf) -> Option<String> {
     None
 }
 
+fn first_existing_description_path(base_path: &PathBuf, file_names: &[&str]) -> Option<PathBuf> {
+    file_names
+        .iter()
+        .map(|name| base_path.join(name))
+        .find(|path| path.exists())
+}
+
+fn collect_internal_items(
+    base_dir: &PathBuf,
+    item_type: &str,
+    description_files: &[&str],
+) -> Vec<InternalItem> {
+    if !base_dir.exists() {
+        return Vec::new();
+    }
+
+    let Ok(entries) = fs::read_dir(base_dir) else {
+        return Vec::new();
+    };
+
+    let mut items = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = if path.is_dir() {
+            path.file_name()
+                .map(|item| item.to_string_lossy().to_string())
+                .unwrap_or_default()
+        } else if path.extension().is_some_and(|extension| extension == "md") {
+            path.file_stem()
+                .map(|item| item.to_string_lossy().to_string())
+                .unwrap_or_default()
+        } else {
+            continue;
+        };
+
+        let description = if path.is_dir() {
+            first_existing_description_path(&path, description_files)
+                .and_then(|description_path| parse_skill_description(&description_path))
+        } else {
+            parse_skill_description(&path)
+        };
+
+        items.push(InternalItem {
+            name,
+            path: path.to_string_lossy().to_string(),
+            description,
+            item_type: item_type.to_string(),
+        });
+    }
+
+    items
+}
+
 /// 扫描 Plugin 内部的 skills/commands/agents 目录
 fn scan_plugin_internal_items(
     plugin_path: &PathBuf,
 ) -> (Vec<InternalItem>, Vec<InternalItem>, Vec<InternalItem>) {
-    let mut skills = Vec::new();
-    let mut commands = Vec::new();
-    let mut agents = Vec::new();
-
-    // 扫描 skills 目录
-    let skills_dir = plugin_path.join("skills");
-    if skills_dir.exists() {
-        if let Ok(entries) = fs::read_dir(&skills_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    let name = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-
-                    // 尝试读取 skill.md 获取描述
-                    let description = parse_skill_description(&path.join("skill.md"))
-                        .or_else(|| parse_skill_description(&path.join("SKILL.md")));
-
-                    skills.push(InternalItem {
-                        name,
-                        path: path.to_string_lossy().to_string(),
-                        description,
-                        item_type: "skill".to_string(),
-                    });
-                } else if path.extension().map(|e| e == "md").unwrap_or(false) {
-                    // 单个 .md 文件作为 skill
-                    let name = path
-                        .file_stem()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-
-                    let description = parse_skill_description(&path);
-
-                    skills.push(InternalItem {
-                        name,
-                        path: path.to_string_lossy().to_string(),
-                        description,
-                        item_type: "skill".to_string(),
-                    });
-                }
-            }
-        }
-    }
-
-    // 扫描 commands 目录
-    let commands_dir = plugin_path.join("commands");
-    if commands_dir.exists() {
-        if let Ok(entries) = fs::read_dir(&commands_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    let name = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-
-                    // 尝试读取 command.md 获取描述
-                    let description = parse_skill_description(&path.join("command.md"))
-                        .or_else(|| parse_skill_description(&path.join("COMMAND.md")));
-
-                    commands.push(InternalItem {
-                        name,
-                        path: path.to_string_lossy().to_string(),
-                        description,
-                        item_type: "command".to_string(),
-                    });
-                } else if path.extension().map(|e| e == "md").unwrap_or(false) {
-                    let name = path
-                        .file_stem()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-
-                    let description = parse_skill_description(&path);
-
-                    commands.push(InternalItem {
-                        name,
-                        path: path.to_string_lossy().to_string(),
-                        description,
-                        item_type: "command".to_string(),
-                    });
-                }
-            }
-        }
-    }
-
-    // 扫描 agents 目录
-    let agents_dir = plugin_path.join("agents");
-    if agents_dir.exists() {
-        if let Ok(entries) = fs::read_dir(&agents_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    let name = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-
-                    // 尝试读取 agent.md 获取描述
-                    let description = parse_skill_description(&path.join("agent.md"))
-                        .or_else(|| parse_skill_description(&path.join("AGENT.md")));
-
-                    agents.push(InternalItem {
-                        name,
-                        path: path.to_string_lossy().to_string(),
-                        description,
-                        item_type: "agent".to_string(),
-                    });
-                } else if path.extension().map(|e| e == "md").unwrap_or(false) {
-                    let name = path
-                        .file_stem()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-
-                    let description = parse_skill_description(&path);
-
-                    agents.push(InternalItem {
-                        name,
-                        path: path.to_string_lossy().to_string(),
-                        description,
-                        item_type: "agent".to_string(),
-                    });
-                }
-            }
-        }
-    }
-
-    (skills, commands, agents)
+    (
+        collect_internal_items(&plugin_path.join("skills"), "skill", &["skill.md", "SKILL.md"]),
+        collect_internal_items(
+            &plugin_path.join("commands"),
+            "command",
+            &["command.md", "COMMAND.md"],
+        ),
+        collect_internal_items(&plugin_path.join("agents"), "agent", &["agent.md", "AGENT.md"]),
+    )
 }
 
 /// 尝试从 installed_plugins.json 获取安装来源

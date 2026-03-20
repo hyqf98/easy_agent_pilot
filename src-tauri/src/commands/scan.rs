@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::commands::cli_support::resolve_cli_name;
+use crate::commands::mcp_shared::parse_args_string;
 use crate::commands::scan_session_shared::{
     clean_display_text, collect_jsonl_files, delete_cli_session_path,
     extract_jsonl_message_content, extract_jsonl_message_type, extract_jsonl_project_path,
@@ -312,6 +313,71 @@ fn check_skill_subdirectories(skill_path: &PathBuf) -> SkillSubdirectories {
     }
 }
 
+fn resolve_scan_entry_path(path: &PathBuf) -> PathBuf {
+    if !path.is_symlink() {
+        return path.clone();
+    }
+
+    match fs::read_link(path) {
+        Ok(target) if target.is_relative() => path
+            .parent()
+            .map(|parent| parent.join(&target))
+            .unwrap_or_else(|| path.clone()),
+        Ok(target) => target,
+        Err(_) => path.clone(),
+    }
+}
+
+fn find_skill_markdown_path(skill_dir: &PathBuf) -> Option<PathBuf> {
+    ["SKILL.md", "skill.md"]
+        .iter()
+        .map(|name| skill_dir.join(name))
+        .find(|path| path.exists())
+}
+
+fn build_directory_skill(path: &PathBuf, actual_path: &PathBuf) -> ScannedSkill {
+    let dir_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let (frontmatter_name, description) = find_skill_markdown_path(actual_path)
+        .and_then(|md_path| fs::read_to_string(md_path).ok())
+        .map(|content| parse_yaml_frontmatter(&content))
+        .unwrap_or((None, None));
+
+    ScannedSkill {
+        name: frontmatter_name
+            .clone()
+            .unwrap_or_else(|| dir_name.clone()),
+        path: path.to_string_lossy().to_string(),
+        description,
+        frontmatter_name,
+        subdirectories: check_skill_subdirectories(actual_path),
+    }
+}
+
+fn build_markdown_skill(path: &PathBuf) -> ScannedSkill {
+    let name = path
+        .file_stem()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let description = fs::read_to_string(path)
+        .ok()
+        .and_then(|content| content.lines().next().map(|line| line.trim().to_string()));
+
+    ScannedSkill {
+        name,
+        path: path.to_string_lossy().to_string(),
+        description,
+        frontmatter_name: None,
+        subdirectories: SkillSubdirectories {
+            has_scripts: false,
+            has_references: false,
+            has_assets: false,
+        },
+    }
+}
+
 /// 扫描 Skills 目录
 fn scan_skills_directory(claude_dir: &PathBuf) -> Result<Vec<ScannedSkill>> {
     let mut skills = Vec::new();
@@ -323,93 +389,20 @@ fn scan_skills_directory(claude_dir: &PathBuf) -> Result<Vec<ScannedSkill>> {
 
     let entries = fs::read_dir(&skills_dir)?;
     for entry in entries {
-        if let Ok(entry) = entry {
-            let path = entry.path();
+        let Ok(entry) = entry else {
+            continue;
+        };
 
-            // 检查是否为符号链接，如果是则获取目标路径
-            let actual_path = if path.is_symlink() {
-                match fs::read_link(&path) {
-                    Ok(target) => {
-                        // 如果是相对路径，转换为绝对路径
-                        if target.is_relative() {
-                            path.parent()
-                                .map(|p| p.join(&target))
-                                .unwrap_or(path.clone())
-                        } else {
-                            target
-                        }
-                    }
-                    Err(_) => path.clone(),
-                }
-            } else {
-                path.clone()
-            };
+        let path = entry.path();
+        let actual_path = resolve_scan_entry_path(&path);
 
-            if actual_path.is_dir() {
-                // 使用目录名作为默认名称
-                let dir_name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
+        if actual_path.is_dir() {
+            skills.push(build_directory_skill(&path, &actual_path));
+            continue;
+        }
 
-                // 尝试读取 SKILL.md（优先）或 skill.md
-                let skill_md = actual_path.join("SKILL.md");
-                let skill_md_lower = actual_path.join("skill.md");
-
-                let md_path = if skill_md.exists() {
-                    Some(skill_md)
-                } else if skill_md_lower.exists() {
-                    Some(skill_md_lower)
-                } else {
-                    None
-                };
-
-                let (frontmatter_name, description) = if let Some(md_path) = md_path {
-                    if let Ok(content) = fs::read_to_string(&md_path) {
-                        parse_yaml_frontmatter(&content)
-                    } else {
-                        (None, None)
-                    }
-                } else {
-                    (None, None)
-                };
-
-                // 使用 frontmatter 中的 name 作为显示名称，否则使用目录名
-                let display_name = frontmatter_name.clone().unwrap_or_else(|| dir_name.clone());
-
-                // 检查子目录
-                let subdirectories = check_skill_subdirectories(&actual_path);
-
-                skills.push(ScannedSkill {
-                    name: display_name,
-                    path: path.to_string_lossy().to_string(),
-                    description,
-                    frontmatter_name,
-                    subdirectories,
-                });
-            } else if path.extension().map(|e| e == "md").unwrap_or(false) {
-                // 单个 .md 文件作为 skill（不支持 frontmatter，保持向后兼容）
-                let name = path
-                    .file_stem()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-
-                let description = fs::read_to_string(&path)
-                    .ok()
-                    .and_then(|content| content.lines().next().map(|s| s.trim().to_string()));
-
-                skills.push(ScannedSkill {
-                    name,
-                    path: path.to_string_lossy().to_string(),
-                    description,
-                    frontmatter_name: None,
-                    subdirectories: SkillSubdirectories {
-                        has_scripts: false,
-                        has_references: false,
-                        has_assets: false,
-                    },
-                });
-            }
+        if path.extension().is_some_and(|extension| extension == "md") {
+            skills.push(build_markdown_skill(&path));
         }
     }
 
@@ -637,12 +630,10 @@ pub fn scan_claude_mcp_list() -> Result<Vec<ScannedMcpServer>, String> {
                         let name = name.trim().to_string();
                         let rest = rest.trim();
 
-                        // 简单分割命令和参数
-                        let parts: Vec<&str> = rest.split_whitespace().collect();
+                        let parts = parse_args_string(Some(rest));
                         if !parts.is_empty() {
-                            let command = parts[0].to_string();
-                            let args: Vec<String> =
-                                parts[1..].iter().map(|s| s.to_string()).collect();
+                            let command = parts[0].clone();
+                            let args: Vec<String> = parts[1..].to_vec();
 
                             servers.push(ScannedMcpServer {
                                 name,

@@ -4,6 +4,7 @@ import type {
   ExecutionRequest
 } from './types'
 import { BaseAgentStrategy } from './BaseAgentStrategy'
+import { appendClaudeMcpAllowedTools } from '@/utils/mcpServerConfig'
 
 /**
  * Claude CLI 策略
@@ -37,6 +38,10 @@ export class ClaudeCliStrategy extends BaseAgentStrategy {
       responseMode,
       messages
     } = context
+    const allowedTools = appendClaudeMcpAllowedTools(
+      ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash', 'WebFetch', 'WebSearch'],
+      mcpServers
+    )
 
     return {
       sessionId,
@@ -48,7 +53,7 @@ export class ClaudeCliStrategy extends BaseAgentStrategy {
         : undefined,
       messages: this.toMessageInputs(messages),
       workingDirectory,
-      allowedTools: ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash', 'WebFetch', 'WebSearch'],
+      allowedTools,
       mcpServers,
       cliOutputFormat: cliOutputFormat ?? (responseMode === 'json_once' ? 'json' : 'stream-json'),
       jsonSchema,

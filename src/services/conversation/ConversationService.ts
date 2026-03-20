@@ -21,10 +21,40 @@ import {
   buildUsageNotice,
   upsertRuntimeNotice
 } from '@/utils/runtimeNotice'
+import { loadAgentMcpServers } from '@/utils/mcpServerConfig'
+import { mergeToolInputArguments } from '@/utils/toolInput'
 
 interface CliConfigModelProfile {
   main_model?: string | null
   codex_model?: string | null
+}
+
+interface StreamTimingMetrics {
+  startedAt: number
+  firstEventAt?: number
+  firstRenderAt?: number
+  firstContentAt?: number
+  firstThinkingAt?: number
+  firstToolAt?: number
+  doneAt?: number
+  persistedAt?: number
+}
+
+function finalizePendingToolCalls(toolCalls: ToolCall[]): ToolCall[] {
+  let changed = false
+  const finalized = toolCalls.map(toolCall => {
+    if (toolCall.status !== 'running') {
+      return toolCall
+    }
+
+    changed = true
+    return {
+      ...toolCall,
+      status: 'success' as const
+    }
+  })
+
+  return changed ? finalized : toolCalls
 }
 
 /**
@@ -134,9 +164,13 @@ export class ConversationService {
         ? { ...agent, modelId: usageModelHint }
         : agent
 
+      if (usageModelHint) {
+        tokenStore.updateRealtimeTokens(sessionId, undefined, undefined, usageModelHint)
+      }
+
       const environmentNotice = await buildCliEnvironmentNotice(executionAgent)
       if (environmentNotice) {
-        await messageStore.updateMessage(aiMessage.id, {
+        messageStore.updateMessageBuffered(aiMessage.id, {
           runtimeNotices: [environmentNotice]
         })
       }
@@ -145,7 +179,7 @@ export class ConversationService {
       if (initialUsageNotice) {
         const currentMessage = messageStore.messagesBySession(sessionId)
           .find(message => message.id === aiMessage.id)
-        await messageStore.updateMessage(aiMessage.id, {
+        messageStore.updateMessageBuffered(aiMessage.id, {
           runtimeNotices: upsertRuntimeNotice(currentMessage?.runtimeNotices, initialUsageNotice)
         })
       }
@@ -171,7 +205,13 @@ export class ConversationService {
         }
       }
 
-      const projectMemoryPrompt = await this.buildProjectMemoryPrompt(targetProject?.memoryLibraryIds ?? [])
+      const [projectMemoryPrompt, mcpServers] = await Promise.all([
+        this.buildProjectMemoryPrompt(targetProject?.memoryLibraryIds ?? []),
+        loadAgentMcpServers(executionAgent).catch((error) => {
+          console.warn('[ConversationService] Failed to load MCP servers:', error)
+          return []
+        })
+      ])
 
       // 构建对话上下文
       const messages = buildConversationMessages(
@@ -199,7 +239,7 @@ export class ConversationService {
         agent: executionAgent,
         messages,
         workingDirectory,
-        mcpServers: undefined, // MCP 配置暂时禁用
+        mcpServers: mcpServers.length > 0 ? mcpServers : undefined,
         executionMode: 'chat',
         responseMode: 'stream_text'
       }
@@ -328,6 +368,10 @@ export class ConversationService {
       projectPath: context.workingDirectory
     })
     const pendingTraceTasks = new Set<Promise<void>>()
+    const pendingPersistenceTasks = new Set<Promise<void>>()
+    const streamMetrics: StreamTimingMetrics = {
+      startedAt: globalThis.performance?.now() ?? Date.now()
+    }
     let hasError = false
 
     const registerTraceTask = (task: Promise<void>) => {
@@ -335,45 +379,114 @@ export class ConversationService {
       task.finally(() => pendingTraceTasks.delete(task))
     }
 
+    const registerPersistenceTask = (task: Promise<void>) => {
+      pendingPersistenceTasks.add(task)
+      task.finally(() => pendingPersistenceTasks.delete(task))
+    }
+
+    const now = () => globalThis.performance?.now() ?? Date.now()
+
+    const markMetric = (key: keyof Omit<StreamTimingMetrics, 'startedAt'>) => {
+      if (!streamMetrics[key]) {
+        streamMetrics[key] = now()
+      }
+    }
+
+    const bufferMessageUpdate = (
+      updates: Partial<Message>,
+      options?: { immediate?: boolean }
+    ) => {
+      markMetric('firstRenderAt')
+      messageStore.updateMessageBuffered(aiMessage.id, updates, options)
+    }
+
+    const recordTimingSummary = () => {
+      const summary = {
+        sessionId,
+        messageId: aiMessage.id,
+        firstEventMs: streamMetrics.firstEventAt
+          ? Number((streamMetrics.firstEventAt - streamMetrics.startedAt).toFixed(1))
+          : null,
+        firstRenderMs: streamMetrics.firstRenderAt
+          ? Number((streamMetrics.firstRenderAt - streamMetrics.startedAt).toFixed(1))
+          : null,
+        firstContentMs: streamMetrics.firstContentAt
+          ? Number((streamMetrics.firstContentAt - streamMetrics.startedAt).toFixed(1))
+          : null,
+        firstThinkingMs: streamMetrics.firstThinkingAt
+          ? Number((streamMetrics.firstThinkingAt - streamMetrics.startedAt).toFixed(1))
+          : null,
+        firstToolMs: streamMetrics.firstToolAt
+          ? Number((streamMetrics.firstToolAt - streamMetrics.startedAt).toFixed(1))
+          : null,
+        doneMs: streamMetrics.doneAt
+          ? Number((streamMetrics.doneAt - streamMetrics.startedAt).toFixed(1))
+          : null,
+        persistedMs: streamMetrics.persistedAt
+          ? Number((streamMetrics.persistedAt - streamMetrics.startedAt).toFixed(1))
+          : null
+      }
+
+      console.info('[ConversationService] stream timing metrics', summary)
+      ;(globalThis as { __EASY_AGENT_LAST_STREAM_METRICS?: typeof summary }).__EASY_AGENT_LAST_STREAM_METRICS = summary
+    }
+
     try {
       await agentExecutor.execute(context, (event: StreamEvent) => {
+        markMetric('firstEventAt')
         this.handleStreamEvent(event, {
           aiMessage,
           sessionId,
           toolCalls,
           onContent: (content) => {
+            markMetric('firstContentAt')
             accumulatedContent += content
-            // 更新消息内容
-            messageStore.updateMessage(aiMessage.id, {
+            bufferMessageUpdate({
               content: accumulatedContent
             })
           },
           onThinking: (thinking) => {
+            markMetric('firstThinkingAt')
             accumulatedThinking += thinking
-            // 更新思考内容
-            messageStore.updateMessage(aiMessage.id, {
-              thinking: accumulatedThinking
+            bufferMessageUpdate({
+              thinking: accumulatedThinking,
+              thinkingActive: true
+            })
+          },
+          onThinkingStart: () => {
+            bufferMessageUpdate({
+              thinkingActive: true
             })
           },
           onToolUse: (toolCall) => {
-            console.log('[ConversationService] onToolUse 被调用:', toolCall)
+            markMetric('firstToolAt')
             // 添加或更新工具调用
             const existingIndex = toolCalls.findIndex(tc => tc.id === toolCall.id)
             if (existingIndex >= 0) {
               toolCalls[existingIndex] = toolCall
-              console.log('[ConversationService] 更新已存在的工具调用, index:', existingIndex)
             } else {
               toolCalls.push(toolCall)
-              console.log('[ConversationService] 添加新的工具调用, 当前数量:', toolCalls.length)
             }
-            // 更新消息的工具调用
-            console.log('[ConversationService] 更新消息的工具调用, toolCalls:', toolCalls)
-            messageStore.updateMessage(aiMessage.id, {
+            bufferMessageUpdate({
               toolCalls: [...toolCalls]
             })
             registerTraceTask((async () => {
               await fileTraceCollector.captureToolUse(toolCall)
             })())
+          },
+          onToolInputDelta: (toolCallId, toolInput) => {
+            const targetToolCall = (toolCallId
+              ? toolCalls.find(tool => tool.id === toolCallId)
+              : null) || [...toolCalls].reverse().find(tool => tool.status === 'running')
+
+            if (!targetToolCall) {
+              return
+            }
+
+            targetToolCall.arguments = mergeToolInputArguments(targetToolCall.arguments, toolInput)
+            bufferMessageUpdate({
+              toolCalls: [...toolCalls]
+            })
           },
           onToolResult: (toolCallId, result, isError) => {
             // 更新工具调用的结果
@@ -384,8 +497,7 @@ export class ConversationService {
               if (isError) {
                 tc.errorMessage = result
               }
-              // 更新消息的工具调用
-              messageStore.updateMessage(aiMessage.id, {
+              bufferMessageUpdate({
                 toolCalls: [...toolCalls]
               })
             }
@@ -398,7 +510,7 @@ export class ConversationService {
                 }
 
                 editTraces.push(trace)
-                await messageStore.updateMessage(aiMessage.id, {
+                bufferMessageUpdate({
                   editTraces: [...editTraces]
                 })
               })())
@@ -411,7 +523,7 @@ export class ConversationService {
             }
 
             editTraces.push(trace)
-            void messageStore.updateMessage(aiMessage.id, {
+            bufferMessageUpdate({
               editTraces: [...editTraces]
             })
           },
@@ -433,7 +545,7 @@ export class ConversationService {
 
             const currentMessage = messageStore.messagesBySession(sessionId)
               .find(message => message.id === aiMessage.id)
-            void messageStore.updateMessage(aiMessage.id, {
+            bufferMessageUpdate({
               runtimeNotices: upsertRuntimeNotice(currentMessage?.runtimeNotices, usageNotice)
             })
           },
@@ -445,23 +557,31 @@ export class ConversationService {
 
             const currentMessage = messageStore.messagesBySession(sessionId)
               .find(message => message.id === aiMessage.id)
-            void messageStore.updateMessage(aiMessage.id, {
+            bufferMessageUpdate({
               runtimeNotices: upsertRuntimeNotice(currentMessage?.runtimeNotices, runtimeNotice)
             })
           },
           onError: (error) => {
             hasError = true
-            messageStore.updateMessage(aiMessage.id, {
+            bufferMessageUpdate({
               status: 'error',
-              errorMessage: error
-            })
+              errorMessage: error,
+              thinkingActive: false
+            }, { immediate: true })
           },
           onDone: () => {
+            markMetric('doneAt')
+            const finalizedToolCalls = finalizePendingToolCalls(toolCalls)
+            if (finalizedToolCalls !== toolCalls) {
+              toolCalls.splice(0, toolCalls.length, ...finalizedToolCalls)
+            }
             // 更新消息状态
             if (!hasError) {
-              messageStore.updateMessage(aiMessage.id, {
-                status: 'completed'
-              })
+              bufferMessageUpdate({
+                status: 'completed',
+                thinkingActive: false,
+                toolCalls: [...toolCalls]
+              }, { immediate: true })
               // 更新会话最后消息
               sessionStore.updateLastMessage(
                 sessionId,
@@ -472,32 +592,53 @@ export class ConversationService {
 
             // 自动压缩检查
             compressionService.checkAndAutoCompress(sessionId, context.agent.id)
+
+            registerPersistenceTask(
+              messageStore.flushBufferedMessageUpdate(aiMessage.id, { notifyOnFailure: true })
+            )
           }
         })
       })
 
       await Promise.allSettled(Array.from(pendingTraceTasks))
+      await Promise.allSettled(Array.from(pendingPersistenceTasks))
+      await messageStore.flushBufferedMessageUpdate(aiMessage.id, { notifyOnFailure: true })
+      markMetric('persistedAt')
+      recordTimingSummary()
 
       // 兜底：部分后端/CLI 场景可能不会显式发出 done 事件，避免状态长期卡在“生成中”
       if (sessionExecutionStore.getIsSending(sessionId)) {
+        const finalizedToolCalls = finalizePendingToolCalls(toolCalls)
+        if (finalizedToolCalls !== toolCalls) {
+          toolCalls.splice(0, toolCalls.length, ...finalizedToolCalls)
+        }
         if (!hasError) {
-          await messageStore.updateMessage(aiMessage.id, {
-            status: 'completed'
-          })
+          bufferMessageUpdate({
+            status: 'completed',
+            thinkingActive: false,
+            toolCalls: [...toolCalls]
+          }, { immediate: true })
           sessionStore.updateLastMessage(
             sessionId,
             accumulatedContent.slice(0, 50)
           )
         }
+        await messageStore.flushBufferedMessageUpdate(aiMessage.id, { notifyOnFailure: true })
+        markMetric('persistedAt')
+        recordTimingSummary()
         this.finalizeSend(sessionId)
       }
     } catch (error) {
       hasError = true
       const errorMessage = error instanceof Error ? error.message : String(error)
-      await messageStore.updateMessage(aiMessage.id, {
+      bufferMessageUpdate({
         status: 'error',
-        errorMessage
-      })
+        errorMessage,
+        thinkingActive: false
+      }, { immediate: true })
+      await messageStore.flushBufferedMessageUpdate(aiMessage.id, { notifyOnFailure: true })
+      markMetric('persistedAt')
+      recordTimingSummary()
       this.finalizeSend(sessionId)
     }
   }
@@ -542,7 +683,9 @@ export class ConversationService {
       toolCalls: ToolCall[]
       onContent: (content: string) => void
       onThinking: (thinking: string) => void
+      onThinkingStart: () => void
       onToolUse: (toolCall: ToolCall) => void
+      onToolInputDelta: (toolCallId: string | undefined, toolInput: Record<string, unknown> | undefined) => void
       onToolResult: (toolCallId: string, result: string, isError: boolean) => void
       onFileEdit: (trace: FileEditTrace) => void
       onUsage: (usage: { model?: string, inputTokens?: number, outputTokens?: number }) => void
@@ -551,7 +694,7 @@ export class ConversationService {
       onDone: () => void
     }
   ): void {
-    const { onContent, onThinking, onToolUse, onToolResult, onFileEdit, onUsage, onSystem, onError, onDone } = handlers
+    const { onContent, onThinking, onThinkingStart, onToolUse, onToolInputDelta, onToolResult, onFileEdit, onUsage, onSystem, onError, onDone } = handlers
     const tokenStore = useTokenStore()
 
     // 处理 token 事件 - 优先使用 CLI 返回的真实 token 数据
@@ -573,13 +716,11 @@ export class ConversationService {
         }
         break
 
+      case 'thinking_start':
+        onThinkingStart()
+        break
+
       case 'tool_use':
-        // 处理工具调用 - 添加详细日志
-        console.log('[ConversationService] 收到 tool_use 事件:', {
-          toolName: event.toolName,
-          toolCallId: event.toolCallId,
-          toolInput: event.toolInput
-        })
         if (event.toolName) {
           // 如果 toolCallId 为空，生成一个唯一的备用 ID
           const toolCallId = event.toolCallId || `tool-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
@@ -589,20 +730,17 @@ export class ConversationService {
             arguments: event.toolInput || {},
             status: 'running'
           }
-          console.log('[ConversationService] 创建工具调用:', toolCall)
           onToolUse(toolCall)
         } else {
           console.warn('[ConversationService] tool_use 事件缺少 toolName，跳过处理')
         }
         break
 
+      case 'tool_input_delta':
+        onToolInputDelta(event.toolCallId, event.toolInput)
+        break
+
       case 'tool_result':
-        // 处理工具结果 - 添加详细日志
-        console.log('[ConversationService] 收到 tool_result 事件:', {
-          toolCallId: event.toolCallId,
-          toolResultType: typeof event.toolResult,
-          toolResultLength: typeof event.toolResult === 'string' ? event.toolResult.length : 'N/A'
-        })
         if (event.toolCallId) {
           const result = typeof event.toolResult === 'string'
             ? event.toolResult
