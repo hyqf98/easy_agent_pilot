@@ -14,7 +14,7 @@
 发布自动更新前，确认以下事项已经完成：
 
 - 已在 GitHub 仓库中配置 `TAURI_SIGNING_PRIVATE_KEY`
-- 当前这把 updater 私钥无密码，不需要配置 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+- 当前这把 updater 私钥是加密私钥，需要同时配置 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
 - 本地已安全备份同一把私钥
 - 该私钥不要提交到 Git
 - 粘贴到 GitHub Secret 的值必须是私钥文件全文，不要带路径、引号或额外空格
@@ -149,7 +149,7 @@ GitHub Actions 会基于 tag 运行 [`../.github/workflows/release.yml`](../.git
 
 - `TAURI_SIGNING_PRIVATE_KEY` 是否仍存在
 - 私钥内容是否完整，多行内容是否被截断
-- 是否误配置了 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 是否存在且与这把私钥匹配
 - 私钥内容末尾的 base64 padding `=` / `==` 是否在复制时丢失
 
 ## 密钥管理建议

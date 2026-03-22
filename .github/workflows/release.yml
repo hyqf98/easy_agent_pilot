@@ -119,6 +119,14 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_ENV"
 
+          if [ -n "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" ]; then
+            {
+              echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD<<EOF"
+              echo '${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}'
+              echo "EOF"
+            } >> "$GITHUB_ENV"
+          fi
+
       - uses: tauri-apps/tauri-action@v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
