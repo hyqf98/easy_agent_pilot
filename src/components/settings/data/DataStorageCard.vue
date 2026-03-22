@@ -211,7 +211,9 @@ const countItems = computed(() => {
         <section class="storage-section">
           <div class="storage-section__header">
             <div>
-              <div class="storage-section__title">{{ t('settings.data.sizeBreakdownTitle') }}</div>
+              <div class="storage-section__title">
+                {{ t('settings.data.sizeBreakdownTitle') }}
+              </div>
               <div class="storage-section__subtitle">
                 {{ t('settings.data.sizeBreakdownSubtitle', { size: formatReadableSize(trackedSizeBytes) }) }}
               </div>
@@ -257,8 +259,12 @@ const countItems = computed(() => {
         <section class="storage-section">
           <div class="storage-section__header">
             <div>
-              <div class="storage-section__title">{{ t('settings.data.recordOverviewTitle') }}</div>
-              <div class="storage-section__subtitle">{{ t('settings.data.recordOverviewSubtitle') }}</div>
+              <div class="storage-section__title">
+                {{ t('settings.data.recordOverviewTitle') }}
+              </div>
+              <div class="storage-section__subtitle">
+                {{ t('settings.data.recordOverviewSubtitle') }}
+              </div>
             </div>
             <EaIcon
               name="bar-chart-3"
