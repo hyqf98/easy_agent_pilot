@@ -26,7 +26,7 @@ use crate::commands::conversation::types::{CliStreamEvent, ExecutionRequest, Mes
 /// Codex CLI 策略
 pub struct CodexCliStrategy;
 
-// 箢�单的日志�?
+// 简单的日志宏
 macro_rules! log_info {
     ($($arg:tt)*) => {
         {
@@ -49,7 +49,7 @@ macro_rules! log_error {
 
 macro_rules! log_debug {
     ($($arg:tt)*) => {
-        // DEBUG 日志已禁用，如需调试请取消注�?
+        // DEBUG 日志已禁用，如需调试请取消注释
         // println!("[DEBUG][codex-cli] {}", format!($($arg)*))
     };
 }
@@ -57,8 +57,9 @@ macro_rules! log_debug {
 fn is_benign_stderr_warning(line: &str) -> bool {
     let normalized = line.to_lowercase();
 
-    // Codex CLI 偶发会在 stderr 输出丢��?rmcp transport warning�?
+    // Codex CLI 偶发会在 stderr 输出一条 rmcp transport warning：
     // "worker quit with fatal: Transport channel closed, when UnexpectedContentType(...)"
+    // 目前该告警不会阻塞任务拆分结果落地，不应污染 UI 错误态或计划拆分日志。
     normalized.contains("rmcp::transport::worker")
         && normalized.contains("unexpectedcontenttype")
         && normalized.contains("missing-content-type")
@@ -197,8 +198,9 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         let session_id = request.session_id.clone();
         let event_name = self.kind().event_name(&session_id);
 
-        log_info!("弢�始执�?Codex CLI, session_id: {}", session_id);
+        log_info!("开始执行 Codex CLI, session_id: {}", session_id);
 
+        // 重置中断标志
         set_abort_flag(&session_id, false).await;
 
         let cli_path = request
@@ -233,6 +235,7 @@ impl AgentExecutionStrategy for CodexCliStrategy {
                 || cli_output_format == "stream-json"
                 || schema_text.is_some());
 
+        // 构建命令参数
         let mut global_args = Vec::<String>::new();
         let mut args = Vec::<String>::new();
         if use_exec_mode {
@@ -241,12 +244,14 @@ impl AgentExecutionStrategy for CodexCliStrategy {
                 args.push("--json".to_string());
             }
         } else {
-            // 兼容旧实�?
+            // 兼容旧实现
             args.push("ask".to_string());
         }
 
+        // 添加跳过权限循环参数
         args.push("--dangerously-bypass-approvals-and-sandbox".to_string());
 
+        // 添加模型参数
         if let Some(model_id) = &model_id {
             let trimmed = model_id.trim();
             if !trimmed.is_empty() && trimmed != "default" {
@@ -255,14 +260,17 @@ impl AgentExecutionStrategy for CodexCliStrategy {
             }
         }
 
+        // `codex exec` 不接受 `--search`，该参数只能挂在顶层 `codex` 命令上。
+        // 因此需要在子命令之前注入，避免被解析成 exec 的未知参数。
         if enable_web_search {
             global_args.push("--search".to_string());
         }
 
+        // Codex CLI 0.115.x 不支持 `--mcp-config`，MCP 需要依赖其原生配置文件。
         if let Some(servers) = &mcp_servers {
             if !servers.is_empty() {
                 log_info!(
-                    "棢�测到 {} �?MCP 配置；当�?Codex CLI 版本不注�?--mcp-config，改为依赖本�?Codex 配置文件",
+                    "检测到 {} 个 MCP 配置；当前 Codex CLI 版本不注入 --mcp-config，改为依赖本地 Codex 配置文件",
                     servers.len()
                 );
             }
@@ -279,11 +287,11 @@ impl AgentExecutionStrategy for CodexCliStrategy {
             }
         }
 
-        // 添加自定义参�?
+        // 添加自定义参数
         if let Some(custom_args) = &extra_cli_args {
             if !custom_args.is_empty() {
                 args.extend(custom_args.iter().cloned());
-                log_info!("追加自定�?CLI 参数: {:?}", custom_args);
+                log_info!("追加自定义 CLI 参数: {:?}", custom_args);
             }
         }
 
@@ -309,10 +317,12 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         let full_command = build_full_codex_command(&cli_path, &global_args, &args);
         log_info!("Codex CLI command: {}", full_command);
 
+        // 执行命令
         let mut command_args = global_args.clone();
         command_args.extend(args.clone());
         let mut cmd = build_tokio_cli_command(&cli_path, &command_args);
 
+        // 设置工作目录
         if let Some(working_dir) = &working_directory {
             let trimmed_dir = working_dir.trim();
             if !trimmed_dir.is_empty() {
@@ -361,7 +371,7 @@ impl AgentExecutionStrategy for CodexCliStrategy {
             register_session_pid(&session_id, pid).await;
         }
 
-        // 获取输出�?
+        // 获取输出流
         let stdout = child
             .stdout
             .take()
@@ -377,6 +387,7 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         let plan_id_clone = plan_id.clone();
         let stdout_monitor = monitor.clone();
 
+        // 处理标准输出
         let stdout_handle = tokio::spawn(async move {
             if is_stream_json {
                 let reader = tokio::io::BufReader::new(stdout);
@@ -414,7 +425,7 @@ impl AgentExecutionStrategy for CodexCliStrategy {
                         }
                         Err(error) => {
                             let preview = preview_text(trimmed, 120);
-                            log_error!("[stdout] �?JSON 行已忽略: {} | {}", error, preview);
+                            log_error!("[stdout] 非 JSON 行已忽略: {} | {}", error, preview);
                         }
                     }
                 }
@@ -422,6 +433,7 @@ impl AgentExecutionStrategy for CodexCliStrategy {
                 return outcome;
             }
 
+            // 非流式 JSON 输出处理
             let mut reader = tokio::io::BufReader::new(stdout);
             let mut full_output = String::new();
             if let Err(error) = reader.read_to_string(&mut full_output).await {
@@ -444,10 +456,10 @@ impl AgentExecutionStrategy for CodexCliStrategy {
                 return StdoutReadOutcome::none();
             }
 
-            // 尝试解析�?JSON blob
+            // 尝试解析为 JSON blob
             if let Some(event) = parse_codex_json_blob_output(&session_id_clone, normalized) {
                 log_info!(
-                    "[stdout] 发��事�? {}, event_type: {}",
+                    "[stdout] 发送事件: {}, event_type: {}",
                     event_name_clone,
                     event.event_type
                 );
@@ -465,8 +477,8 @@ impl AgentExecutionStrategy for CodexCliStrategy {
                 };
             }
 
-            // 无法解析�?JSON，直接发送原始内�?
-            log_info!("[stdout] 无法解析为结构化输出，直接发送原始内�?);
+            // 无法解析为 JSON，直接发送原始内容
+            log_info!("[stdout] 无法解析为结构化输出，直接发送原始内容");
             let event = build_content_event(&session_id_clone, normalized.to_string());
             stdout_monitor.note_activity(true);
             emit_cli_event(
@@ -488,6 +500,7 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         let plan_id_clone = plan_id.clone();
         let stderr_monitor = monitor.clone();
 
+        // 处理标准错误
         let stderr_handle = tokio::spawn(async move {
             let reader = tokio::io::BufReader::new(stderr);
             let mut lines = reader.lines();
@@ -512,6 +525,7 @@ impl AgentExecutionStrategy for CodexCliStrategy {
                     break;
                 }
 
+                // 检查是否是真正的错误消息
                 let line_lower = trimmed.to_lowercase();
                 let is_error = line_lower.contains("error")
                     || line_lower.contains("failed")
@@ -556,7 +570,7 @@ impl AgentExecutionStrategy for CodexCliStrategy {
                 timeout_error_message = Some(error_message);
 
                 if let Err(error) = child.kill().await {
-                    log_error!("终止超时�?Codex CLI 进程失败: {}", error);
+                    log_error!("终止超时的 Codex CLI 进程失败: {}", error);
                 }
 
                 let exit_status = child.wait().await?;
@@ -568,11 +582,12 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         };
         let elapsed = execution_started_at.elapsed();
         log_info!(
-            "CLI 执行完成，���出码: {:?}, 耗时: {:.2}s",
+            "CLI 执行完成，退出码: {:?}, 耗时: {:.2}s",
             status.code(),
             elapsed.as_secs_f64()
         );
 
+        // 等待输出处理完成
         let stdout_outcome = match stdout_handle.await {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -597,11 +612,9 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         let summary = build_execution_summary(&monitor.snapshot(), finished_at);
         log_info!("CLI 执行摘要: {}", summary);
 
-        let was_aborted = should_abort(&session_id).await;
-
         let should_treat_failure_as_success =
             should_treat_process_failure_as_success(&stdout_outcome, &stderr_outcome);
-        let execution_succeeded = status.success() || should_treat_failure_as_success || was_aborted;
+        let execution_succeeded = status.success() || should_treat_failure_as_success;
 
         if timeout_error_message.is_none() && execution_succeeded {
             let done_event = CliStreamEvent {
@@ -623,6 +636,7 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         // 注销进程 PID
         unregister_session_pid(&session_id).await;
 
+        // 清理中断标志
         clear_abort_flag(&session_id).await;
 
         drop(schema_file);
@@ -632,24 +646,16 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         }
 
         if !status.success() {
-            if was_aborted {
-                log_info!(
-                    "CLI 进程已按用户请求中止，忽略非零���出码：exit_code={:?}, {}",
-                    status.code(),
-                    summary
-                );
-                return Ok(());
-            }
             if should_treat_failure_as_success {
                 log_info!(
-                    "忽略 CLI 非零/空���出码：已收到有效输出，exit_code={:?}, {}",
+                    "忽略 CLI 非零/空退出码：已收到有效输出，exit_code={:?}, {}",
                     status.code(),
                     summary
                 );
                 return Ok(());
             }
             return Err(anyhow::anyhow!(
-                "Codex CLI 执行失败，���出码: {:?}, {}",
+                "Codex CLI 执行失败，退出码: {:?}, {}",
                 status.code(),
                 summary
             ));
@@ -908,6 +914,7 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                     Some(build_content_event(session_id, text.to_string()))
                 }
                 "thinking_delta" => {
+                    // 处理思考增量
                     let thinking = delta.get("thinking").and_then(|t| t.as_str())?;
                     Some(build_thinking_event(session_id, thinking.to_string()))
                 }
@@ -965,19 +972,20 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                     })
                 }
                 "thinking" => {
-                    // thinking 内容块开�?
+                    // thinking 内容块开始
                     Some(build_thinking_start_event(session_id))
                 }
                 _ => None,
             }
         }
         "content_block_stop" => {
+            // 内容块结束，暂时不处理
             None
         }
         "message_start" => {
             let message = json.get("message")?;
 
-            // 提取 token 使用�?
+            // 提取 token 使用量
             let usage = message.get("usage");
             let input_tokens = usage
                 .and_then(|u| u.get("input_tokens"))
@@ -1088,6 +1096,7 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
             })
         }
 
+        // === 错误处理 ===
         "error" => {
             let error_msg = json
                 .get("error")
@@ -1103,6 +1112,7 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
             let message = json.get("message")?;
             let content_array = message.get("content").and_then(|c| c.as_array())?;
 
+            // 遍历所有 content items，找到第一个有效的并返回
             // 优先级：thinking > text > tool_use
             for content_item in content_array {
                 let item_type = content_item
@@ -1112,10 +1122,11 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
 
                 match item_type {
                     "thinking" => {
+                        // 处理 thinking 类型
                         if let Some(thinking_text) =
                             content_item.get("thinking").and_then(|t| t.as_str())
                         {
-                            log_debug!("[parse] 找到 thinking 内容，长�? {}", thinking_text.len());
+                            log_debug!("[parse] 找到 thinking 内容，长度: {}", thinking_text.len());
                             return Some(CliStreamEvent {
                                 event_type: "thinking".to_string(),
                                 session_id: session_id.to_string(),
@@ -1157,12 +1168,14 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                         });
                     }
                     _ => {
-                        log_debug!("[parse] assistant 消息中未处理的内容类�? {}", item_type);
+                        log_debug!("[parse] assistant 消息中未处理的内容类型: {}", item_type);
+                        // 继续检查下一个 item
                         continue;
                     }
                 }
             }
 
+            // 如果没有找到有效的内容，返回 None
             log_debug!("[parse] assistant 消息中没有找到有效的内容");
             None
         }
@@ -1202,7 +1215,7 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                         })
                     }
                     _ => {
-                        log_debug!("[parse] user 消息中未处理的内容类�? {}", item_type);
+                        log_debug!("[parse] user 消息中未处理的内容类型: {}", item_type);
                         None
                     }
                 }
@@ -1216,7 +1229,7 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
             .or_else(|| extract_text_value(json.get("result")))
             .map(|content| build_content_event(session_id, content)),
 
-        // === 默认回��� ===
+        // === 默认回退 ===
         _ => {
             if let Some(content) = extract_runtime_system_notice(json) {
                 return Some(build_system_event(session_id, content));
@@ -1313,10 +1326,10 @@ fn extract_text_value(value: Option<&serde_json::Value>) -> Option<String> {
     None
 }
 
-/// 解析非流�?JSON blob 输出
+/// 解析非流式 JSON blob 输出
 fn parse_codex_json_blob_output(session_id: &str, output: &str) -> Option<CliStreamEvent> {
     log_info!(
-        "[parse] 弢�始解�?JSON blob, 长度: {}",
+        "[parse] 开始解析 JSON blob, 长度: {}",
         output.chars().count()
     );
 
@@ -1336,24 +1349,25 @@ fn parse_codex_json_blob_output(session_id: &str, output: &str) -> Option<CliStr
         return Some(build_system_event(session_id, content));
     }
 
-    // 尝试提取结构化输�?
+    // 尝试提取结构化输出
     if let Some(content) = extract_structured_output_from_json_blob(&parsed) {
         log_info!(
-            "[parse] 提取�?structured_output, 长度: {}",
+            "[parse] 提取到 structured_output, 长度: {}",
             content.chars().count()
         );
         return Some(build_content_event(session_id, content));
     }
 
+    // 尝试提取错误
     if let Some(error) = extract_error_from_json_blob(&parsed) {
-        log_info!("[parse] 提取�?error: {}", error);
+        log_info!("[parse] 提取到 error: {}", error);
         return Some(build_error_event(session_id, error));
     }
 
     // 尝试提取结果内容
     if let Some(content) = extract_result_content_from_json_blob(&parsed) {
         log_info!(
-            "[parse] 提取�?result.content, 长度: {}",
+            "[parse] 提取到 result.content, 长度: {}",
             content.chars().count()
         );
         return Some(build_content_event(session_id, content));

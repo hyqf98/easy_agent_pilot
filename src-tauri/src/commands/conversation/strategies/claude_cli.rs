@@ -29,7 +29,7 @@ use crate::commands::mcp_shared::parse_args_string;
 /// Claude CLI 策略
 pub struct ClaudeCliStrategy;
 
-// 箢�单的日志�?
+// 简单的日志宏
 macro_rules! log_info {
     ($($arg:tt)*) => {
         {
@@ -52,7 +52,7 @@ macro_rules! log_error {
 
 macro_rules! log_debug {
     ($($arg:tt)*) => {
-        // DEBUG 日志已禁用，如需调试请取消注�?
+        // DEBUG 日志已禁用，如需调试请取消注释
         // println!("[DEBUG][claude-cli] {}", format!($($arg)*))
     };
 }
@@ -307,8 +307,10 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
         let session_id = request.session_id.clone();
         let event_name = self.kind().event_name(&session_id);
 
+        // 重置中断标志
         set_abort_flag(&session_id, false).await;
 
+        // 转换请求格式
         let cli_path = request
             .cli_path
             .clone()
@@ -316,7 +318,8 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
         let model_id = request.model_id.clone();
         let working_directory = request.working_directory.clone();
 
-        log_info!("收到的消息数�? {}", request.messages.len());
+        // 调试日志：检查收到的消息
+        log_info!("收到的消息数量: {}", request.messages.len());
         for (i, msg) in request.messages.iter().enumerate() {
             log_info!(
                 "消息[{}]: role={}, content_len={}",
@@ -341,13 +344,16 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
             .filter(|schema| !schema.is_empty());
         let plan_id = request.plan_id.clone();
 
+        // 构建命令参数（prompt 通过 `-p <prompt>` 单独传递）
         let mut args = vec!["--output-format".to_string(), cli_output_format.clone()];
         args.push("--dangerously-skip-permissions".to_string());
 
+        // 非流式 JSON 输出时禁用 verbose，避免 stdout 里出现大段事件数组影响结构化提取
         if cli_output_format == "stream-json" {
             args.insert(0, "--verbose".to_string());
         }
 
+        // 添加模型参数
         if let Some(model_id) = &model_id {
             let trimmed = model_id.trim();
             if !trimmed.is_empty() && trimmed != "default" {
@@ -356,7 +362,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
             }
         }
 
-        // 添加允许的工�?
+        // 添加允许的工具
         if let Some(tools) = &allowed_tools {
             if !tools.is_empty() {
                 args.push("--allowedTools".to_string());
@@ -387,6 +393,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
             }
         }
 
+        // 解析工作目录，用于设置命令的工作目录
         let resolved_working_dir: Option<String> = working_directory
             .as_ref()
             .map(|w| w.trim().to_string())
@@ -401,10 +408,12 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
 
         let full_command = build_full_claude_command(&cli_path, &input_text, &args);
         log_info!("Claude CLI command: {}", full_command);
+        // 执行命令
         let mut command_args = vec!["-p".to_string(), input_text.clone()];
         command_args.extend(args.clone());
         let mut cmd = build_tokio_cli_command(&cli_path, &command_args);
 
+        // 设置工作目录，确保文件读写操作在指定目录下进行
         if let Some(ref work_dir) = resolved_working_dir {
             cmd.current_dir(work_dir);
             log_info!("设置工作目录: {}", work_dir);
@@ -441,6 +450,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
         let plan_id_clone = plan_id.clone();
         let stdout_monitor = monitor.clone();
 
+        // 处理标准输出
         let stdout_handle = tokio::spawn(async move {
             if is_stream_json {
                 let reader = tokio::io::BufReader::new(stdout);
@@ -448,7 +458,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                 let mut outcome = StdoutReadOutcome::none();
 
                 while let Ok(Some(line)) = lines.next_line().await {
-                    log_info!("[stdout] 原始�? {}", line);
+                    log_info!("[stdout] 原始行: {}", line);
 
                     if should_abort(&session_id_clone).await {
                         break;
@@ -470,7 +480,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                                 stdout_monitor
                                     .note_activity(is_meaningful_event_type(&event.event_type));
                                 log_info!(
-                                    "[stdout] 发��事�? type={}, content_len={:?}",
+                                    "[stdout] 发送事件: type={}, content_len={:?}",
                                     event.event_type,
                                     event.content.as_ref().map(|c| c.len())
                                 );
@@ -517,7 +527,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
 
             if let Some(event) = parse_claude_json_blob_output(&session_id_clone, normalized) {
                 log_info!(
-                    "[stdout] 发��事�? {}, event_type: {}",
+                    "[stdout] 发送事件: {}, event_type: {}",
                     event_name_clone,
                     event.event_type
                 );
@@ -532,7 +542,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                     plan_id_clone.as_ref(),
                     &event,
                 );
-                log_info!("[stdout] 事件发��成�?);
+                log_info!("[stdout] 事件发送成功");
                 return StdoutReadOutcome {
                     emitted_content: event.event_type == "content",
                     emitted_error: event.event_type == "error",
@@ -540,10 +550,10 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                 };
             }
 
-            log_info!("[stdout] 无法解析为结构化输出，直接发送原始内�?);
+            log_info!("[stdout] 无法解析为结构化输出，直接发送原始内容");
             let event = build_content_event(&session_id_clone, normalized.to_string());
             log_info!(
-                "[stdout] 发��原始内容事�? {}, event_type: {}",
+                "[stdout] 发送原始内容事件: {}, event_type: {}",
                 event_name_clone,
                 event.event_type
             );
@@ -567,6 +577,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
         let plan_id_clone = plan_id.clone();
         let stderr_monitor = monitor.clone();
 
+        // 处理标准错误
         let stderr_handle = tokio::spawn(async move {
             let mut reader = tokio::io::BufReader::new(stderr);
             let mut error_output = String::new();
@@ -580,6 +591,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
 
             log_error!("[stderr] {}", error_output);
 
+            // 检查是否是真正的错误消息
             let error_lines: Vec<&str> = error_output
                 .lines()
                 .filter(|line| {
@@ -640,7 +652,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                 timeout_error_message = Some(error_message);
 
                 if let Err(error) = child.kill().await {
-                    log_error!("终止超时�?Claude CLI 进程失败: {}", error);
+                    log_error!("终止超时的 Claude CLI 进程失败: {}", error);
                 }
 
                 let exit_status = child.wait().await?;
@@ -652,11 +664,12 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
         };
         let elapsed = execution_started_at.elapsed();
         log_info!(
-            "CLI 执行完成，���出码: {:?}, 耗时: {:.2}s",
+            "CLI 执行完成，退出码: {:?}, 耗时: {:.2}s",
             status.code(),
             elapsed.as_secs_f64()
         );
 
+        // 等待输出处理完成
         let stdout_outcome = stdout_handle.await?;
         let stderr_outcome = match stderr_handle.await {
             Ok(outcome) => outcome,
@@ -670,14 +683,12 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
         let summary = build_execution_summary(&monitor.snapshot(), finished_at);
         log_info!("CLI 执行摘要: {}", summary);
 
-        let was_aborted = should_abort(&session_id).await;
-
         // 注销进程 PID
         unregister_session_pid(&session_id).await;
 
         let should_treat_failure_as_success =
             should_treat_process_failure_as_success(&stdout_outcome, &stderr_outcome);
-        let execution_succeeded = status.success() || should_treat_failure_as_success || was_aborted;
+        let execution_succeeded = status.success() || should_treat_failure_as_success;
 
         if timeout_error_message.is_none() && execution_succeeded {
             let done_event = CliStreamEvent {
@@ -696,6 +707,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
             emit_cli_event(&app, &event_name, plan_id.as_ref(), &done_event);
         }
 
+        // 清理中断标志
         clear_abort_flag(&session_id).await;
         drop(mcp_config_file);
 
@@ -704,24 +716,16 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
         }
 
         if !status.success() {
-            if was_aborted {
-                log_info!(
-                    "CLI 进程已按用户请求中止，忽略非零���出码：exit_code={:?}, {}",
-                    status.code(),
-                    summary
-                );
-                return Ok(());
-            }
             if should_treat_failure_as_success {
                 log_info!(
-                    "忽略 CLI 非零/空���出码：已收到有效输出，exit_code={:?}, {}",
+                    "忽略 CLI 非零/空退出码：已收到有效输出，exit_code={:?}, {}",
                     status.code(),
                     summary
                 );
                 return Ok(());
             }
             return Err(anyhow::anyhow!(
-                "CLI 执行失败，���出码: {:?}, {}",
+                "CLI 执行失败，退出码: {:?}, {}",
                 status.code(),
                 summary
             ));
@@ -740,10 +744,10 @@ fn build_full_claude_command(cli_path: &str, input_text: &str, args: &[String]) 
     cmd_parts.join(" ")
 }
 
-/// 解析 `--output-format json` 的整块输�?
+/// 解析 `--output-format json` 的整块输出
 fn parse_claude_json_blob_output(session_id: &str, output: &str) -> Option<CliStreamEvent> {
     log_info!(
-        "[parse] 弢�始解�?JSON blob, 长度: {}",
+        "[parse] 开始解析 JSON blob, 长度: {}",
         output.chars().count()
     );
 
@@ -765,20 +769,20 @@ fn parse_claude_json_blob_output(session_id: &str, output: &str) -> Option<CliSt
 
     if let Some(content) = extract_structured_output_from_json_blob(&parsed) {
         log_info!(
-            "[parse] 提取�?structured_output, 长度: {}",
+            "[parse] 提取到 structured_output, 长度: {}",
             content.chars().count()
         );
         return Some(build_content_event(session_id, content));
     }
 
     if let Some(error) = extract_error_from_json_blob(&parsed) {
-        log_info!("[parse] 提取�?error: {}", error);
+        log_info!("[parse] 提取到 error: {}", error);
         return Some(build_error_event(session_id, error));
     }
 
     if let Some(content) = extract_result_content_from_json_blob(&parsed) {
         log_info!(
-            "[parse] 提取�?result.content, 长度: {}",
+            "[parse] 提取到 result.content, 长度: {}",
             content.chars().count()
         );
         return Some(build_content_event(session_id, content));
@@ -830,7 +834,7 @@ fn extract_result_model_name(json: &serde_json::Value) -> Option<String> {
         .and_then(|models| models.keys().next().cloned())
 }
 
-/// 解析 `--output-format stream-json` 的每�?JSON 输出
+/// 解析 `--output-format stream-json` 的每行 JSON 输出
 fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Option<CliStreamEvent> {
     let event_type = json
         .get("type")
@@ -911,12 +915,13 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
             }
         }
         "content_block_stop" => {
+            // 内容块结束，暂时不处理
             None
         }
         "message_start" => {
             let message = json.get("message")?;
 
-            // 提取 token 使用�?
+            // 提取 token 使用量
             let (input_tokens, output_tokens) = extract_usage_counts(message.get("usage"));
 
             // 提取模型信息
@@ -1080,6 +1085,7 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                 .and_then(|m| m.as_str())
                 .map(|m| m.to_string());
 
+            // 遍历所有 content items，找到第一个有效的并返回
             // 优先级：thinking > text > tool_use
             for content_item in content_array {
                 let item_type = content_item
@@ -1089,10 +1095,11 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
 
                 match item_type {
                     "thinking" => {
+                        // 处理 thinking 类型
                         if let Some(thinking_text) =
                             content_item.get("thinking").and_then(|t| t.as_str())
                         {
-                            log_debug!("[parse] 找到 thinking 内容，长�? {}", thinking_text.len());
+                            log_debug!("[parse] 找到 thinking 内容，长度: {}", thinking_text.len());
                             return Some(CliStreamEvent {
                                 input_tokens,
                                 output_tokens,
@@ -1139,12 +1146,14 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                         });
                     }
                     _ => {
-                        log_debug!("[parse] assistant 消息中未处理的内容类�? {}", item_type);
+                        log_debug!("[parse] assistant 消息中未处理的内容类型: {}", item_type);
+                        // 继续检查下一个 item
                         continue;
                     }
                 }
             }
 
+            // 如果没有找到有效的内容，返回 None
             log_debug!("[parse] assistant 消息中没有找到有效的内容");
             None
         }
@@ -1184,7 +1193,7 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                         })
                     }
                     _ => {
-                        log_debug!("[parse] user 消息中未处理的内容类�? {}", item_type);
+                        log_debug!("[parse] user 消息中未处理的内容类型: {}", item_type);
                         None
                     }
                 }

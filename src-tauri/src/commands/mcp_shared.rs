@@ -4,16 +4,8 @@ use std::fs;
 use std::path::Path;
 use tokio::process::Command as TokioCommand;
 
-#[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-#[cfg(target_os = "windows")]
-fn configure_windows_tokio_command(command: &mut TokioCommand) {
-    command.creation_flags(CREATE_NO_WINDOW);
-}
-
-/// �?Windows 上构建兼容的命令�?
-/// 对于 npx、npm �?Node.js 脚本命令，在 Windows 上需要使�?cmd.exe /C 来执行��?
+/// 在 Windows 上构建兼容的命令。
+/// 对于 npx、npm 等 Node.js 脚本命令，在 Windows 上需要使用 cmd.exe /C 来执行。
 pub fn build_platform_command(command: &str, args: &[String]) -> TokioCommand {
     #[cfg(target_os = "windows")]
     {
@@ -21,7 +13,6 @@ pub fn build_platform_command(command: &str, args: &[String]) -> TokioCommand {
 
         if script_commands.contains(&command) {
             let mut cmd = TokioCommand::new("cmd");
-            configure_windows_tokio_command(&mut cmd);
             cmd.arg("/C").arg(command);
             cmd.args(args);
             return cmd;
@@ -29,8 +20,6 @@ pub fn build_platform_command(command: &str, args: &[String]) -> TokioCommand {
     }
 
     let mut cmd = TokioCommand::new(command);
-    #[cfg(target_os = "windows")]
-    configure_windows_tokio_command(&mut cmd);
     cmd.args(args);
     cmd
 }
@@ -163,7 +152,7 @@ pub fn ensure_mcp_servers_object(settings: &mut Value) -> Result<&mut Map<String
 
     let root = settings
         .as_object_mut()
-        .ok_or_else(|| "配置根节点不是对�?.to_string())?;
+        .ok_or_else(|| "配置根节点不是对象".to_string())?;
 
     let needs_reset = !root
         .get("mcpServers")
@@ -185,11 +174,12 @@ pub fn write_json_config_pretty(path: &Path, value: &Value) -> Result<(), String
     }
 
     let content =
-        serde_json::to_string_pretty(value).map_err(|e| format!("序列化配置失�? {}", e))?;
+        serde_json::to_string_pretty(value).map_err(|e| format!("序列化配置失败: {}", e))?;
     fs::write(path, content).map_err(|e| format!("写入配置文件失败: {}", e))?;
     Ok(())
 }
 
+/// 格式化 MCP 工具调用结果，使其更易读。
 pub fn format_call_tool_result(call_result: &rmcp::model::CallToolResult) -> Value {
     use rmcp::model::RawContent;
 

@@ -102,35 +102,27 @@ impl CliTimeoutKind {
 
 #[derive(Debug, Clone, Copy)]
 pub struct CliTimeoutConfig {
-    pub startup: Option<Duration>,
-    pub idle: Option<Duration>,
-    pub hard: Option<Duration>,
+    pub startup: Duration,
+    pub idle: Duration,
+    pub hard: Duration,
 }
 
 impl Default for CliTimeoutConfig {
     fn default() -> Self {
         Self {
-            startup: Some(Duration::from_secs(60)),
-            idle: Some(Duration::from_secs(180)),
-            hard: Some(Duration::from_secs(900)),
+            startup: Duration::from_secs(60),
+            idle: Duration::from_secs(180),
+            hard: Duration::from_secs(900),
         }
     }
 }
 
 pub fn timeout_config_for_execution_mode(execution_mode: Option<&str>) -> CliTimeoutConfig {
-    if matches!(execution_mode, Some("task_execution")) {
-        return CliTimeoutConfig {
-            startup: Some(Duration::from_secs(120)),
-            idle: None,
-            hard: None,
-        };
-    }
-
     if matches!(execution_mode, Some("task_split")) {
         return CliTimeoutConfig {
-            startup: Some(Duration::from_secs(300)),
-            idle: Some(Duration::from_secs(900)),
-            hard: Some(Duration::from_secs(2700)),
+            startup: Duration::from_secs(180),
+            idle: Duration::from_secs(240),
+            hard: Duration::from_secs(900),
         };
     }
 
@@ -198,27 +190,19 @@ pub fn detect_cli_timeout(
     config: CliTimeoutConfig,
     now: Instant,
 ) -> Option<CliTimeoutKind> {
-    if config
-        .hard
-        .is_some_and(|hard| now.duration_since(snapshot.started_at) >= hard)
-    {
+    if now.duration_since(snapshot.started_at) >= config.hard {
         return Some(CliTimeoutKind::Hard);
     }
 
     if snapshot.first_meaningful_event_at.is_none()
-        && config
-            .startup
-            .is_some_and(|startup| now.duration_since(snapshot.started_at) >= startup)
+        && now.duration_since(snapshot.started_at) >= config.startup
     {
         return Some(CliTimeoutKind::Startup);
     }
 
     if snapshot.first_meaningful_event_at.is_some() {
         let last_activity_at = snapshot.last_activity_at.unwrap_or(snapshot.started_at);
-        if config
-            .idle
-            .is_some_and(|idle| now.duration_since(last_activity_at) >= idle)
-        {
+        if now.duration_since(last_activity_at) >= config.idle {
             return Some(CliTimeoutKind::Idle);
         }
     }
@@ -394,8 +378,7 @@ fn render_runtime_notice_markdown(value: &serde_json::Value) -> Option<String> {
     let mcp_names = extract_mcp_items(value.get("mcp_servers").or_else(|| value.get("mcpServers")));
     let agent_names = extract_named_items(value.get("agents"));
     let command_names = extract_named_items(
-        value
-            .get("slash_commands")
+        value.get("slash_commands")
             .or_else(|| value.get("slashCommands"))
             .or_else(|| value.get("commands")),
     );
@@ -415,7 +398,7 @@ fn render_runtime_notice_markdown(value: &serde_json::Value) -> Option<String> {
         return None;
     }
 
-    Some(format!("### 宸插姞杞借繍琛屾墿灞昞n{}", lines.join("\n")))
+    Some(format!("### 已加载运行扩展\n{}", lines.join("\n")))
 }
 
 fn extract_named_items(value: Option<&serde_json::Value>) -> Vec<String> {
@@ -547,9 +530,9 @@ fn format_notice_list(label: &str, items: &[String]) -> Option<String> {
     }
 
     let visible_count = items.len().min(5);
-    let visible_names = items[..visible_count].join("銆?);
+    let visible_names = items[..visible_count].join("、");
     let suffix = if items.len() > visible_count {
-        format!(" 绛?{} 涓?, items.len())
+        format!(" 等 {} 个", items.len())
     } else {
         format!(" ({})", items.len())
     };
@@ -759,9 +742,9 @@ mod tests {
         let timeout = detect_cli_timeout(
             &snapshot,
             CliTimeoutConfig {
-                startup: Some(Duration::from_secs(5)),
-                idle: Some(Duration::from_secs(30)),
-                hard: Some(Duration::from_secs(60)),
+                startup: Duration::from_secs(5),
+                idle: Duration::from_secs(30),
+                hard: Duration::from_secs(60),
             },
             started_at + Duration::from_secs(6),
         );
@@ -785,9 +768,9 @@ mod tests {
         let timeout = detect_cli_timeout(
             &snapshot,
             CliTimeoutConfig {
-                startup: Some(Duration::from_secs(5)),
-                idle: Some(Duration::from_secs(10)),
-                hard: Some(Duration::from_secs(60)),
+                startup: Duration::from_secs(5),
+                idle: Duration::from_secs(10),
+                hard: Duration::from_secs(60),
             },
             first_event_at + Duration::from_secs(11),
         );
@@ -830,7 +813,7 @@ mod tests {
 
         let notice = extract_runtime_system_notice(&payload).expect("runtime notice");
 
-        assert!(notice.contains("### 宸插姞杞借繍琛屾墿灞?));
+        assert!(notice.contains("### 已加载运行扩展"));
         assert!(notice.contains("Skills: frontend-design"));
         assert!(notice.contains("Plugins: context7"));
         assert!(notice.contains("MCP: ops-automation"));

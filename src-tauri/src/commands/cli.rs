@@ -2,14 +2,10 @@ use anyhow::Result;
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
 use uuid::Uuid;
 
-use crate::commands::cli_support::{
-    configure_windows_std_command, get_cli_version, normalize_cli_identifier,
-};
+use crate::commands::cli_support::{find_cli_executables, get_cli_version};
 
 /// CLI 工具信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,11 +24,15 @@ pub enum CliStatus {
     Error,
 }
 
+/// 检测结果
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DetectionResult {
     pub tools: Vec<CliTool>,
     pub total_found: usize,
 }
 
+/// CLI 路径配置（手动添加的）
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CliPathEntry {
     pub id: String,
     pub name: String,
@@ -42,199 +42,63 @@ pub struct CliPathEntry {
     pub updated_at: String,
 }
 
-/// 获取数据库连�?fn get_db_connection() -> Result<Connection, String> {
+/// 获取数据库连接
+fn get_db_connection() -> Result<Connection, String> {
     let persistence_dir = crate::commands::get_persistence_dir_path().map_err(|e| e.to_string())?;
     let db_path = persistence_dir.join("data").join("easy-agent.db");
     Connection::open(&db_path).map_err(|e| e.to_string())
 }
 
-fn canonicalize_existing_path(path: &Path) -> Option<PathBuf> {
-    if !path.exists() {
-        return None;
-    }
-
-    std::fs::canonicalize(path)
-        .ok()
-        .or_else(|| Some(path.to_path_buf()))
-}
-
-fn append_candidate_path(
-    path: PathBuf,
-    seen: &mut HashSet<PathBuf>,
-    candidates: &mut Vec<PathBuf>,
-) {
-    let Some(canonical_path) = canonicalize_existing_path(&path) else {
-        return;
-    };
-
-    if seen.insert(canonical_path.clone()) {
-        candidates.push(canonical_path);
-    }
-}
-
-fn shell_lookup_paths(cli_name: &str) -> Vec<PathBuf> {
-    let output = if cfg!(target_os = "windows") {
-        let mut command = Command::new("where.exe");
-        #[cfg(target_os = "windows")]
-        configure_windows_std_command(&mut command);
-        command.arg(cli_name).output()
-    } else {
-        Command::new("which").arg("-a").arg(cli_name).output()
-    };
-
-    let Ok(output) = output else {
-        return Vec::new();
-    };
-
-    if !output.status.success() {
-        return Vec::new();
-    }
-
-    output
-        .stdout
-        .split(|byte| *byte == b'\n' || *byte == b'\r')
-        .filter_map(|line| {
-            let text = String::from_utf8_lossy(line)
-                .trim()
-                .trim_matches('"')
-                .to_string();
-            if text.is_empty() {
-                None
-            } else {
-                canonicalize_existing_path(Path::new(&text))
-            }
-        })
-        .collect()
-}
-
-fn npm_global_prefix() -> Option<PathBuf> {
-    let mut command = Command::new("npm");
-    #[cfg(target_os = "windows")]
-    configure_windows_std_command(&mut command);
-    let output = command.args(["config", "get", "prefix"]).output().ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let prefix = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if prefix.is_empty() || prefix.eq_ignore_ascii_case("undefined") {
-        return None;
-    }
-
-    let path = PathBuf::from(prefix);
-    if path.exists() {
-        Some(path)
-    } else {
-        None
-    }
-}
-
-fn cli_file_names(cli_name: &str) -> Vec<String> {
-    #[cfg(target_os = "windows")]
-    {
-        return vec![
-            cli_name.to_string(),
-            format!("{cli_name}.cmd"),
-            format!("{cli_name}.exe"),
-            format!("{cli_name}.bat"),
-            format!("{cli_name}.com"),
-        ];
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        vec![cli_name.to_string()]
-    }
-}
-
-fn append_cli_paths_from_dir(
-    dir: &Path,
-    cli_name: &str,
-    seen: &mut HashSet<PathBuf>,
-    candidates: &mut Vec<PathBuf>,
-) {
-    if !dir.exists() || !dir.is_dir() {
-        return;
-    }
-
-    for file_name in cli_file_names(cli_name) {
-        append_candidate_path(dir.join(file_name), seen, candidates);
-    }
-}
-
-fn npm_fallback_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-
-    if let Some(prefix) = npm_global_prefix() {
-        #[cfg(target_os = "windows")]
-        {
-            dirs.push(prefix.clone());
-            dirs.push(prefix.join("node_modules").join(".bin"));
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            dirs.push(prefix.join("bin"));
-            dirs.push(prefix.join("lib").join("node_modules").join(".bin"));
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(app_data) = std::env::var("APPDATA") {
-            dirs.push(PathBuf::from(app_data).join("npm"));
-        }
-        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-            dirs.push(PathBuf::from(local_app_data).join("npm"));
-        }
-    }
+/// 获取不同操作系统的扫描路径
+fn get_scan_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let home = dirs::home_dir();
 
     #[cfg(target_os = "macos")]
     {
-        dirs.push(PathBuf::from("/usr/local/bin"));
-        dirs.push(PathBuf::from("/opt/homebrew/bin"));
+        paths.push(PathBuf::from("/usr/local/bin"));
+        paths.push(PathBuf::from("/opt/homebrew/bin"));
+        if let Some(h) = &home {
+            paths.push(h.join(".local/bin"));
+            paths.push(h.join("Applications"));
+        }
+        paths.push(PathBuf::from("/Applications"));
     }
 
     #[cfg(target_os = "linux")]
     {
-        dirs.push(PathBuf::from("/usr/local/bin"));
-        dirs.push(PathBuf::from("/usr/bin"));
-        dirs.push(PathBuf::from("/snap/bin"));
+        paths.push(PathBuf::from("/usr/local/bin"));
+        paths.push(PathBuf::from("/usr/bin"));
+        if let Some(h) = &home {
+            paths.push(h.join(".local/bin"));
+            paths.push(h.join(".npm-global/bin"));
+        }
+        paths.push(PathBuf::from("/snap/bin"));
     }
 
-    if let Some(home) = dirs::home_dir() {
-        dirs.push(home.join(".local").join("bin"));
-        dirs.push(home.join(".npm-global").join("bin"));
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(local_app_data) = std::env::var("LOCALAPPDATA").ok() {
+            paths.push(PathBuf::from(&local_app_data).join("npm"));
+            paths.push(PathBuf::from(&local_app_data).join("Programs"));
+        }
+        if let Some(app_data) = std::env::var("APPDATA").ok() {
+            paths.push(PathBuf::from(&app_data).join("npm"));
+        }
+        if let Some(h) = &home {
+            paths.push(h.join(".local/bin"));
+        }
     }
 
-    dirs
+    paths
 }
 
-fn collect_cli_candidates(cli_name: &str) -> Vec<PathBuf> {
-    let raw_path = Path::new(cli_name);
-    if raw_path.is_absolute() || raw_path.components().count() > 1 {
-        return canonicalize_existing_path(raw_path).into_iter().collect();
-    }
-
-    let mut seen = HashSet::new();
-    let mut candidates = Vec::new();
-
-    for path in shell_lookup_paths(cli_name) {
-        append_candidate_path(path, &mut seen, &mut candidates);
-    }
-
-    for dir in npm_fallback_dirs() {
-        append_cli_paths_from_dir(&dir, cli_name, &mut seen, &mut candidates);
-    }
-
-    candidates
-}
-
+/// 检测单个 CLI 工具
 fn detect_cli(cli_name: &str) -> CliTool {
+    let scan_paths = get_scan_paths();
     let mut first_invalid_match: Option<PathBuf> = None;
 
-    for cli_path in collect_cli_candidates(cli_name) {
+    for cli_path in find_cli_executables(cli_name, &scan_paths) {
         if let Some(version) = get_cli_version(&cli_path) {
             return CliTool {
                 name: cli_name.to_string(),
@@ -266,6 +130,7 @@ fn detect_cli(cli_name: &str) -> CliTool {
     }
 }
 
+/// 检测所有 CLI 工具 (Tauri 命令)
 #[tauri::command]
 pub fn detect_cli_tools() -> Result<DetectionResult, String> {
     let cli_names = vec!["claude", "codex"];
@@ -284,6 +149,7 @@ pub fn detect_cli_tools() -> Result<DetectionResult, String> {
     Ok(DetectionResult { tools, total_found })
 }
 
+/// 手动验证 CLI 路径 (Tauri 命令)
 #[tauri::command]
 pub fn verify_cli_path(path: String) -> Result<CliTool, String> {
     let cli_path = PathBuf::from(&path);
@@ -297,18 +163,18 @@ pub fn verify_cli_path(path: String) -> Result<CliTool, String> {
         });
     }
 
+    // 尝试获取版本号来验证可执行性
+    let version = get_cli_version(&cli_path);
     let status = if version.is_some() {
         CliStatus::Available
     } else {
         CliStatus::Error
     };
 
-    let name = normalize_cli_identifier(&path)
-        .or_else(|| {
-            cli_path
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-        })
+    // 从路径推断 CLI 名称
+    let name = cli_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
     Ok(CliTool {
@@ -319,7 +185,9 @@ pub fn verify_cli_path(path: String) -> Result<CliTool, String> {
     })
 }
 
+// ============== CLI 路径配置 CRUD ==============
 
+/// 获取所有 CLI 路径配置 (Tauri 命令)
 #[tauri::command]
 pub fn list_cli_paths() -> Result<Vec<CliPathEntry>, String> {
     let conn = get_db_connection()?;
@@ -348,10 +216,13 @@ pub fn list_cli_paths() -> Result<Vec<CliPathEntry>, String> {
     Ok(paths)
 }
 
+/// 添加 CLI 路径配置 (Tauri 命令)
 #[tauri::command]
 pub fn add_cli_path(name: String, path: String) -> Result<CliPathEntry, String> {
     let conn = get_db_connection()?;
 
+    // 验证路径并获取版本
+    let cli_path = PathBuf::from(&path);
     let version = get_cli_version(&cli_path);
 
     let now = Utc::now().to_rfc3339();
@@ -373,10 +244,13 @@ pub fn add_cli_path(name: String, path: String) -> Result<CliPathEntry, String> 
     })
 }
 
+/// 更新 CLI 路径配置 (Tauri 命令)
 #[tauri::command]
 pub fn update_cli_path(id: String, name: String, path: String) -> Result<CliPathEntry, String> {
     let conn = get_db_connection()?;
 
+    // 验证路径并获取版本
+    let cli_path = PathBuf::from(&path);
     let version = get_cli_version(&cli_path);
 
     let now = Utc::now().to_rfc3339();
@@ -392,10 +266,12 @@ pub fn update_cli_path(id: String, name: String, path: String) -> Result<CliPath
         name,
         path,
         version,
-        created_at: String::new(), // 不需要返回原始创建时�?        updated_at: now,
+        created_at: String::new(), // 不需要返回原始创建时间
+        updated_at: now,
     })
 }
 
+/// 删除 CLI 路径配置 (Tauri 命令)
 #[tauri::command]
 pub fn delete_cli_path(id: String) -> Result<(), String> {
     let conn = get_db_connection()?;
@@ -406,26 +282,32 @@ pub fn delete_cli_path(id: String) -> Result<(), String> {
     Ok(())
 }
 
+// ============== CLI 路径迁移到智能体配置 ==============
 
-/// 迁移状��键�?const MIGRATION_STATUS_KEY: &str = "cli_paths_migrated";
+/// 迁移状态键名
+const MIGRATION_STATUS_KEY: &str = "cli_paths_migrated";
 
 /// 迁移结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MigrationResult {
     /// 是否成功
     pub success: bool,
-    /// 迁移�?CLI 路径数量
+    /// 迁移的 CLI 路径数量
     pub migrated_count: usize,
     /// 跳过的数量（已存在相同路径的智能体）
     pub skipped_count: usize,
+    /// 迁移的智能体 ID 列表
     pub migrated_agent_ids: Vec<String>,
+    /// 错误消息
     pub error_message: Option<String>,
 }
 
+/// 检查是否需要迁移（是否存在旧的 CLI 路径配置且未迁移过）
 #[tauri::command]
 pub fn check_cli_paths_migration_needed() -> Result<bool, String> {
     let conn = get_db_connection()?;
 
+    // 检查是否已经迁移过
     let mut stmt = conn
         .prepare("SELECT value FROM app_settings WHERE key = ?1")
         .map_err(|e| e.to_string())?;
@@ -439,6 +321,7 @@ pub fn check_cli_paths_migration_needed() -> Result<bool, String> {
         return Ok(false);
     }
 
+    // 检查是否有 CLI 路径配置
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM cli_paths", [], |row| row.get(0))
         .map_err(|e| e.to_string())?;
@@ -458,10 +341,12 @@ pub fn get_pending_migration_count() -> Result<usize, String> {
     Ok(count as usize)
 }
 
+/// 执行 CLI 路径迁移到智能体配置
 #[tauri::command]
 pub fn migrate_cli_paths_to_agents() -> Result<MigrationResult, String> {
     let conn = get_db_connection()?;
 
+    // 检查是否已经迁移过
     let mut stmt = conn
         .prepare("SELECT value FROM app_settings WHERE key = ?1")
         .map_err(|e| e.to_string())?;
@@ -481,6 +366,7 @@ pub fn migrate_cli_paths_to_agents() -> Result<MigrationResult, String> {
         });
     }
 
+    // 获取所有 CLI 路径配置
     let mut stmt = conn
         .prepare("SELECT id, name, path, version, created_at, updated_at FROM cli_paths")
         .map_err(|e| e.to_string())?;
@@ -506,6 +392,7 @@ pub fn migrate_cli_paths_to_agents() -> Result<MigrationResult, String> {
     let now = Utc::now().to_rfc3339();
 
     for cli_path in cli_paths {
+        // 检查是否已存在相同路径的智能体
         let existing: Option<String> = conn
             .query_row(
                 "SELECT id FROM agents WHERE cli_path = ?1",
@@ -520,8 +407,11 @@ pub fn migrate_cli_paths_to_agents() -> Result<MigrationResult, String> {
             continue;
         }
 
+        // 从路径推断提供商
         let provider = infer_provider_from_path(&cli_path.path);
 
+        // 创建新的智能体配置
+        let agent_id = Uuid::new_v4().to_string();
         let agent_name = cli_path.name.clone();
 
         conn.execute(
@@ -535,6 +425,7 @@ pub fn migrate_cli_paths_to_agents() -> Result<MigrationResult, String> {
         migrated_agent_ids.push(agent_id);
     }
 
+    // 标记迁移完成
     conn.execute(
         "INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)",
         params![MIGRATION_STATUS_KEY, "true", &now],
@@ -550,6 +441,8 @@ pub fn migrate_cli_paths_to_agents() -> Result<MigrationResult, String> {
     })
 }
 
+/// 从 CLI 路径推断提供商
+fn infer_provider_from_path(path: &str) -> Option<String> {
     let path_lower = path.to_lowercase();
 
     if path_lower.contains("claude") {
@@ -557,7 +450,7 @@ pub fn migrate_cli_paths_to_agents() -> Result<MigrationResult, String> {
     } else if path_lower.contains("codex") {
         Some("codex".to_string())
     } else {
-        // 默认�?claude
+        // 默认为 claude
         Some("claude".to_string())
     }
 }
