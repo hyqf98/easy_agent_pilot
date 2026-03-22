@@ -79,6 +79,7 @@ jobs:
         shell: bash
         run: |
           secret='${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}'
+          secret="$(printf '%s' "$secret" | tr -d '\r\n\t ')"
 
           if [ -z "$secret" ]; then
             echo "::error::Missing repository secret TAURI_SIGNING_PRIVATE_KEY"
@@ -93,10 +94,34 @@ jobs:
             exit 1
           fi
 
+          SECRET_TO_VALIDATE="$secret" python - <<'PY'
+          import base64
+          import os
+          import sys
+
+          secret = os.environ["SECRET_TO_VALIDATE"]
+          try:
+              decoded = base64.b64decode(secret, validate=True).decode("utf-8", errors="strict")
+          except Exception as exc:
+              print(f"::error::TAURI_SIGNING_PRIVATE_KEY is not valid base64: {exc}")
+              print("::error::Re-copy the exact private key file content, including trailing '=' padding if present")
+              sys.exit(1)
+
+          if not decoded.startswith("untrusted comment:"):
+              print("::error::Decoded updater key does not start with the expected Tauri key header")
+              print("::error::Make sure you pasted the private key, not the public key")
+              sys.exit(1)
+          PY
+
+          {
+            echo "TAURI_SIGNING_PRIVATE_KEY<<EOF"
+            echo "$secret"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
       - uses: tauri-apps/tauri-action@v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'EasyAgentPilot ${{ github.ref_name }}'
