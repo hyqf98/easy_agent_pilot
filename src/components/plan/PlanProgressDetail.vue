@@ -108,8 +108,8 @@ function formatRelativeTime(date: string | null | undefined): string {
   const minutes = Math.floor(diff / 60000)
   const hours = Math.floor(diff / 3600000)
 
-  if (minutes < 1) return '刚刚'
   if (minutes < 60) return `${minutes} 分钟前`
+  if (hours < 24) return `${hours} 小时前`
   if (hours < 24) return `${hours} 小时前`
 
   return target.toLocaleString('zh-CN', {
@@ -227,7 +227,7 @@ onMounted(async () => {
           刷新
         </button>
         <button
-          class="btn-action btn-action--danger"
+          清除进度
           :disabled="isLoading || isClearing || summaryStats.total === 0"
           @click="handleClearLogs"
         >
@@ -340,8 +340,11 @@ onMounted(async () => {
                 </div>
               </div>
               <div class="task-row__meta">
-                <span>{{ task.agentLabel }}</span>
-                <span>{{ task.updatedAt }}</span>
+                <span
+                  class="task-row__agent"
+                  :title="task.agentLabel"
+                >{{ task.agentLabel }}</span>
+                <span class="task-row__time">{{ task.updatedAt }}</span>
               </div>
             </button>
           </div>
@@ -408,6 +411,8 @@ onMounted(async () => {
 
 <style scoped>
 .plan-progress-detail {
+  container-type: inline-size;
+  container-name: plan-progress-detail;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -421,10 +426,16 @@ onMounted(async () => {
 
 .detail-header {
   display: flex;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem;
   padding: 0.9rem 1rem;
   border-bottom: 1px solid color-mix(in srgb, var(--color-border, #e2e8f0) 72%, transparent);
+}
+
+.detail-header > div:first-child {
+  min-width: 0;
+  flex: 1;
 }
 
 .detail-title {
@@ -438,10 +449,13 @@ onMounted(async () => {
   margin: 0.2rem 0 0;
   font-size: 0.78rem;
   color: var(--color-text-secondary, #64748b);
+  word-break: break-word;
 }
 
 .header-actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 0.5rem;
 }
 
@@ -527,7 +541,9 @@ onMounted(async () => {
 .active-task-card__title {
   font-size: 0.9rem;
   font-weight: 700;
+  line-height: 1.45;
   color: var(--color-text-primary, #0f172a);
+  word-break: break-word;
 }
 
 .active-task-card__hint {
@@ -598,8 +614,8 @@ onMounted(async () => {
 
 .task-row {
   display: flex;
-  justify-content: space-between;
-  gap: 0.8rem;
+  flex-direction: column;
+  gap: 0.72rem;
   width: 100%;
   border: 1px solid color-mix(in srgb, var(--color-border, #e2e8f0) 66%, transparent);
   background: color-mix(in srgb, var(--color-surface, #fff) 94%, #ffffff);
@@ -621,17 +637,23 @@ onMounted(async () => {
 
 .task-row__title-line {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
 
 .task-row__title {
+  min-width: 0;
+  flex: 1 1 12rem;
   font-size: 0.84rem;
   font-weight: 700;
+  line-height: 1.5;
   color: var(--color-text-primary, #0f172a);
+  word-break: break-word;
 }
 
 .task-row__status {
+  flex-shrink: 0;
   padding: 0.16rem 0.5rem;
   border-radius: 999px;
   font-size: 0.68rem;
@@ -660,13 +682,26 @@ onMounted(async () => {
 }
 
 .task-row__meta {
-  min-width: 6.5rem;
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0.3rem;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 0.75rem;
+  min-width: 0;
   font-size: 0.72rem;
   color: var(--color-text-tertiary, #94a3b8);
+}
+
+.task-row__agent {
+  min-width: 0;
+  flex: 1 1 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-row__time {
+  flex-shrink: 0;
 }
 
 .failure-item,
@@ -782,18 +817,33 @@ onMounted(async () => {
   color: #bfdbfe;
 }
 
-@media (max-width: 960px) {
+@container plan-progress-detail (max-width: 430px) {
+  .detail-header {
+    flex-direction: column;
+  }
+
+  .header-actions {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .btn-action {
+    flex: 1 1 0;
+    text-align: center;
+  }
+
   .stats-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .task-row {
+  .task-row__meta {
     flex-direction: column;
+    align-items: flex-start;
   }
 
-  .task-row__meta {
-    align-items: flex-start;
-    min-width: 0;
+  .task-row__agent {
+    width: 100%;
+    flex-basis: auto;
   }
 }
 </style>

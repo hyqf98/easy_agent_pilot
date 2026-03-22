@@ -1,9 +1,16 @@
 import type { Task } from '@/types/plan'
-import type { PlanExecutionProgress, TaskExecutionResultRecord } from '@/types/taskExecution'
+import type {
+  ExecutionLogEntry,
+  PlanExecutionProgress,
+  TaskExecutionResultRecord,
+  TaskExecutionState
+} from '@/types/taskExecution'
 import { extractExecutionResult } from '@/utils/structuredContent'
 import { buildPlanExecutionSnapshot } from '@/utils/planExecutionProgress'
 
 const MAX_RESULT_SUMMARY_LENGTH = 180
+const MAX_RESUME_LOG_LINES = 80
+const MAX_RESUME_CONTEXT_LENGTH = 12000
 
 export function parseExecutionResult(content: string): { summary: string; files: string[] } {
   const trimmed = content.trim()
@@ -36,7 +43,8 @@ export function parseExecutionResult(content: string): { summary: string; files:
 export function buildExecutionPrompt(
   task: Task,
   recentResults: TaskExecutionResultRecord[] = [],
-  planProgress: PlanExecutionProgress | null = null
+  planProgress: PlanExecutionProgress | null = null,
+  resumeContext?: string
 ): string {
   const parts: string[] = []
 
@@ -52,6 +60,14 @@ export function buildExecutionPrompt(
   const planProgressContext = buildPlanProgressContext(planProgress, task.id)
   if (planProgressContext) {
     parts.push(planProgressContext)
+    parts.push('')
+  }
+
+  if (resumeContext) {
+    parts.push('## ???????')
+    parts.push(resumeContext)
+    parts.push('')
+    parts.push('????????????????????????????????????')
     parts.push('')
   }
 
@@ -100,21 +116,43 @@ export function buildExecutionPrompt(
 
   parts.push('---')
   parts.push('')
-  parts.push('请按照以上要求执行任务。')
+  parts.push('????????????')
   parts.push('')
-  parts.push('**如需用户输入**，输出 JSON：')
+  parts.push('**??????**??? JSON?')
   parts.push('```json')
   parts.push('{"type":"form_request","question":"问题描述","formSchema":{"formId":"id","title":"标题","fields":[{"name":"字段","label":"标签","type":"text"}]}}')
   parts.push('```')
   parts.push('')
-  parts.push('**任务完成时**，输出 JSON：')
+  parts.push('**?????**??? JSON?')
   parts.push('```json')
-  parts.push('{"result_summary":"1到3句简洁摘要，不重复日志","generated_files":[],"modified_files":[],"deleted_files":[]}')
+  parts.push('{"result_summary":"1?3???????????","generated_files":[],"modified_files":[],"deleted_files":[]}')
   parts.push('```')
   parts.push('')
-  parts.push('result_summary 会被写入计划整体进度，请只保留对后续任务有帮助的关键信息。')
+  parts.push('result_summary ?????????????????????????????')
 
   return parts.join('\n')
+}
+
+export function buildResumeExecutionContext(state: TaskExecutionState | undefined): string {
+  if (!state || state.logs.length === 0) {
+    return ''
+  }
+
+  const lines = state.logs
+    .slice(-MAX_RESUME_LOG_LINES)
+    .map(formatResumeLogLine)
+    .filter(Boolean)
+
+  const transcript = lines.join('\n').trim()
+  if (!transcript) {
+    return ''
+  }
+
+  if (transcript.length <= MAX_RESUME_CONTEXT_LENGTH) {
+    return transcript
+  }
+
+  return transcript.slice(transcript.length - MAX_RESUME_CONTEXT_LENGTH)
 }
 
 function buildRecentResultsContext(results: TaskExecutionResultRecord[]): string {
@@ -123,7 +161,7 @@ function buildRecentResultsContext(results: TaskExecutionResultRecord[]): string
   const lines: string[] = ['## 历史任务（参考）', '']
 
   results.forEach((result, index) => {
-    const status = result.result_status === 'success' ? '✓' : '✗'
+    const status = result.result_status === 'success' ? '?' : '?'
     lines.push(`${index + 1}. [${status}] ${result.task_title_snapshot}`)
     if (result.result_summary) {
       lines.push(`   摘要: ${fallbackSummary(result.result_summary)}`)
@@ -134,6 +172,37 @@ function buildRecentResultsContext(results: TaskExecutionResultRecord[]): string
   })
 
   return lines.join('\n')
+}
+
+function formatResumeLogLine(log: ExecutionLogEntry): string {
+  const content = log.content.trim()
+  if (!content) {
+    if (log.type === 'thinking_start') {
+      return '[thinking] ????'
+    }
+    return ''
+  }
+
+  const normalizedContent = content.replace(/\s+/g, ' ').trim()
+
+  switch (log.type) {
+    case 'content':
+      return `[assistant] ${normalizedContent}`
+    case 'thinking':
+    case 'thinking_start':
+      return `[thinking] ${normalizedContent}`
+    case 'tool_use':
+      return `[tool:${log.metadata?.toolName || 'unknown'}] ${normalizedContent}`
+    case 'tool_input_delta':
+      return `[tool-input] ${normalizedContent}`
+    case 'tool_result':
+      return `[tool-result] ${normalizedContent}`
+    case 'error':
+      return `[error] ${normalizedContent}`
+    case 'system':
+    default:
+      return `[system] ${normalizedContent}`
+  }
 }
 
 function fallbackSummary(content: string): string {
@@ -174,24 +243,24 @@ function buildPlanProgressContext(
   const failedCount = snapshot.failedTasks.length
 
   lines.push(
-    `- 任务总数: ${snapshot.totalTasks}，已完成 ${snapshot.completedTasks.length}，进行中 ${planProgress.in_progress_count}，阻塞 ${planProgress.blocked_count}，失败 ${failedCount}，待办 ${planProgress.pending_count}`
+    `- ????: ${snapshot.totalTasks}???? ${snapshot.completedTasks.length}???? ${planProgress.in_progress_count}??? ${planProgress.blocked_count}??? ${failedCount}??? ${planProgress.pending_count}`
   )
 
   if (snapshot.currentTaskIndex) {
-    lines.push(`- 当前任务位置: 第 ${snapshot.currentTaskIndex}/${snapshot.totalTasks} 个`)
+    lines.push(`- ??????: ? ${snapshot.currentTaskIndex}/${snapshot.totalTasks} ?`)
   }
 
   if (snapshot.completedTasks.length > 0) {
-    lines.push('', '### 已完成任务摘要')
+    lines.push('', '### ???????')
     snapshot.completedTasks.slice(-5).forEach((item) => {
-      lines.push(`- ${item.title}: ${compactExecutionSummary(item.last_result_summary || '已完成')}`)
+      lines.push(`- ${item.title}: ${compactExecutionSummary(item.last_result_summary || '???')}`)
     })
   }
 
   if (snapshot.failedTasks.length > 0) {
-    lines.push('', '### 已失败任务')
+    lines.push('', '### ?????')
     snapshot.failedTasks.slice(-3).forEach((item) => {
-      const reason = item.last_fail_reason || item.last_result_summary || '失败原因未记录'
+      const reason = item.last_fail_reason || item.last_result_summary || '???????'
       lines.push(`- ${item.title}: ${compactExecutionSummary(reason)}`)
     })
   }
@@ -220,8 +289,8 @@ function formatFileGroupLine(label: string, files: string[]): string | null {
 
   const visible = files.slice(0, 5)
   const overflow = files.length - visible.length
-  const suffix = overflow > 0 ? ` 等 ${files.length} 个文件` : ''
-  return `- ${label}: ${visible.join('、')}${suffix}`
+  const suffix = overflow > 0 ? ` ? ${files.length} ???` : ''
+  return `- ${label}: ${visible.join('?')}${suffix}`
 }
 
 function extractFileLinks(content: string): string[] {

@@ -10,6 +10,9 @@ export function resolveTaskExecutionStatus(task?: {
   }
 
   if (task?.status === 'in_progress') {
+    if (fallbackStatus === 'queued' || fallbackStatus === 'stopped' || fallbackStatus === 'waiting_input') {
+      return fallbackStatus
+    }
     return 'running'
   }
 
@@ -38,9 +41,9 @@ export function getTaskExecutionStatusMeta(status: ExecutionStatus): {
 } {
   switch (status) {
     case 'queued':
-      return { label: '排队中', color: 'warning' }
+      return { label: '???', color: 'warning' }
     case 'running':
-      return { label: '执行中', color: 'primary' }
+      return { label: '???', color: 'primary' }
     case 'waiting_input':
       return { label: '等待输入', color: 'warning' }
     case 'completed':
@@ -48,7 +51,7 @@ export function getTaskExecutionStatusMeta(status: ExecutionStatus): {
     case 'failed':
       return { label: '执行失败', color: 'error' }
     case 'stopped':
-      return { label: '已停止', color: 'gray' }
+      return { label: '???', color: 'gray' }
     default:
       return { label: '等待执行', color: 'gray' }
   }

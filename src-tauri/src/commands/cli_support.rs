@@ -10,14 +10,20 @@ const WINDOWS_EXEC_EXTENSIONS: &[&str] = &[".exe", ".cmd", ".bat", ".com"];
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[cfg(target_os = "windows")]
-fn configure_windows_std_command(command: &mut Command) {
+pub fn configure_windows_std_command(command: &mut Command) {
     command.creation_flags(CREATE_NO_WINDOW);
 }
 
+#[cfg(not(target_os = "windows"))]
+pub fn configure_windows_std_command(_command: &mut Command) {}
+
 #[cfg(target_os = "windows")]
-fn configure_windows_tokio_command(command: &mut TokioCommand) {
+pub fn configure_windows_tokio_command(command: &mut TokioCommand) {
     command.creation_flags(CREATE_NO_WINDOW);
 }
+
+#[cfg(not(target_os = "windows"))]
+pub fn configure_windows_tokio_command(_command: &mut TokioCommand) {}
 
 fn split_path_tail(value: &str) -> &str {
     value.rsplit(['/', '\\']).next().unwrap_or(value)
@@ -161,7 +167,9 @@ fn resolve_cli_candidate_paths(cli_name: &str, dir: &Path) -> Vec<PathBuf> {
 
 #[cfg(target_os = "windows")]
 fn find_cli_executables_via_shell(cli_name: &str) -> Vec<PathBuf> {
-    let output = Command::new("where.exe").arg(cli_name).output();
+    let mut command = Command::new("where.exe");
+    configure_windows_std_command(&mut command);
+    let output = command.arg(cli_name).output();
     parse_shell_lookup_output(output)
 }
 
@@ -232,20 +240,33 @@ pub fn find_cli_executable(cli_name: &str, extra_dirs: &[PathBuf]) -> Option<Pat
 
 #[cfg(target_os = "windows")]
 pub fn run_cli_command(cli_path: &Path, args: &[&str]) -> std::io::Result<Output> {
+    let resolved_cli_path = if !cli_path.is_absolute() && cli_path.components().count() == 1 {
+        find_cli_executable(cli_path.to_string_lossy().as_ref(), &[])
+            .unwrap_or_else(|| cli_path.to_path_buf())
+    } else {
+        cli_path.to_path_buf()
+    };
     let extension = cli_path
         .extension()
         .and_then(|ext| ext.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
+    let resolved_extension = resolved_cli_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
 
-    if extension == "cmd" || extension == "bat" {
+    if matches!(extension.as_str(), "cmd" | "bat")
+        || matches!(resolved_extension.as_str(), "cmd" | "bat")
+    {
         let mut command = Command::new("cmd");
         configure_windows_std_command(&mut command);
-        command.arg("/C").arg(cli_path);
+        command.arg("/C").arg(&resolved_cli_path);
         command.args(args);
         command.output()
     } else {
-        let mut command = Command::new(cli_path);
+        let mut command = Command::new(&resolved_cli_path);
         configure_windows_std_command(&mut command);
         command.args(args);
         command.output()
@@ -261,21 +282,36 @@ pub fn run_cli_command(cli_path: &Path, args: &[&str]) -> std::io::Result<Output
 
 #[cfg(target_os = "windows")]
 pub fn build_tokio_cli_command(cli_path: &str, args: &[String]) -> TokioCommand {
-    let extension = Path::new(cli_path)
+    let raw_path = Path::new(cli_path);
+    let resolved_cli_path = if !raw_path.is_absolute() && raw_path.components().count() == 1 {
+        find_cli_executable(cli_path, &[])
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_else(|| cli_path.to_string())
+    } else {
+        cli_path.to_string()
+    };
+    let extension = raw_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let resolved_extension = Path::new(&resolved_cli_path)
         .extension()
         .and_then(|ext| ext.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
 
-    if extension == "cmd" || extension == "bat" {
+    if matches!(extension.as_str(), "cmd" | "bat")
+        || matches!(resolved_extension.as_str(), "cmd" | "bat")
+    {
         let mut command = TokioCommand::new("cmd");
         configure_windows_tokio_command(&mut command);
-        command.arg("/C").arg(cli_path);
+        command.arg("/C").arg(&resolved_cli_path);
         command.args(args);
         return command;
     }
 
-    let mut command = TokioCommand::new(cli_path);
+    let mut command = TokioCommand::new(&resolved_cli_path);
     configure_windows_tokio_command(&mut command);
     command.args(args);
     command

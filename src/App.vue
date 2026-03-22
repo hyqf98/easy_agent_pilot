@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { onMounted, onUnmounted } from 'vue'
 import { NMessageProvider } from 'naive-ui'
 import { useThemeStore } from './stores/theme'
@@ -9,6 +9,9 @@ import { useSessionStore } from './stores/session'
 import { useProjectStore } from './stores/project'
 import { useWindowManagerStore } from './stores/windowManager'
 import { useAppStateStore } from './stores/appState'
+import { usePlanStore } from './stores/plan'
+import { useTaskStore } from './stores/task'
+import { useTaskExecutionStore } from './stores/taskExecution'
 import { useConfirmDialog, useWindowEvents } from './composables'
 import { useMiniPanelShortcut } from './composables/useMiniPanelShortcut'
 import { SettingsModal } from './components/settings'
@@ -22,25 +25,26 @@ const sessionStore = useSessionStore()
 const projectStore = useProjectStore()
 const windowManagerStore = useWindowManagerStore()
 const appStateStore = useAppStateStore()
+const planStore = usePlanStore()
+const taskStore = useTaskStore()
+const taskExecutionStore = useTaskExecutionStore()
 const confirmDialog = useConfirmDialog()
 const confirmDialogState = confirmDialog.state
 
-// 初始化窗口事件监听
 useWindowEvents()
 useMiniPanelShortcut()
 
 const handleKeydown = (event: KeyboardEvent) => {
-  // Cmd/Ctrl + N: 新建项目
   if ((event.metaKey || event.ctrlKey) && event.key === 'n') {
     event.preventDefault()
     uiStore.openProjectCreateModal()
   }
-  // Cmd/Ctrl + T: 新建会话
+
   if ((event.metaKey || event.ctrlKey) && event.key === 't') {
     event.preventDefault()
     uiStore.openSessionCreateModal()
   }
-  // Cmd/Ctrl + 1-5: 切换会话标签
+
   if ((event.metaKey || event.ctrlKey) && event.key >= '1' && event.key <= '5') {
     event.preventDefault()
     const index = parseInt(event.key) - 1
@@ -51,49 +55,87 @@ const handleKeydown = (event: KeyboardEvent) => {
   }
 }
 
+let hasCheckedInterruptedPlans = false
+
+async function promptInterruptedPlanRecovery(projectId: string | null) {
+  if (
+    hasCheckedInterruptedPlans
+    || !windowManagerStore.isMainWindow
+    || !projectId
+  ) {
+    return
+  }
+
+  hasCheckedInterruptedPlans = true
+  await planStore.loadPlans(projectId)
+
+  const candidatePlans = [...planStore.plans]
+    .filter(plan =>
+      plan.projectId === projectId
+      && (plan.status === 'executing' || plan.executionStatus === 'running')
+    )
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+
+  for (const plan of candidatePlans) {
+    const progress = await taskExecutionStore.getPlanExecutionProgress(plan.id)
+    if ((progress?.in_progress_count ?? 0) <= 0) {
+      continue
+    }
+
+    const confirmed = await confirmDialog.show({
+      type: 'info',
+      title: '检测到中断的计划执行',
+      message: `计划“${plan.name}”在 ${new Date(plan.updatedAt).toLocaleString('zh-CN')} 前仍有执行中的任务。是否跳转到计划面板继续查看？`,
+      confirmLabel: '继续查看',
+      cancelLabel: '暂不处理',
+      confirmButtonType: 'primary'
+    })
+
+    if (confirmed) {
+      projectStore.setCurrentProject(projectId)
+      uiStore.setAppMode('plan')
+      planStore.setCurrentPlan(plan.id)
+      await taskStore.loadTasks(plan.id)
+    }
+
+    return
+  }
+}
+
 onMounted(async () => {
-  // 初始化窗口上下文
   await windowManagerStore.initWindowContext()
-
-  // 初始化主题
   await themeStore.loadTheme()
-
-  // 加载应用设置
   await settingsStore.loadSettings()
 
   if (!windowManagerStore.isMiniPanelWindow) {
-    // 初始化窗口状态（恢复窗口位置和大小）
     await windowStateStore.initWindowState()
   }
 
-  // 加载应用状态（如果是主窗口）
   if (windowManagerStore.isMainWindow) {
     await appStateStore.loadState()
   }
 
   if (!windowManagerStore.isMiniPanelWindow) {
-    // 加载项目列表
     await projectStore.loadProjects()
 
-    // 如果是项目窗口，直接打开指定项目
     if (windowManagerStore.projectId) {
       projectStore.setCurrentProject(windowManagerStore.projectId)
-    }
-    // 如果是主窗口且有上次的项目，恢复状态
-    else if (windowManagerStore.isMainWindow && appStateStore.lastProjectId) {
+    } else if (windowManagerStore.isMainWindow && appStateStore.lastProjectId) {
       const projectExists = projectStore.projects.some(
-        p => p.id === appStateStore.lastProjectId
+        project => project.id === appStateStore.lastProjectId
       )
+
       if (projectExists) {
         projectStore.setCurrentProject(appStateStore.lastProjectId)
 
-        // 恢复上次的会话
         for (const sessionId of appStateStore.lastSessionIds) {
           await sessionStore.openSession(sessionId)
         }
       }
     }
   }
+
+  await promptInterruptedPlanRecovery(projectStore.currentProjectId)
 
   if (!windowManagerStore.isMiniPanelWindow) {
     window.addEventListener('keydown', handleKeydown)

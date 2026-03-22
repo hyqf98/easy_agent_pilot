@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch, type ComponentPublicInstance } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { convertFileSrc } from '@tauri-apps/api/core'
 import { EaIcon } from '@/components/common'
 import TokenProgressBar from '@/components/common/TokenProgressBar.vue'
 import CompressionConfirmDialog from '@/components/common/CompressionConfirmDialog.vue'
 import { MessageList } from '@/components/message'
-import type { Message, MessageAttachment } from '@/stores/message'
+import type { Message } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import { useMessageStore } from '@/stores/message'
 import { useAiEditTraceStore } from '@/stores/aiEditTrace'
@@ -25,6 +24,7 @@ import ConversationComposer from './ConversationComposer.vue'
 type ComposerExposed = ComponentPublicInstance & {
   focusInput: () => void
   handleMessageFormSubmit: (formId: string, values: Record<string, unknown>) => Promise<void>
+  resendMessage: (content: string, attachments?: Message['attachments']) => Promise<boolean>
 }
 
 const { t } = useI18n()
@@ -36,7 +36,7 @@ const sessionExecutionStore = useSessionExecutionStore()
 const tokenStore = useTokenStore()
 const notificationStore = useNotificationStore()
 
-// 压缩相关状态
+// 压缩相关状��?
 const showCompressionDialog = ref(false)
 const isCompressing = ref(false)
 
@@ -50,11 +50,6 @@ const TRACE_PANE_MIN_WIDTH = 460
 const TRACE_PANE_MAX_WIDTH = 1080
 const CONVERSATION_MIN_WIDTH = 360
 
-const toPendingImages = (attachments: MessageAttachment[]) => attachments.map(attachment => ({
-  ...attachment,
-  previewUrl: convertFileSrc(attachment.path)
-}))
-
 const updateViewportMode = () => {
   isMobileViewport.value = window.innerWidth < 960
 
@@ -65,30 +60,27 @@ const updateViewportMode = () => {
 
   aiEditTraceStore.setPaneWidth(sessionId, clampTracePaneWidth(currentTraceState.value.paneWidth))
 }
-// 处理消息重试
 const handleRetry = async (message: Message) => {
   const sessionId = sessionStore.currentSessionId
   const isSending = sessionId ? sessionExecutionStore.getIsSending(sessionId) : false
   if (!sessionId || isSending) return
+  const resend = async (targetMessage: Message) => {
+    await composerRef.value?.resendMessage(targetMessage.content, targetMessage.attachments ?? [])
+  }
 
-  // 如果是用户消息的重试，将内容填回输入框
+  // 如果是用户消息的重试，将内容填回输入�?
   if (message.role === 'user') {
-    sessionExecutionStore.setInputText(sessionId, message.content)
-    sessionExecutionStore.setPendingImages(sessionId, toPendingImages(message.attachments ?? []))
+    await resend(message)
     return
   }
 
-  // 如果是 AI 消息的重试，找到对应的用户消息并重新发送
   if (message.role === 'assistant') {
-    // 获取当前会话的所有消息
     const messages = messageStore.messagesBySession(sessionId)
     const messageIndex = messages.findIndex(m => m.id === message.id)
 
-    // 找到这条 AI 消息之前的用户消息
     for (let i = messageIndex - 1; i >= 0; i--) {
       if (messages[i].role === 'user') {
-        sessionExecutionStore.setInputText(sessionId, messages[i].content)
-        sessionExecutionStore.setPendingImages(sessionId, toPendingImages(messages[i].attachments ?? []))
+        await resend(messages[i])
         return
       }
     }
@@ -162,7 +154,6 @@ const currentTokenUsage = computed(() => {
   return tokenStore.getTokenUsage(sessionId)
 })
 
-// 当前会话消息数量
 const currentMessageCount = computed(() => {
   const sessionId = sessionStore.currentSessionId
   if (!sessionId) return 0
@@ -268,7 +259,6 @@ const handleComposerFocus = () => {
   aiEditTraceStore.closeMobileDrawer(sessionStore.currentSessionId)
 }
 
-// 压缩处理
 const handleOpenCompress = () => {
   showCompressionDialog.value = true
 }
@@ -277,13 +267,12 @@ const handleConfirmCompress = async (strategy: CompressionStrategy) => {
   const sessionId = sessionStore.currentSessionId
   if (!sessionId) return
 
-  // 获取当前会话的 agentId
   const session = sessionStore.currentSession
   const agentStore = useAgentStore()
   const agentId = resolveSessionAgentId(session, agentStore.agents)
 
   if (!agentId) {
-    notificationStore.smartError('压缩会话', new Error('无法获取智能体信息'))
+    notificationStore.smartError('????', new Error('?????????'))
     showCompressionDialog.value = false
     return
   }
@@ -498,7 +487,7 @@ onUnmounted(() => {
           class="message-area__conversation"
           :class="{ 'message-area__conversation--trace-active': showDesktopTracePane }"
         >
-          <!-- Token 进度条 - 固定在会话面板顶部 -->
+          <!-- Token 进度�?- 固定在会话面板顶�?-->
           <div class="message-area__token-bar">
             <TokenProgressBar
               :session-id="sessionStore.currentSessionId"
@@ -560,7 +549,7 @@ onUnmounted(() => {
       </button>
     </template>
 
-    <!-- 空状态 -->
+    <!-- 空状�?-->
     <div
       v-else
       class="message-area__empty"
@@ -578,7 +567,7 @@ onUnmounted(() => {
       </p>
     </div>
 
-    <!-- 压缩确认对话框 -->
+    <!-- 压缩确认对话�?-->
     <CompressionConfirmDialog
       v-model:visible="showCompressionDialog"
       :token-usage="currentTokenUsage"
@@ -646,7 +635,7 @@ onUnmounted(() => {
   position: relative;
 }
 
-/* Token 进度条 - 悬浮在会话面板顶部 */
+/* Token 进度�?- 悬浮在会话面板顶�?*/
 .message-area__token-bar {
   position: absolute;
   top: 8px;
@@ -697,7 +686,6 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
-/* 消息列表区域 - 可滚动 */
 .message-area__list {
   flex: 1;
   min-height: 0;
@@ -705,7 +693,7 @@ onUnmounted(() => {
   flex-direction: column;
 }
 
-/* 空状态 */
+/* 空状�?*/
 .message-area__empty {
   flex: 1;
   min-height: 0;
@@ -723,7 +711,7 @@ onUnmounted(() => {
   border-top: 1px solid rgba(148, 163, 184, 0.08);
 }
 
-/* 底部状态栏：Todo + 进度条 同一行 */
+/* 底部状��栏：Todo + 进度�?同一�?*/
 .bottom-status-bar {
   display: flex;
   align-items: center;
@@ -798,7 +786,6 @@ onUnmounted(() => {
   box-shadow: 0 0 0 2px var(--color-primary-light);
 }
 
-/* 工具栏 */
 .message-input__toolbar {
   display: flex;
   align-items: center;
@@ -831,8 +818,8 @@ onUnmounted(() => {
 .message-input__editor {
   position: relative;
   flex: 1;
-  min-height: calc(1.5em * 4); /* 4 行 */
-  max-height: calc(1.5em * 6); /* 6 行 */
+  min-height: calc(1.5em * 4); /* 4 �?*/
+  max-height: calc(1.5em * 6); /* 6 �?*/
 }
 
 .message-input__file-input {
@@ -1035,7 +1022,6 @@ onUnmounted(() => {
   color: var(--color-text-tertiary);
 }
 
-/* 渲染层 - 显示带样式的文件标签 */
 .message-input__render {
   position: absolute;
   top: 0;
@@ -1070,7 +1056,6 @@ onUnmounted(() => {
   opacity: 0;
 }
 
-/* 文件标签样式 - 保持字符宽度基本一致 */
 .message-input__file-tag {
   color: var(--color-primary);
   font-weight: 500;
@@ -1127,7 +1112,7 @@ onUnmounted(() => {
   opacity: 0.6;
 }
 
-/* 小芯片选择器 */
+/* 小芯片��择�?*/
 .input-chip {
   position: relative;
   flex-shrink: 0;
@@ -1151,7 +1136,6 @@ onUnmounted(() => {
   background-color: var(--color-surface-hover);
 }
 
-/* 压缩按钮样式 */
 .input-chip__btn--compress {
   background-color: var(--color-warning-light);
 }
@@ -1283,7 +1267,7 @@ onUnmounted(() => {
   text-align: center;
 }
 
-/* 下拉框动画 */
+/* 下拉框动�?*/
 .dropdown-enter-active,
 .dropdown-leave-active {
   transition: all var(--transition-fast) var(--easing-default);

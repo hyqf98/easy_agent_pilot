@@ -70,7 +70,7 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
             <input
               :value="props.form.name"
               type="text"
-              placeholder="例如：用户认证模块开发"
+              placeholder="???????????"
               autofocus
               @input="updateField('name', ($event.target as HTMLInputElement).value)"
             >
@@ -98,7 +98,7 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
                     :checked="props.form.splitMode === 'ai'"
                     @change="updateField('splitMode', 'ai')"
                   >
-                  <span class="mode-icon">✨</span>
+                  <span class="mode-icon">AI</span>
                   <div class="mode-content">
                     <span class="mode-label">AI 协同</span>
                     <span class="mode-desc">AI 帮助拆分任务</span>
@@ -113,7 +113,7 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
                     :checked="props.form.splitMode === 'manual'"
                     @change="updateField('splitMode', 'manual')"
                   >
-                  <span class="mode-icon">✋</span>
+                  <span class="mode-icon">?</span>
                   <div class="mode-content">
                     <span class="mode-label">手动模式</span>
                     <span class="mode-desc">自己创建任务</span>
@@ -125,14 +125,14 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
             <template v-if="props.form.splitMode === 'ai'">
               <div class="form-row">
                 <div class="form-field">
-                  <label>拆分智能体</label>
+                  <label>?????</label>
                   <select
                     :value="props.form.splitAgentId ?? ''"
                     class="project-select"
                     @change="updateField('splitAgentId', (($event.target as HTMLSelectElement).value || null))"
                   >
                     <option value="">
-                      请选择智能体
+                      ??????
                     </option>
                     <option
                       v-for="option in props.agentOptions"
@@ -152,7 +152,7 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
                     @change="updateField('splitModelId', ($event.target as HTMLSelectElement).value)"
                   >
                     <option value="">
-                      请选择模型
+                      ?????
                     </option>
                     <option
                       v-for="option in props.modelOptions"
@@ -171,7 +171,7 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
 
               <div class="form-row">
                 <div class="form-field">
-                  <label>任务拆分颗粒度</label>
+                  <label>???????</label>
                   <input
                     :value="props.form.granularity"
                     type="number"
@@ -180,10 +180,10 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
                     placeholder="建议 5-50"
                     @input="updateField('granularity', Number(($event.target as HTMLInputElement).value))"
                   >
-                  <span class="field-hint">数值越小，任务粒度越细</span>
+                  <span class="field-hint">???????????</span>
                 </div>
                 <div class="form-field">
-                  <label>最大重试次数</label>
+                  <label>??????</label>
                   <input
                     :value="props.form.maxRetryCount"
                     type="number"
@@ -192,7 +192,7 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
                     placeholder="建议 1-3"
                     @input="updateField('maxRetryCount', Number(($event.target as HTMLInputElement).value))"
                   >
-                  <span class="field-hint">任务失败后的最大重试次数</span>
+                  <span class="field-hint">????????????</span>
                 </div>
               </div>
             </template>
@@ -251,7 +251,7 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
                 v-if="props.form.scheduledDateTime"
                 class="schedule-preview"
               >
-                计划将于 {{ new Date(props.form.scheduledDateTime).toLocaleString('zh-CN') }} 自动开始执行
+                ???? {{ new Date(props.form.scheduledDateTime).toLocaleString('zh-CN') }} ??????
               </span>
             </div>
           </div>
@@ -284,6 +284,8 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: max(var(--spacing-4, 1rem), env(safe-area-inset-top, 0px)) var(--spacing-3, 0.75rem);
+  overflow-y: auto;
   z-index: var(--z-modal-backdrop, 1040);
   backdrop-filter: blur(4px);
 }
@@ -291,9 +293,8 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
 .dialog {
   background-color: var(--color-surface, #fff);
   border-radius: var(--radius-lg, 12px);
-  width: 90%;
-  max-width: 40rem;
-  max-height: 88vh;
+  width: min(100%, 40rem);
+  max-height: min(88vh, calc(100vh - 1.5rem));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -576,6 +577,16 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
   .form-row,
   .mode-options {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-height: 820px) {
+  .dialog-overlay {
+    align-items: flex-start;
+  }
+
+  .dialog {
+    max-height: calc(100vh - 1rem);
   }
 }
 </style>

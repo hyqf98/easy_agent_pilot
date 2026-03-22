@@ -74,15 +74,49 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   const cliConfigPaths = ref<CliConfigPaths | null>(null)
   const testingMcpConfig = ref<UnifiedMcpConfig | null>(null)
   const cliCapabilities = ref<CliCapabilities | null>(null)
+  const cliInventoryCache = new Map<string, {
+    skills: UnifiedSkillConfig[]
+    plugins: UnifiedPluginConfig[]
+  }>()
+  const cliInventoryRequests = new Map<string, Promise<void>>()
 
   // Getters
   const isCliAgent = computed(() => selectedAgent.value?.type === 'cli')
   const isSdkAgent = computed(() => selectedAgent.value?.type === 'sdk')
 
+  function getCliInventoryCacheKey(agent: AgentConfig): string | null {
+    if (agent.type !== 'cli' || !agent.cliPath || !agent.provider) {
+      return null
+    }
+
+    return `${agent.provider}:${agent.cliPath}`
+  }
+
+  function applyCachedCliInventory(agent: AgentConfig) {
+    const cacheKey = getCliInventoryCacheKey(agent)
+    const cached = cacheKey ? cliInventoryCache.get(cacheKey) : null
+
+    skillsConfigs.value = cached?.skills ?? []
+    pluginsConfigs.value = cached?.plugins ?? []
+  }
+
+  function invalidateCliInventory(agent?: AgentConfig | null) {
+    const targetAgent = agent || selectedAgent.value
+    if (!targetAgent) {
+      return
+    }
+
+    const cacheKey = getCliInventoryCacheKey(targetAgent)
+    if (!cacheKey) {
+      return
+    }
+
+    cliInventoryCache.delete(cacheKey)
+  }
+
   /**
-   * 是否支持 Plugins（用于动态显示/隐藏 Plugins 标签页）
-   * - SDK 类型：始终支持
-   * - CLI 类型：根据能力信息判断
+   * - SDK 类型：始终支�?
+   * - CLI 类型：根据能力信息判�?
    */
   const supportsPlugins = computed(() => {
     if (!selectedAgent.value || selectedAgent.value.type !== 'cli') {
@@ -92,11 +126,11 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   })
 
   // ============================================================================
-  // Actions - 智能体选择与配置加载
+  // Actions - 智能体��择与配置加�?
   // ============================================================================
 
   /**
-   * 选择智能体并加载其配置
+   * 选择智能体并加载其配�?
    */
   async function selectAgent(agent: AgentConfig | null) {
     if (!agent) {
@@ -104,6 +138,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
       return
     }
 
+    clearDetailState()
     selectedAgentId.value = agent.id
     selectedAgent.value = agent
     isLoading.value = true
@@ -129,7 +164,6 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   }
 
   /**
-   * 加载 SDK 智能体配置（从数据库）
    */
   async function loadSdkConfigs(agentId: string) {
     configSource.value = 'database'
@@ -139,7 +173,6 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
     const notificationStore = useNotificationStore()
 
     try {
-      // 并行加载所有配置
       const [rawMcp, rawSkills, rawPlugins] = await Promise.all([
         invoke<RawAgentMcpConfig[]>('list_agent_mcp_configs', { agentId }),
         invoke<RawAgentSkillsConfig[]>('list_agent_skills_configs', { agentId }),
@@ -161,54 +194,42 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   }
 
   /**
-   * 加载 CLI 智能体配置（从文件）
    */
   async function loadCliConfigs(agent: AgentConfig) {
     configSource.value = 'file'
-    isReadOnly.value = false // 允许直接编辑 CLI 配置
+    isReadOnly.value = false
+    mcpConfigs.value = []
+    skillsConfigs.value = []
+    pluginsConfigs.value = []
 
     const notificationStore = useNotificationStore()
 
     try {
-      // 加载 CLI 能力信息
       if (agent.cliPath) {
         await loadCliCapabilities(agent.cliPath, agent.provider)
       }
 
-      // 获取配置路径
       const paths = await invoke<CliConfigPaths>('get_cli_config_paths', {
         cliPath: agent.cliPath,
         cliType: agent.provider,
       })
       cliConfigPaths.value = paths
 
-      // 读取配置文件
       const config = await invoke<CliConfig>('read_cli_config', {
         cliPath: agent.cliPath,
         cliType: agent.provider,
       })
 
-      // 转换 MCP 配置
       const mcpServers = config.mcp_servers || config.mcpServers || {}
       mcpConfigs.value = Object.entries(mcpServers).map(([name, cfg]) =>
         transformCliMcpConfig(name, cfg)
       )
 
-      // 扫描 Skills 和 Plugins
-      const scanResult = await invoke<ClaudeConfigScanResult>('scan_cli_config', {
-        cliPath: agent.cliPath,
-        cliType: agent.provider,
-      })
-
-      // 转换 Skills
-      skillsConfigs.value = scanResult.skills.map(transformCliSkill)
-
-      // 转换 Plugins
-      pluginsConfigs.value = scanResult.plugins.map(transformCliPlugin)
+      applyCachedCliInventory(agent)
     } catch (error) {
       console.error('Failed to load CLI configs:', error)
       notificationStore.networkError(
-        '加载 CLI 配置失败',
+        'Failed to load CLI configs',
         getErrorMessage(error),
         () => loadCliConfigs(agent)
       )
@@ -216,9 +237,6 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
     }
   }
 
-  /**
-   * 刷新 CLI 配置（从文件系统重新读取）
-   */
   async function refreshCliConfigs() {
     if (!selectedAgent.value || selectedAgent.value.type !== 'cli') {
       return
@@ -226,15 +244,92 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
 
     isLoading.value = true
     try {
-      await loadCliConfigs(selectedAgent.value)
+      const targetAgent = selectedAgent.value
+      invalidateCliInventory(targetAgent)
+      await loadCliConfigs(targetAgent)
+      await ensureCliInventoryLoaded(targetAgent, true)
     } finally {
       isLoading.value = false
     }
   }
 
-  /**
-   * 加载 CLI 能力信息
-   */
+  async function ensureCliInventoryLoaded(agent?: AgentConfig | null, force = false) {
+    const targetAgent = agent || selectedAgent.value
+    if (!targetAgent || targetAgent.type !== 'cli') {
+      return
+    }
+
+    const cacheKey = getCliInventoryCacheKey(targetAgent)
+    if (!cacheKey) {
+      skillsConfigs.value = []
+      pluginsConfigs.value = []
+      return
+    }
+
+    if (!force) {
+      const cached = cliInventoryCache.get(cacheKey)
+      if (cached) {
+        if (selectedAgentId.value === targetAgent.id) {
+          skillsConfigs.value = cached.skills
+          pluginsConfigs.value = cached.plugins
+        }
+        return
+      }
+
+      const pendingRequest = cliInventoryRequests.get(cacheKey)
+      if (pendingRequest) {
+        await pendingRequest
+        return
+      }
+    }
+
+    const notificationStore = useNotificationStore()
+    const shouldRestoreLoading = !isLoading.value
+    if (shouldRestoreLoading) {
+      isLoading.value = true
+    }
+
+    let request!: Promise<void>
+    request = (async () => {
+      try {
+        const scanResult = await invoke<ClaudeConfigScanResult>('scan_cli_config', {
+          cliPath: targetAgent.cliPath,
+          cliType: targetAgent.provider,
+        })
+        const nextSkills = scanResult.skills.map(transformCliSkill)
+        const nextPlugins = scanResult.plugins.map(transformCliPlugin)
+
+        cliInventoryCache.set(cacheKey, {
+          skills: nextSkills,
+          plugins: nextPlugins,
+        })
+
+        if (selectedAgentId.value === targetAgent.id) {
+          skillsConfigs.value = nextSkills
+          pluginsConfigs.value = nextPlugins
+        }
+      } catch (error) {
+        console.error('Failed to scan CLI inventory:', error)
+        notificationStore.networkError(
+          'Failed to load CLI configs',
+          getErrorMessage(error),
+          async () => { await ensureCliInventoryLoaded(targetAgent, true) }
+        )
+        throw error
+      } finally {
+        if (cliInventoryRequests.get(cacheKey) === request) {
+          cliInventoryRequests.delete(cacheKey)
+        }
+        if (shouldRestoreLoading) {
+          isLoading.value = false
+        }
+      }
+    })()
+
+    cliInventoryRequests.set(cacheKey, request)
+    await request
+  }
+
   async function loadCliCapabilities(cliPath: string, cliType?: string) {
     try {
       cliCapabilities.value = await invoke<CliCapabilities>('get_cli_capabilities', {
@@ -248,7 +343,6 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   }
 
   /**
-   * 清除配置
    */
   function clearConfigs() {
     selectedAgentId.value = null
@@ -260,6 +354,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
     isReadOnly.value = false
     cliConfigPaths.value = null
     cliCapabilities.value = null
+    clearDetailState()
   }
 
   async function resolveCliConfigPaths(agent?: AgentConfig | null): Promise<CliConfigPaths> {
@@ -308,7 +403,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
       const cliType = selectedAgent.value.provider
 
       if (!cliPath || !cliType) {
-        throw new Error('当前智能体缺少 CLI 类型，无法创建 Skills')
+        throw new Error('当前智能体缺�?CLI 类型，无法创�?Skills')
       }
 
       const result = await invoke<CreatedCliSkillResult>('create_cli_skill_scaffold', {
@@ -371,7 +466,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
     } catch (error) {
       console.error('Failed to scan CLI items for sync:', error)
       notificationStore.networkError(
-        '扫描同步项失败',
+        '???????',
         getErrorMessage(error),
         async () => { await scanCliItemsForSync(cliPath, type, cliType) }
       )
@@ -413,11 +508,9 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   }
 
   // ============================================================================
-  // Actions - MCP 配置操作
   // ============================================================================
 
   /**
-   * 创建 MCP 配置
    */
   async function createMcpConfig(config: Omit<UnifiedMcpConfig, 'id' | 'source' | 'isReadOnly'>) {
     if (!selectedAgentId.value) return
@@ -425,7 +518,6 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
     const notificationStore = useNotificationStore()
 
     if (isReadOnly.value) {
-      // CLI 类型：更新配置文件
       try {
         await invoke('update_cli_mcp_config', {
           cliPath: selectedAgent.value?.cliPath,
@@ -481,7 +573,6 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   }
 
   /**
-   * 更新 MCP 配置
    */
   async function updateMcpConfig(id: string, updates: Partial<UnifiedMcpConfig>) {
     if (!selectedAgentId.value) return
@@ -489,7 +580,6 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
     const notificationStore = useNotificationStore()
 
     if (isReadOnly.value) {
-      // CLI 类型：更新配置文件
       const config = mcpConfigs.value.find(c => c.id === id)
       if (!config) return
 
@@ -552,7 +642,6 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   }
 
   /**
-   * 删除 MCP 配置
    */
   async function deleteMcpConfig(id: string) {
     if (!selectedAgentId.value) return
@@ -560,7 +649,6 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
     const notificationStore = useNotificationStore()
 
     if (isReadOnly.value) {
-      // CLI 类型：从配置文件删除
       const config = mcpConfigs.value.find(c => c.id === id)
       if (!config) return
 
@@ -581,7 +669,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
         throw error
       }
     } else {
-      // SDK 类型：从数据库删除
+      // SDK 类型：从数据库删�?
       try {
         await invoke('delete_agent_mcp_config', { id })
         const index = mcpConfigs.value.findIndex(c => c.id === id)
@@ -601,7 +689,6 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   }
 
   // ============================================================================
-  // Actions - Skills 配置操作
   // ============================================================================
 
   async function createSkillsConfig(config: Omit<UnifiedSkillConfig, 'id' | 'source' | 'isReadOnly'>) {
@@ -691,7 +778,6 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   }
 
   // ============================================================================
-  // Actions - Plugins 配置操作
   // ============================================================================
 
   async function createPluginsConfig(config: Omit<UnifiedPluginConfig, 'id' | 'source' | 'isReadOnly'>) {
@@ -777,11 +863,9 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   }
 
   // ============================================================================
-  // Actions - 打开配置文件
   // ============================================================================
 
   /**
-   * 打开配置文件编辑器
    */
   async function openConfigFile() {
     if (!cliConfigPaths.value) return
@@ -808,7 +892,6 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   // ============================================================================
 
   /**
-   * 获取 MCP 服务器的工具列表
    */
   async function listMcpTools(config: UnifiedMcpConfig): Promise<McpToolsListResult> {
     const notificationStore = useNotificationStore()
@@ -858,14 +941,12 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   }
 
   /**
-   * 设置正在测试的 MCP 配置
    */
   function setTestingMcpConfig(config: UnifiedMcpConfig) {
     testingMcpConfig.value = config
   }
 
   /**
-   * 清除正在测试的 MCP 配置
    */
   function clearTestingMcpConfig() {
     testingMcpConfig.value = null
@@ -875,7 +956,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   // Actions - 详情视图相关
   // ============================================================================
 
-  // 详情视图状态
+  // 详情视图状��?
   const selectedSkill = ref<UnifiedSkillConfig | null>(null)
   const selectedPlugin = ref<UnifiedPluginConfig | null>(null)
 
@@ -896,7 +977,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   }
 
   /**
-   * 清除详情视图状态
+   * 清除详情视图状��?
    */
   function clearDetailState() {
     selectedSkill.value = null
@@ -904,18 +985,15 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   }
 
   /**
-   * 删除 Skill（支持 CLI 类型的文件删除）
    */
   async function deleteSkillWithFiles(skill: UnifiedSkillConfig) {
     const notificationStore = useNotificationStore()
 
     if (skill.source === 'file') {
-      // CLI 类型：删除文件目录
       try {
         await invoke('delete_skill_directory', {
           skillPath: skill.skillPath,
         })
-        // 从列表中移除
         const index = skillsConfigs.value.findIndex(c => c.id === skill.id)
         if (index !== -1) {
           skillsConfigs.value.splice(index, 1)
@@ -934,7 +1012,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
         throw error
       }
     } else {
-      // SDK 类型：从数据库删除
+      // SDK 类型：从数据库删�?
       await deleteSkillsConfig(skill.id)
       if (selectedSkill.value?.id === skill.id) {
         selectedSkill.value = null
@@ -943,18 +1021,15 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   }
 
   /**
-   * 删除 Plugin（支持 CLI 类型的文件删除）
    */
   async function deletePluginWithFiles(plugin: UnifiedPluginConfig) {
     const notificationStore = useNotificationStore()
 
     if (plugin.source === 'file') {
-      // CLI 类型：删除文件目录
       try {
         await invoke('delete_plugin_directory', {
           pluginPath: plugin.pluginPath,
         })
-        // 从列表中移除
         const index = pluginsConfigs.value.findIndex(c => c.id === plugin.id)
         if (index !== -1) {
           pluginsConfigs.value.splice(index, 1)
@@ -973,7 +1048,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
         throw error
       }
     } else {
-      // SDK 类型：从数据库删除
+      // SDK 类型：从数据库删�?
       await deletePluginsConfig(plugin.id)
       if (selectedPlugin.value?.id === plugin.id) {
         selectedPlugin.value = null
@@ -995,7 +1070,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
     testingMcpConfig,
     cliCapabilities,
 
-    // 详情视图状态
+    // 详情视图状��?
     selectedSkill,
     selectedPlugin,
 
@@ -1008,6 +1083,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
     selectAgent,
     clearConfigs,
     refreshCliConfigs,
+    ensureCliInventoryLoaded,
     loadCliCapabilities,
     resolveCliConfigPaths,
     scanCliItemsForSync,

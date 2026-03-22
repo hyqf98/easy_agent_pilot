@@ -30,7 +30,13 @@ export function createExecutionState(taskId: string): TaskExecutionState {
     logs: [],
     accumulatedContent: '',
     accumulatedThinking: '',
-    toolCalls: []
+    toolCalls: [],
+    tokenUsage: {
+      inputTokens: 0,
+      outputTokens: 0,
+      resetCount: 0,
+      lastUpdatedAt: null
+    }
   }
 }
 
@@ -38,7 +44,9 @@ export function createExecutionQueue(planId: string): ExecutionQueue {
   return {
     planId,
     currentTaskId: null,
-    pendingTaskIds: []
+    pendingTaskIds: [],
+    isPaused: false,
+    lastInterruptedTaskId: null
   }
 }
 

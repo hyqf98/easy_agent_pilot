@@ -9,13 +9,19 @@ export function getPlanTasks(tasks: Task[], planId: string): Task[] {
 export function computePlanRuntimeUpdate(
   plan: Plan,
   tasksInPlan: Task[],
-  queue: ExecutionQueue | undefined
+  queue: ExecutionQueue | undefined,
+  executionStates?: Map<string, TaskExecutionState>
 ): { status: Plan['status'], executionStatus: Plan['executionStatus'], currentTaskId?: string } | null {
   const currentTaskId = queue?.currentTaskId ?? null
   const hasQueued = (queue?.pendingTaskIds.length ?? 0) > 0
+  const isPaused = queue?.isPaused ?? false
   const hasBlocked = tasksInPlan.some(task => task.status === 'blocked')
   const hasPending = tasksInPlan.some(task => task.status === 'pending')
   const hasInProgress = tasksInPlan.some(task => task.status === 'in_progress')
+  const hasActiveExecution = tasksInPlan.some((task) => {
+    const state = executionStates?.get(task.id)
+    return state?.status === 'running' || state?.status === 'queued'
+  })
   const allTerminal = tasksInPlan.length > 0 && tasksInPlan.every(task =>
     TERMINAL_TASK_STATUSES.has(task.status)
   )
@@ -36,7 +42,15 @@ export function computePlanRuntimeUpdate(
     }
   }
 
-  if (currentTaskId || hasQueued || hasInProgress) {
+  if (isPaused || (!hasActiveExecution && hasInProgress)) {
+    return {
+      status: 'executing',
+      executionStatus: 'paused',
+      currentTaskId: undefined
+    }
+  }
+
+  if (currentTaskId || hasQueued || hasActiveExecution) {
     if (
       plan.status === 'executing'
       && plan.executionStatus === 'running'
@@ -52,7 +66,7 @@ export function computePlanRuntimeUpdate(
     }
   }
 
-  if (hasBlocked || hasPending || plan.executionStatus === 'running' || Boolean(plan.currentTaskId)) {
+  if (hasBlocked || hasPending || hasInProgress || plan.executionStatus === 'running' || Boolean(plan.currentTaskId)) {
     return {
       status: 'executing',
       executionStatus: 'paused',
@@ -111,6 +125,12 @@ export function resetExecutionStateRuntime(state: TaskExecutionState | undefined
   state.accumulatedContent = ''
   state.accumulatedThinking = ''
   state.toolCalls = []
+  state.tokenUsage = {
+    inputTokens: 0,
+    outputTokens: 0,
+    resetCount: 0,
+    lastUpdatedAt: null
+  }
 }
 
 export function clearPlanExecutionRuntime(

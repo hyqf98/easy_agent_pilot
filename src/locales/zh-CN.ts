@@ -1,4 +1,4 @@
-import enUS from './en-US'
+﻿import enUS from './en-US'
 
 const zhCN = {
   ...enUS,
@@ -927,6 +927,8 @@ const zhCN = {
       title: '日志管理',
       description: '将运行期日志写入本地文件，便于排查 Claude CLI、Codex CLI、SDK 和启动阶段问题。',
       refresh: '刷新',
+      startListening: '开始监听',
+      pauseListening: '暂停监听',
       clear: '清空日志',
       hideFiles: '隐藏文件列表',
       showFiles: '显示文件列表',
@@ -1096,11 +1098,15 @@ const zhCN = {
     actions: {
       executeAll: '一键执行',
       startExecution: '开始',
+      pauseExecutionFlow: '全局停止',
+      resumeExecutionFlow: '继续',
       addTask: '添加任务'
     },
     tooltips: {
       executeAll: '一键执行所有待办任务',
       startExecution: '开始执行进行中的任务',
+      pauseExecutionFlow: '停止当前自动执行任务，并暂停自动选择后续任务',
+      resumeExecutionFlow: '继续当前暂停的任务流程，并恢复自动执行',
       addTask: '添加新任务到待办列表'
     },
     emptyColumn: '暂无任务'
@@ -1177,6 +1183,7 @@ const zhCN = {
       waitingInput: '等待输入',
       running: '执行中...',
       queued: '排队中 #{position}',
+      stopped: '已停止',
       waitingDependencies: '等待依赖 ({count})'
     },
     retryCount: '重试: {current}/{max}',
@@ -1184,6 +1191,7 @@ const zhCN = {
     dependenciesCount: '{count} 个依赖',
     actions: {
       stop: '停止执行',
+      resume: '继续',
       retry: '重试',
       edit: '编辑',
       delete: '删除'

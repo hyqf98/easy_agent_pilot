@@ -1,9 +1,9 @@
 use anyhow::Result;
 use rusqlite::Connection;
 
-/// 鏁版嵁搴撳垵濮嬪寲 SQL 鑴氭湰
+/// 数据库初始化 SQL 脚本
 const INIT_SQL: &str = r#"
-    -- 椤圭洰琛?
+    -- 项目�?
     CREATE TABLE IF NOT EXISTS projects (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -14,7 +14,7 @@ const INIT_SQL: &str = r#"
     );
     CREATE INDEX IF NOT EXISTS idx_projects_path ON projects(path);
 
-    -- 浼氳瘽琛?
+    -- 会话�?
     CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
@@ -27,7 +27,7 @@ const INIT_SQL: &str = r#"
     );
     CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
 
-    -- 娑堟伅琛?
+    -- 消息�?
     CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
@@ -41,7 +41,7 @@ const INIT_SQL: &str = r#"
     );
     CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
 
-    -- 鏅鸿兘浣撻厤缃〃
+    -- 智能体配置表
     CREATE TABLE IF NOT EXISTS agents (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -55,7 +55,7 @@ const INIT_SQL: &str = r#"
         updated_at TEXT NOT NULL
     );
 
-    -- MCP 鏈嶅姟鍣ㄩ厤缃〃
+    -- MCP 服务器配置表
     CREATE TABLE IF NOT EXISTS mcp_servers (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -71,18 +71,18 @@ const INIT_SQL: &str = r#"
         updated_at TEXT NOT NULL
     );
 
-    -- Skills 閰嶇疆琛紙浠庡競鍦哄畨瑁呯殑 Skills锛?
+    -- Skills 配置表（从市场安装的 Skills�?
     CREATE TABLE IF NOT EXISTS skills (
         id TEXT PRIMARY KEY,
-        skill_id TEXT,                      -- 甯傚満 Skill ID
+        skill_id TEXT,                      -- 市场 Skill ID
         name TEXT NOT NULL,
         description TEXT,
-        file_name TEXT NOT NULL,            -- 鏂囦欢鍚?
-        path TEXT NOT NULL,                 -- 瀹屾暣璺緞
-        source_market TEXT,                 -- 鏉ユ簮甯傚満鍚嶇О
-        cli_type TEXT NOT NULL,             -- 鐩爣 CLI (claude, cursor, aider, windsurf)
-        scope TEXT NOT NULL DEFAULT 'global', -- 瀹夎鑼冨洿 (global, project)
-        project_path TEXT,                  -- 椤圭洰璺緞锛堝鏋滄槸 project scope锛?
+        file_name TEXT NOT NULL,            -- 文件�?
+        path TEXT NOT NULL,                 -- 完整路径
+        source_market TEXT,                 -- 来源市场名称
+        cli_type TEXT NOT NULL,             -- 目标 CLI (claude, cursor, aider, windsurf)
+        scope TEXT NOT NULL DEFAULT 'global', -- 安装范围 (global, project)
+        project_path TEXT,                  -- 项目路径（如果是 project scope�?
         disabled INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -90,7 +90,7 @@ const INIT_SQL: &str = r#"
     CREATE INDEX IF NOT EXISTS idx_skills_path ON skills(path);
     CREATE INDEX IF NOT EXISTS idx_skills_name ON skills(name);
 
-    -- 浼氳瘽 MCP 鍏宠仈琛?
+    -- 会话 MCP 关联�?
     CREATE TABLE IF NOT EXISTS session_mcp (
         session_id TEXT NOT NULL,
         mcp_server_id TEXT NOT NULL,
@@ -100,7 +100,7 @@ const INIT_SQL: &str = r#"
         FOREIGN KEY (mcp_server_id) REFERENCES mcp_servers(id) ON DELETE CASCADE
     );
 
-    -- 涓婚閰嶇疆琛?
+    -- 主题配置�?
     CREATE TABLE IF NOT EXISTS themes (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -109,14 +109,14 @@ const INIT_SQL: &str = r#"
         created_at TEXT NOT NULL
     );
 
-    -- 搴旂敤璁剧疆琛?
+    -- 应用设置�?
     CREATE TABLE IF NOT EXISTS app_settings (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );
 
-    -- CLI 璺緞閰嶇疆琛紙鎵嬪姩閰嶇疆锛?
+    -- CLI 路径配置表（手动配置�?
     CREATE TABLE IF NOT EXISTS cli_paths (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -127,7 +127,7 @@ const INIT_SQL: &str = r#"
     );
     CREATE INDEX IF NOT EXISTS idx_cli_paths_name ON cli_paths(name);
 
-    -- 甯傚満婧愰厤缃〃
+    -- 市场源配置表
     CREATE TABLE IF NOT EXISTS market_sources (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -141,7 +141,7 @@ const INIT_SQL: &str = r#"
     );
     CREATE INDEX IF NOT EXISTS idx_market_sources_name ON market_sources(name);
 
-    -- 宸插畨瑁?MCP 娴嬭瘯缁撴灉琛紙瀛樺偍 CLI 閰嶇疆鏂囦欢涓殑 MCP 娴嬭瘯缁撴灉锛?
+    -- 已安�?MCP 测试结果表（存储 CLI 配置文件中的 MCP 测试结果�?
     CREATE TABLE IF NOT EXISTS installed_mcp_test_results (
         id TEXT PRIMARY KEY,
         config_path TEXT NOT NULL,
@@ -154,7 +154,7 @@ const INIT_SQL: &str = r#"
     );
     CREATE INDEX IF NOT EXISTS idx_installed_mcp_test_results_lookup ON installed_mcp_test_results(config_path, mcp_name);
 
-    -- MCP 瀹夎鍘嗗彶琛?
+    -- MCP 安装历史�?
     CREATE TABLE IF NOT EXISTS mcp_install_history (
         id TEXT PRIMARY KEY,
         mcp_id TEXT NOT NULL,
@@ -170,7 +170,7 @@ const INIT_SQL: &str = r#"
     CREATE INDEX IF NOT EXISTS idx_mcp_install_history_created ON mcp_install_history(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_mcp_install_history_mcp ON mcp_install_history(mcp_name);
 
-    -- SDK 鏅鸿兘浣?MCP 閰嶇疆琛?
+    -- SDK 智能�?MCP 配置�?
     CREATE TABLE IF NOT EXISTS agent_mcp_configs (
         id TEXT PRIMARY KEY,
         agent_id TEXT NOT NULL,
@@ -189,7 +189,7 @@ const INIT_SQL: &str = r#"
     );
     CREATE INDEX IF NOT EXISTS idx_agent_mcp_configs_agent ON agent_mcp_configs(agent_id);
 
-    -- SDK 鏅鸿兘浣?Skills 閰嶇疆琛?
+    -- SDK 智能�?Skills 配置�?
     CREATE TABLE IF NOT EXISTS agent_skills_configs (
         id TEXT PRIMARY KEY,
         agent_id TEXT NOT NULL,
@@ -206,7 +206,7 @@ const INIT_SQL: &str = r#"
     );
     CREATE INDEX IF NOT EXISTS idx_agent_skills_configs_agent ON agent_skills_configs(agent_id);
 
-    -- SDK 鏅鸿兘浣?Plugins 閰嶇疆琛?
+    -- SDK 智能�?Plugins 配置�?
     CREATE TABLE IF NOT EXISTS agent_plugins_configs (
         id TEXT PRIMARY KEY,
         agent_id TEXT NOT NULL,
@@ -221,7 +221,7 @@ const INIT_SQL: &str = r#"
     );
     CREATE INDEX IF NOT EXISTS idx_agent_plugins_configs_agent ON agent_plugins_configs(agent_id);
 
-    -- Provider 閰嶇疆琛?(CC-Switch)
+    -- Provider 配置�?(CC-Switch)
     CREATE TABLE IF NOT EXISTS provider_profiles (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -242,7 +242,7 @@ const INIT_SQL: &str = r#"
     CREATE INDEX IF NOT EXISTS idx_provider_profiles_cli_type ON provider_profiles(cli_type);
     CREATE INDEX IF NOT EXISTS idx_provider_profiles_is_active ON provider_profiles(is_active);
 
-    -- 璁″垝琛?(Plan Mode)
+    -- 计划�?(Plan Mode)
     CREATE TABLE IF NOT EXISTS plans (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
@@ -259,7 +259,7 @@ const INIT_SQL: &str = r#"
     CREATE INDEX IF NOT EXISTS idx_plans_project ON plans(project_id);
     CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
 
-    -- 浠诲姟琛?(Plan Mode)
+    -- 任务�?(Plan Mode)
     CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY,
         plan_id TEXT NOT NULL,
@@ -287,7 +287,7 @@ const INIT_SQL: &str = r#"
     CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 
-    -- 鏅鸿兘浣撴ā鍨嬮厤缃〃
+    -- 智能体模型配置表
     CREATE TABLE IF NOT EXISTS agent_models (
         id TEXT PRIMARY KEY,
         agent_id TEXT NOT NULL,
@@ -303,14 +303,14 @@ const INIT_SQL: &str = r#"
     );
     CREATE INDEX IF NOT EXISTS idx_agent_models_agent ON agent_models(agent_id);
 
-    -- 搴旂敤鐘舵€佽〃锛堢獥鍙ｇ姸鎬佹仮澶嶏級
+    -- 应用状��表（窗口状态恢复）
     CREATE TABLE IF NOT EXISTS app_state (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
         updated_at INTEGER DEFAULT (strftime('%s', 'now'))
     );
 
-    -- 椤圭洰璁块棶璁板綍琛紙鏈€杩戦」鐩垪琛級
+    -- 项目访问记录表（朢�近项目列表）
     CREATE TABLE IF NOT EXISTS project_access_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         project_id TEXT NOT NULL UNIQUE,
@@ -320,14 +320,14 @@ const INIT_SQL: &str = r#"
     );
     CREATE INDEX IF NOT EXISTS idx_project_access_log_time ON project_access_log(last_accessed_at DESC);
 
-    -- 绐楀彛浼氳瘽閿佸畾琛紙闃叉鍚屼細璇濆绐楀彛锛?
+    -- 窗口会话锁定表（防止同会话多窗口�?
     CREATE TABLE IF NOT EXISTS window_session_locks (
         session_id TEXT PRIMARY KEY,
         window_label TEXT NOT NULL,
         locked_at INTEGER DEFAULT (strftime('%s', 'now'))
     );
 
-    -- 浠诲姟鎷嗗垎浼氳瘽琛紙瀛樺偍AI鍘熷杈撳嚭鍜岃В鏋愮姸鎬侊級
+    -- 任务拆分会话表（存储AI原始输出和解析状态）
     CREATE TABLE IF NOT EXISTS task_split_sessions (
         id TEXT PRIMARY KEY,
         plan_id TEXT NOT NULL,
@@ -342,7 +342,7 @@ const INIT_SQL: &str = r#"
     );
     CREATE INDEX IF NOT EXISTS idx_task_split_sessions_plan ON task_split_sessions(plan_id);
 
-    -- 浠诲姟鎵ц鏃ュ織琛?
+    -- 任务执行日志�?
     CREATE TABLE IF NOT EXISTS task_execution_logs (
         id TEXT PRIMARY KEY,
         task_id TEXT NOT NULL,
@@ -355,7 +355,7 @@ const INIT_SQL: &str = r#"
     CREATE INDEX IF NOT EXISTS idx_task_execution_logs_task ON task_execution_logs(task_id);
     CREATE INDEX IF NOT EXISTS idx_task_execution_logs_created ON task_execution_logs(created_at);
 
-    -- 閮ㄩ棬琛?
+    -- 部门�?
     CREATE TABLE IF NOT EXISTS departments (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -372,7 +372,7 @@ const INIT_SQL: &str = r#"
     CREATE INDEX IF NOT EXISTS idx_departments_name ON departments(name);
     CREATE INDEX IF NOT EXISTS idx_departments_status ON departments(status);
 
-    -- 浜哄憳琛?
+    -- 人员�?
     CREATE TABLE IF NOT EXISTS employees (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -394,7 +394,7 @@ const INIT_SQL: &str = r#"
     CREATE INDEX IF NOT EXISTS idx_employees_name ON employees(name);
     CREATE INDEX IF NOT EXISTS idx_employees_status ON employees(status);
 
-    -- 浠诲姟鎵ц缁撴灉蹇収鍘嗗彶琛?
+    -- 任务执行结果快照历史�?
     CREATE TABLE IF NOT EXISTS task_execution_results (
         id TEXT PRIMARY KEY,
         task_id TEXT NOT NULL,
@@ -414,7 +414,7 @@ const INIT_SQL: &str = r#"
     CREATE INDEX IF NOT EXISTS idx_task_execution_results_task_created
         ON task_execution_results(task_id, created_at DESC);
 
-    -- 璁板繂鍒嗙被琛紙鐢ㄤ簬 Skills 寮忓眰绾у睍绀猴級
+    -- 记忆分类表（用于 Skills 式层级展示）
     CREATE TABLE IF NOT EXISTS memory_categories (
         id TEXT PRIMARY KEY,
         parent_id TEXT,
@@ -429,7 +429,7 @@ const INIT_SQL: &str = r#"
     );
     CREATE INDEX IF NOT EXISTS idx_memory_categories_parent ON memory_categories(parent_id);
 
-    -- 鐢ㄦ埛璁板繂琛?
+    -- 用户记忆�?
     CREATE TABLE IF NOT EXISTS user_memories (
         id TEXT PRIMARY KEY,
         session_id TEXT,
@@ -451,7 +451,7 @@ const INIT_SQL: &str = r#"
     CREATE INDEX IF NOT EXISTS idx_user_memories_category ON user_memories(category_id);
     CREATE INDEX IF NOT EXISTS idx_user_memories_source_type ON user_memories(source_type);
 
-    -- 璁板繂鍘嬬缉鍘嗗彶琛?
+    -- 记忆压缩历史�?
     CREATE TABLE IF NOT EXISTS memory_compressions (
         id TEXT PRIMARY KEY,
         memory_id TEXT NOT NULL,
@@ -480,29 +480,29 @@ fn table_has_column(conn: &Connection, table_name: &str, column_name: &str) -> R
     Ok(false)
 }
 
-/// 鍒濆鍖栨暟鎹簱
+/// 初始化数据库
 pub fn init_database() -> Result<()> {
-    // 鑾峰彇鎸佷箙鍖栫洰褰?
+    // 获取持久化目�?
     let persistence_dir = crate::commands::get_persistence_dir_path()?;
     let db_path = persistence_dir.join("data").join("easy-agent.db");
 
-    // 纭繚鐩綍瀛樺湪
+    // 确保目录存在
     std::fs::create_dir_all(db_path.parent().unwrap())?;
 
     println!("Database path: {:?}", db_path);
 
-    // 鎵撳紑鏁版嵁搴撹繛鎺?
+    // 打开数据库连�?
     let conn = Connection::open(&db_path)?;
 
-    // 鍚敤澶栭敭绾︽潫锛圫QLite 榛樿涓嶅惎鐢級
+    // 启用外键约束（SQLite 默认不启用）
     conn.execute("PRAGMA foreign_keys = ON", [])?;
 
-    // 鎵ц鍒濆鍖?SQL
+    // 执行初始�?SQL
     conn.execute_batch(INIT_SQL)?;
 
-    // 鎵ц杩佺Щ锛堝拷鐣ュ垪宸插瓨鍦ㄧ殑閿欒锛?
-    // SQLite 涓嶆敮鎸?IF NOT EXISTS 鐢ㄤ簬 ALTER TABLE ADD COLUMN
-    // 鎵€浠ユ垜浠渶瑕佸崟鐙墽琛屾瘡鏉¤鍙ュ苟蹇界暐閿欒
+    // 执行迁移（忽略列已存在的错误�?
+    // SQLite 不支�?IF NOT EXISTS 用于 ALTER TABLE ADD COLUMN
+    // 扢�以我们需要单独执行每条语句并忽略错误
     let migrations = [
         "ALTER TABLE mcp_servers ADD COLUMN test_status TEXT",
         "ALTER TABLE mcp_servers ADD COLUMN test_message TEXT",
@@ -511,14 +511,14 @@ pub fn init_database() -> Result<()> {
         "ALTER TABLE mcp_servers ADD COLUMN server_type TEXT DEFAULT 'stdio'",
         "ALTER TABLE mcp_servers ADD COLUMN url TEXT",
         "ALTER TABLE mcp_servers ADD COLUMN headers TEXT",
-        // sessions 琛ㄦ坊鍔?pinned 鍜?last_message 瀛楁
+        // sessions 表添�?pinned �?last_message 字段
         "ALTER TABLE sessions ADD COLUMN pinned INTEGER DEFAULT 0",
         "ALTER TABLE sessions ADD COLUMN last_message TEXT",
         "ALTER TABLE sessions ADD COLUMN error_message TEXT",
     ];
 
     for migration in migrations {
-        // 蹇界暐"鍒楀凡瀛樺湪"閿欒
+        // 忽略"列已存在"错误
         if let Err(e) = conn.execute(migration, []) {
             let err_str = e.to_string();
             if !err_str.contains("duplicate column name") {
@@ -527,7 +527,7 @@ pub fn init_database() -> Result<()> {
         }
     }
 
-    // agents 琛ㄦ坊鍔犳祴璇曠浉鍏冲瓧娈?
+    // agents 表添加测试相关字�?
     let agent_migrations = [
         "ALTER TABLE agents ADD COLUMN status TEXT DEFAULT 'offline'",
         "ALTER TABLE agents ADD COLUMN test_message TEXT",
@@ -543,10 +543,10 @@ pub fn init_database() -> Result<()> {
         }
     }
 
-    // agents 琛ㄦ坊鍔犵粺涓€鏅鸿兘浣撴ā鍨嬪瓧娈?
-    // provider: 鎻愪緵鍟?(claude/codex)
-    // model_id: 妯″瀷ID
-    // custom_model_enabled: 鏄惁鍚敤鑷畾涔夋ā鍨?
+    // agents 表添加统丢�智能体模型字�?
+    // provider: 提供�?(claude/codex)
+    // model_id: 模型ID
+    // custom_model_enabled: 是否启用自定义模�?
     let unified_agent_migrations = [
         "ALTER TABLE agents ADD COLUMN provider TEXT",
         "ALTER TABLE agents ADD COLUMN model_id TEXT",
@@ -562,7 +562,7 @@ pub fn init_database() -> Result<()> {
         }
     }
 
-    // skills 琛ㄦ坊鍔犳柊瀛楁锛堜粠甯傚満瀹夎鐨?skills锛?
+    // skills 表添加新字段（从市场安装�?skills�?
     let skills_migrations = [
         "ALTER TABLE skills ADD COLUMN skill_id TEXT",
         "ALTER TABLE skills ADD COLUMN file_name TEXT",
@@ -582,7 +582,7 @@ pub fn init_database() -> Result<()> {
         }
     }
 
-    // 鍒涘缓 skills 琛ㄧ殑绱㈠紩锛堝鏋滀笉瀛樺湪锛?
+    // 创建 skills 表的索引（如果不存在�?
     let index_migrations = [
         "CREATE INDEX IF NOT EXISTS idx_skills_path ON skills(path)",
         "CREATE INDEX IF NOT EXISTS idx_skills_name ON skills(name)",
@@ -594,7 +594,7 @@ pub fn init_database() -> Result<()> {
         }
     }
 
-    // mcp_install_history 琛ㄨ縼绉伙紙濡傛灉琛ㄤ笉瀛樺湪鍒欏垱寤猴級
+    // mcp_install_history 表迁移（如果表不存在则创建）
     let history_table_sql = r#"
         CREATE TABLE IF NOT EXISTS mcp_install_history (
             id TEXT PRIMARY KEY,
@@ -613,7 +613,7 @@ pub fn init_database() -> Result<()> {
         println!("MCP install history table migration warning: {}", e);
     }
 
-    // 鍒涘缓绱㈠紩
+    // 创建索引
     let history_index_migrations = [
         "CREATE INDEX IF NOT EXISTS idx_mcp_install_history_created ON mcp_install_history(created_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_mcp_install_history_mcp ON mcp_install_history(mcp_name)",
@@ -624,12 +624,12 @@ pub fn init_database() -> Result<()> {
         }
     }
 
-    // messages 琛ㄦ坊鍔?error_message 瀛楁锛堢敤浜庡瓨鍌ㄥ彂閫佸け璐ョ殑鍘熷洜锛?
+    // messages 表添�?error_message 字段（用于存储发送失败的原因�?
     let message_migrations = [
         "ALTER TABLE messages ADD COLUMN attachments TEXT",
         "ALTER TABLE messages ADD COLUMN error_message TEXT",
         "ALTER TABLE messages ADD COLUMN tool_calls TEXT", // JSON string for tool calls
-        "ALTER TABLE messages ADD COLUMN thinking TEXT",   // 鎬濊€冨唴瀹癸紙鎵╁睍鎬濈淮妯″瀷锛?
+        "ALTER TABLE messages ADD COLUMN thinking TEXT",   // 思��内容（扩展思维模型�?
         "ALTER TABLE messages ADD COLUMN edit_traces TEXT",
         "ALTER TABLE messages ADD COLUMN runtime_notices TEXT",
         "ALTER TABLE messages ADD COLUMN compression_metadata TEXT",
@@ -644,7 +644,7 @@ pub fn init_database() -> Result<()> {
         }
     }
 
-    // agent_models 琛ㄨ縼绉伙紙鏅鸿兘浣撴ā鍨嬮厤缃〃锛?
+    // agent_models 表迁移（智能体模型配置表�?
     let agent_models_table_sql = r#"
         CREATE TABLE IF NOT EXISTS agent_models (
             id TEXT PRIMARY KEY,
@@ -664,14 +664,14 @@ pub fn init_database() -> Result<()> {
         println!("Agent models table migration warning: {}", e);
     }
 
-    // 鍒涘缓绱㈠紩
+    // 创建索引
     let agent_models_index_sql =
         "CREATE INDEX IF NOT EXISTS idx_agent_models_agent ON agent_models(agent_id)";
     if let Err(e) = conn.execute(agent_models_index_sql, []) {
         println!("Agent models index migration warning: {}", e);
     }
 
-    // agent_models 琛ㄦ坊鍔?context_window 瀛楁
+    // agent_models 表添�?context_window 字段
     let agent_models_migrations =
         ["ALTER TABLE agent_models ADD COLUMN context_window INTEGER DEFAULT 128000"];
 
@@ -684,7 +684,7 @@ pub fn init_database() -> Result<()> {
         }
     }
 
-    // plans 琛ㄦ坊鍔犳柊瀛楁锛堜换鍔℃媶鍒嗛绮掑害銆佹渶澶ч噸璇曟鏁般€佹墽琛岀姸鎬併€佸綋鍓嶄换鍔D锛?
+    // plans 表添加新字段（任务拆分颗粒度、最大重试次数��执行状态��当前任务ID�?
     let plans_migrations = [
         "ALTER TABLE plans ADD COLUMN granularity INTEGER DEFAULT 20",
         "ALTER TABLE plans ADD COLUMN max_retry_count INTEGER DEFAULT 3",
@@ -706,7 +706,7 @@ pub fn init_database() -> Result<()> {
         }
     }
 
-    // tasks 琛ㄦ坊鍔犳柊瀛楁锛堥噸璇曡鏁般€佹渶澶ч噸璇曘€侀敊璇俊鎭€佸疄鐜版楠ゃ€佹祴璇曟楠ゃ€侀獙鏀舵爣鍑嗭級
+    // tasks 表添加新字段（重试计数��最大重试��错误信息��实现步骤��测试步骤��验收标准）
     let tasks_migrations = [
         "ALTER TABLE tasks ADD COLUMN agent_id TEXT",
         "ALTER TABLE tasks ADD COLUMN model_id TEXT",
@@ -735,7 +735,7 @@ pub fn init_database() -> Result<()> {
         }
     }
 
-    // task_split_sessions 琛紙瀛樺偍AI鍘熷杈撳嚭鍜岃В鏋愮姸鎬侊級
+    // task_split_sessions 表（存储AI原始输出和解析状态）
     let task_split_sessions_table_sql = r#"
         CREATE TABLE IF NOT EXISTS task_split_sessions (
             id TEXT PRIMARY KEY,
@@ -754,7 +754,7 @@ pub fn init_database() -> Result<()> {
         println!("Task split sessions table migration warning: {}", e);
     }
 
-    // 鍒涘缓绱㈠紩
+    // 创建索引
     let task_split_sessions_index_sql =
         "CREATE INDEX IF NOT EXISTS idx_task_split_sessions_plan ON task_split_sessions(plan_id)";
     if let Err(e) = conn.execute(task_split_sessions_index_sql, []) {
@@ -808,7 +808,7 @@ pub fn init_database() -> Result<()> {
         }
     }
 
-    // task_execution_results 琛紙瀛樺偍浠诲姟鎵ц瀹屾垚/澶辫触鍚庣殑缁撴瀯鍖栫粨鏋滐級
+    // task_execution_results 表（存储任务执行完成/失败后的结构化结果）
     let task_execution_results_table_sql = r#"
         CREATE TABLE IF NOT EXISTS task_execution_results (
             id TEXT PRIMARY KEY,

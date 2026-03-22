@@ -1,6 +1,5 @@
-//! CLI 安装器模块
+//! CLI 安装器模�?
 //!
-//! 提供跨平台的 CLI 工具自动安装、更新检测功能
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -12,17 +11,25 @@ use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
-use crate::commands::cli_support::{find_cli_executable, get_cli_version};
+use crate::commands::cli_support::{
+    configure_windows_std_command, find_cli_executable, get_cli_version,
+};
 
-/// 安装进行中标志
+/// 安装进行中标�?
 static INSTALLING: AtomicBool = AtomicBool::new(false);
+
+fn create_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(target_os = "windows")]
+    configure_windows_std_command(&mut command);
+    command
+}
 
 /// 包管理器信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageManager {
     /// 包管理器名称 (npm, homebrew, curl)
     pub name: String,
-    /// 是否可用
     pub available: bool,
     /// 版本信息
     pub version: Option<String>,
@@ -37,7 +44,7 @@ pub struct InstallOption {
     pub command: String,
     /// 是否推荐
     pub recommended: bool,
-    /// 依赖的包管理器是否可用
+    /// 依赖的包管理器是否可�?
     pub available: bool,
     /// 方式显示名称
     pub display_name: String,
@@ -48,22 +55,17 @@ pub struct InstallOption {
 pub struct CliInstallerInfo {
     /// CLI 名称
     pub cli_name: String,
-    /// 是否已安装
+    /// 是否已安�?
     pub installed: bool,
-    /// 当前版本
     pub current_version: Option<String>,
-    /// 安装选项列表
     pub install_options: Vec<InstallOption>,
 }
 
 /// 版本信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersionInfo {
-    /// 当前安装版本
     pub current: Option<String>,
-    /// 最新版本
     pub latest: Option<String>,
-    /// 是否有更新
     pub has_update: bool,
     /// 更新说明
     pub release_notes: Option<String>,
@@ -76,7 +78,7 @@ pub struct InstallLogEvent {
     pub cli_name: String,
     /// 日志消息
     pub message: String,
-    /// 时间戳
+    /// 时间�?
     pub timestamp: String,
 }
 
@@ -87,17 +89,14 @@ pub struct InstallCompleteEvent {
     pub cli_name: String,
     /// 是否成功
     pub success: bool,
-    /// 错误消息
     pub error: Option<String>,
 }
 
-/// 检测系统中可用的包管理器
 #[tauri::command]
 pub fn detect_package_managers() -> Result<Vec<PackageManager>, String> {
     let mut managers = Vec::new();
 
-    // 检测 npm
-    if let Ok(output) = Command::new("npm").arg("--version").output() {
+    if let Ok(output) = create_command("npm").arg("--version").output() {
         let available = output.status.success();
         let version = if available {
             Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -117,14 +116,12 @@ pub fn detect_package_managers() -> Result<Vec<PackageManager>, String> {
         });
     }
 
-    // 检测 Homebrew (仅 macOS)
     #[cfg(target_os = "macos")]
     {
-        if let Ok(output) = Command::new("brew").arg("--version").output() {
+        if let Ok(output) = create_command("brew").arg("--version").output() {
             let available = output.status.success();
             let version = if available {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                // 取第一行作为版本
                 stdout.lines().next().map(|s| s.to_string())
             } else {
                 None
@@ -143,10 +140,9 @@ pub fn detect_package_managers() -> Result<Vec<PackageManager>, String> {
         }
     }
 
-    // 检测 curl (macOS/Linux)
     #[cfg(not(windows))]
     {
-        if let Ok(output) = Command::new("curl").arg("--version").output() {
+        if let Ok(output) = create_command("curl").arg("--version").output() {
             let available = output.status.success();
             let version = if available {
                 let stdout = String::from_utf8_lossy(&output.stdout);
@@ -171,7 +167,6 @@ pub fn detect_package_managers() -> Result<Vec<PackageManager>, String> {
     Ok(managers)
 }
 
-/// 检测 CLI 是否已安装及其版本
 fn detect_cli_installed(cli_name: &str) -> (bool, Option<String>) {
     if let Some(cli_path) = find_cli_executable(cli_name, &[]) {
         return (true, get_cli_version(&cli_path));
@@ -180,7 +175,7 @@ fn detect_cli_installed(cli_name: &str) -> (bool, Option<String>) {
     (false, None)
 }
 
-/// 获取 CLI 的安装选项
+/// 获取 CLI 的安装��项
 #[tauri::command]
 pub fn get_cli_install_options(cli_name: String) -> Result<CliInstallerInfo, String> {
     let managers = detect_package_managers()?;
@@ -189,7 +184,6 @@ pub fn get_cli_install_options(cli_name: String) -> Result<CliInstallerInfo, Str
         .map(|m| (m.name.as_str(), m.available))
         .collect();
 
-    // 检测是否已安装
     let (installed, current_version) = detect_cli_installed(&cli_name);
 
     let mut options = Vec::new();
@@ -232,7 +226,6 @@ pub fn get_cli_install_options(cli_name: String) -> Result<CliInstallerInfo, Str
                 });
             }
 
-            // npm - 全平台
             options.push(InstallOption {
                 method: "npm".to_string(),
                 command: "npm install -g @anthropic-ai/claude-code".to_string(),
@@ -294,7 +287,6 @@ fn get_brew_package(cli_name: &str) -> &'static str {
     }
 }
 
-/// 发送日志事件的辅助函数
 fn emit_log_event(app: &AppHandle, cli_name: &str, message: &str) {
     let _ = app.emit(
         "cli-install-log",
@@ -306,7 +298,6 @@ fn emit_log_event(app: &AppHandle, cli_name: &str, message: &str) {
     );
 }
 
-/// 执行安装 CLI
 #[tauri::command]
 pub async fn install_cli(cli_name: String, method: String, app: AppHandle) -> Result<(), String> {
     // 防止重复安装
@@ -352,7 +343,7 @@ pub async fn install_cli(cli_name: String, method: String, app: AppHandle) -> Re
             emit_log_event(
                 &app,
                 &cli_name,
-                &format!("✅ {} installed successfully!", cli_name),
+                &format!("�?{} installed successfully!", cli_name),
             );
             let _ = app.emit(
                 "cli-install-complete",
@@ -365,7 +356,7 @@ pub async fn install_cli(cli_name: String, method: String, app: AppHandle) -> Re
             Ok(())
         }
         Err(e) => {
-            emit_log_event(&app, &cli_name, &format!("❌ Installation failed: {}", e));
+            emit_log_event(&app, &cli_name, &format!("�?Installation failed: {}", e));
             let _ = app.emit(
                 "cli-install-complete",
                 InstallCompleteEvent {
@@ -379,7 +370,6 @@ pub async fn install_cli(cli_name: String, method: String, app: AppHandle) -> Re
     }
 }
 
-/// 执行安装命令
 fn execute_install_command(
     app: &AppHandle,
     cli_name: &str,
@@ -390,7 +380,7 @@ fn execute_install_command(
         "native" => {
             #[cfg(not(windows))]
             {
-                Command::new("bash")
+                create_command("bash")
                     .arg("-c")
                     .arg(_command)
                     .stdout(Stdio::piped())
@@ -399,7 +389,7 @@ fn execute_install_command(
             }
             #[cfg(windows)]
             {
-                Command::new("powershell")
+                create_command("powershell")
                     .arg("-Command")
                     .arg(_command)
                     .stdout(Stdio::piped())
@@ -409,7 +399,7 @@ fn execute_install_command(
         }
         "npm" => {
             let package = get_npm_package(cli_name);
-            Command::new("npm")
+            create_command("npm")
                 .args(["install", "-g", package])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -417,7 +407,7 @@ fn execute_install_command(
         }
         "homebrew" => {
             let package = get_brew_package(cli_name);
-            Command::new("brew")
+            create_command("brew")
                 .args(["install", package])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -427,7 +417,6 @@ fn execute_install_command(
     }
     .map_err(|e| format!("Failed to start command: {}", e))?;
 
-    // 为线程准备克隆
     let app_clone = app.clone();
     let cli_name_clone = cli_name.to_string();
 
@@ -441,7 +430,7 @@ fn execute_install_command(
         });
     }
 
-    // 为 stderr 准备克隆
+    // �?stderr 准备克隆
     let app_clone = app.clone();
     let cli_name_clone = cli_name.to_string();
 
@@ -470,10 +459,8 @@ fn execute_install_command(
     }
 }
 
-/// 检查 CLI 更新
 #[tauri::command]
 pub async fn check_cli_update(cli_name: String) -> Result<VersionInfo, String> {
-    // 获取当前安装版本
     let (_, current) = detect_cli_installed(&cli_name);
 
     if current.is_none() {
@@ -485,7 +472,6 @@ pub async fn check_cli_update(cli_name: String) -> Result<VersionInfo, String> {
         });
     }
 
-    // 获取最新版本 (从 npm registry)
     let latest = fetch_npm_version(cli_name.as_str()).await;
 
     let has_update = match (&current, &latest) {
@@ -501,7 +487,6 @@ pub async fn check_cli_update(cli_name: String) -> Result<VersionInfo, String> {
     })
 }
 
-/// 从 npm registry 获取最新版本
 async fn fetch_npm_version(cli_name: &str) -> Option<String> {
     let url = match cli_name {
         "claude" => "https://registry.npmjs.org/@anthropic-ai/claude-code/latest",
@@ -544,7 +529,6 @@ pub async fn upgrade_cli(cli_name: String, app: AppHandle) -> Result<(), String>
     // 获取安装信息
     let install_info = get_cli_install_options(cli_name.clone())?;
 
-    // 找到推荐的可用安装方式
     let method = install_info
         .install_options
         .iter()
@@ -563,7 +547,6 @@ pub async fn upgrade_cli(cli_name: String, app: AppHandle) -> Result<(), String>
             execute_upgrade_command(&app, &cli_name, "brew", &["upgrade", package]).await
         }
         _ => {
-            // 原生安装方式，重新执行安装脚本
             emit_log_event(&app, &cli_name, "📝 Re-running native installer...");
             let option = install_info
                 .install_options
@@ -581,7 +564,7 @@ pub async fn upgrade_cli(cli_name: String, app: AppHandle) -> Result<(), String>
             emit_log_event(
                 &app,
                 &cli_name,
-                &format!("✅ {} upgraded successfully!", cli_name),
+                &format!("�?{} upgraded successfully!", cli_name),
             );
             let _ = app.emit(
                 "cli-install-complete",
@@ -594,7 +577,7 @@ pub async fn upgrade_cli(cli_name: String, app: AppHandle) -> Result<(), String>
             Ok(())
         }
         Err(e) => {
-            emit_log_event(&app, &cli_name, &format!("❌ Upgrade failed: {}", e));
+            emit_log_event(&app, &cli_name, &format!("�?Upgrade failed: {}", e));
             let _ = app.emit(
                 "cli-install-complete",
                 InstallCompleteEvent {
@@ -608,7 +591,6 @@ pub async fn upgrade_cli(cli_name: String, app: AppHandle) -> Result<(), String>
     }
 }
 
-/// 执行升级命令
 async fn execute_upgrade_command(
     app: &AppHandle,
     cli_name: &str,
@@ -621,14 +603,14 @@ async fn execute_upgrade_command(
         &format!("📝 Executing: {} {}", program, args.join(" ")),
     );
 
-    let mut child = Command::new(program)
+    let mut child = create_command(program)
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("Failed to start command: {}", e))?;
 
-    // 为 stdout 线程准备克隆
+    // �?stdout 线程准备克隆
     let app_clone = app.clone();
     let cli_name_clone = cli_name.to_string();
 
@@ -642,7 +624,7 @@ async fn execute_upgrade_command(
         });
     }
 
-    // 为 stderr 线程准备克隆
+    // �?stderr 线程准备克隆
     let app_clone = app.clone();
     let cli_name_clone = cli_name.to_string();
 
@@ -671,11 +653,8 @@ async fn execute_upgrade_command(
     }
 }
 
-/// 取消安装/升级操作
 #[tauri::command]
 pub fn cancel_install() -> Result<(), String> {
-    // 注意：这个实现是简化的，实际上需要更复杂的进程管理
-    // 这里只是重置标志，真正的取消需要终止子进程
     INSTALLING.store(false, Ordering::SeqCst);
     Ok(())
 }

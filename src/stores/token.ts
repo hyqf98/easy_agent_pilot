@@ -5,25 +5,25 @@ import { useAgentConfigStore } from './agentConfig'
 import { useAgentStore } from './agent'
 import { useSessionStore } from './session'
 import { useSettingsStore } from './settings'
-import { resolveKnownContextWindow } from '@/utils/modelContextWindow'
+import {
+  DEFAULT_CONTEXT_WINDOW,
+  resolveConfiguredContextWindow
+} from '@/utils/configuredModelContext'
 import { resolveSessionAgent } from '@/utils/sessionAgent'
-
-// 默认上下文窗口大小 (128K)
-const DEFAULT_CONTEXT_WINDOW = 128000
 const SESSION_TOKEN_CACHE_KEY = 'ea-session-token-cache-v1'
 
-// Token 使用级别
+// Token 娴ｈ法鏁ょ痪褍锟?
 export type TokenLevel = 'safe' | 'warning' | 'danger' | 'critical'
 
-// Token 使用情况
+// Token 娴ｈ法鏁ら幆鍛枌
 export interface TokenUsage {
-  used: number          // 已使用 token
-  limit: number         // 模型上下文窗口
-  percentage: number    // 使用百分比 (0-100)
-  level: TokenLevel     // 使用级别
+  used: number          // 瀹歌弓濞囬悽?token
+  limit: number         // 濡拷锟斤拷锟芥稉濠佺瑓閺傚洨鐛ラ崣?
+  percentage: number    // 娴ｈ法鏁ら惂鎯у瀻锟?(0-100)
+  level: TokenLevel     // 娴ｈ法鏁ょ痪褍锟?
 }
 
-// 实时 token 数据
+// 鐎圭偞锟?token 閺佺増锟?
 export interface RealtimeTokenData {
   inputTokens: number
   outputTokens: number
@@ -35,16 +35,13 @@ function hasMeaningfulRealtimeUsage(data: Pick<RealtimeTokenData, 'inputTokens' 
   return data.inputTokens > 0 || data.outputTokens > 0
 }
 
-// 匋缩策略
 export type CompressionStrategy = 'simple' | 'smart' | 'summary'
 
-// 压缩选项
 export interface CompressionOptions {
   strategy: CompressionStrategy
-  keepRecentCount: number  // 保留最近 N 条消息
+  keepRecentCount: number  // 娣囨繄鏆拷閺堚偓锟?N 閺夆剝绉烽幁?
 }
 
-// 会话 token 缓存
 interface SessionTokenCache {
   sessionId: string
   totalTokens: number
@@ -80,7 +77,7 @@ function loadPersistedSessionTokenCaches(): Map<string, SessionTokenCache> {
   }
 }
 
-// 根据使用百分比获取级别
+// 閺嶈宓佹担璺ㄦ暏閻ф儳鍨庡В鏃囧箯閸欐牜楠囬崚?
 function getLevel(percentage: number): TokenLevel {
   if (percentage >= 95) return 'critical'
   if (percentage >= 80) return 'danger'
@@ -88,7 +85,7 @@ function getLevel(percentage: number): TokenLevel {
   return 'safe'
 }
 
-// 格式化 token 数量为可读字符串
+// 閺嶇厧绱￠崠?token 閺佷即鍣烘稉鍝勫讲鐠囪鐡х粭锔胯
 export function formatTokenCount(count: number): string {
   if (count >= 1000000) {
     return `${(count / 1000000).toFixed(1)}M`
@@ -102,7 +99,7 @@ export function formatTokenCount(count: number): string {
 export const useTokenStore = defineStore('token', () => {
   // State
   const sessionTokenCaches = ref<Map<string, SessionTokenCache>>(loadPersistedSessionTokenCaches())
-  // 实时 token 存储（来自 CLI 返回）
+  // 鐎圭偞锟?token 鐎涙ê鍋嶉敍鍫熸降锟?CLI 鏉╂柨娲栭敍?
   const realtimeTokens = ref<Map<string, RealtimeTokenData>>(new Map())
 
   function persistSessionTokenCaches() {
@@ -123,7 +120,6 @@ export const useTokenStore = defineStore('token', () => {
   // Getters
 
   /**
-   * 获取会话的 token 使用情况
    */
   const getTokenUsage = computed(() => {
     return (sessionId: string): TokenUsage => {
@@ -132,36 +128,25 @@ export const useTokenStore = defineStore('token', () => {
       const agentStore = useAgentStore()
       const sessionStore = useSessionStore()
 
-      // 获取会话信息
       const session = sessionStore.sessions.find(s => s.id === sessionId)
       if (!session) {
         return { used: 0, limit: DEFAULT_CONTEXT_WINDOW, percentage: 0, level: 'safe' as TokenLevel }
       }
 
-      // 获取会话的智能体
       const agent = resolveSessionAgent(session, agentStore.agents)
 
       const realtimeData = realtimeTokens.value.get(sessionId)
       const realtimeModel = realtimeData?.model?.trim()
 
-      // 获取智能体的模型配置
       let contextWindow = DEFAULT_CONTEXT_WINDOW
       if (agent) {
-        const enabledModels = agentConfigStore.getModelsConfigs(agent.id).filter(m => m.enabled)
-        const activeModel = enabledModels.find(m => m.isDefault) ?? enabledModels[0]
-        const configuredContextWindow = activeModel?.contextWindow
-          ?? resolveKnownContextWindow(activeModel?.modelId, agent.provider)
-        const runtimeContextWindow = resolveKnownContextWindow(realtimeModel, agent.provider)
-
-        if (runtimeContextWindow) {
-          contextWindow = runtimeContextWindow
-        } else if (configuredContextWindow) {
-          contextWindow = configuredContextWindow
-        } else if (agent.modelId?.trim()) {
-          contextWindow = resolveKnownContextWindow(agent.modelId, agent.provider) ?? DEFAULT_CONTEXT_WINDOW
-        }
-      } else if (realtimeModel) {
-        contextWindow = resolveKnownContextWindow(realtimeModel) ?? DEFAULT_CONTEXT_WINDOW
+        contextWindow = resolveConfiguredContextWindow(
+          agentConfigStore.getModelsConfigs(agent.id),
+          {
+            runtimeModelId: realtimeModel,
+            agentModelId: agent.modelId
+          }
+        )
       }
 
       let estimatedTokens = 0
@@ -170,8 +155,7 @@ export const useTokenStore = defineStore('token', () => {
         estimatedTokens += estimateMessageTokens(message.content)
       }
 
-      // 计算已使用的 token
-      // 优先使用实时 token 数据，没有时回退到消息估算。
+      // 鐠侊紕鐣诲韫▏閻?锟?锟斤拷锟?token
       const realtimeTotal = hasMeaningfulRealtimeUsage(realtimeData)
         ? (realtimeData?.inputTokens ?? 0) + (realtimeData?.outputTokens ?? 0)
         : 0
@@ -198,13 +182,12 @@ export const useTokenStore = defineStore('token', () => {
   })
 
   /**
-   * 检查会话是否需要压缩
    */
   const needsCompression = computed(() => {
     return (sessionId: string): boolean => {
       const settingsStore = useSettingsStore()
       const usage = getTokenUsage.value(sessionId)
-      // 使用设置中的压缩阈值
+      // 娴ｈ法鏁ょ拋鍓х枂娑擃厾娈戦崢瀣級闂冨牆锟?
       const threshold = settingsStore.settings.compressionThreshold
       return usage.percentage >= threshold
     }
@@ -213,7 +196,7 @@ export const useTokenStore = defineStore('token', () => {
   // Actions
 
   /**
-   * 更新实时 token 数据（来自 CLI 返回）
+   * 閺囧瓨鏌婏拷锟界偞锟?token 閺佺増宓侀敍鍫熸降锟?CLI 鏉╂柨娲栭敍?
    */
   function updateRealtimeTokens(
     sessionId: string,
@@ -244,14 +227,13 @@ export const useTokenStore = defineStore('token', () => {
   }
 
   /**
-   * 清除实时 token 数据
+   * 濞撳懘娅庯拷锟界偞锟?token 閺佺増锟?
    */
   function clearRealtimeTokens(sessionId: string) {
     realtimeTokens.value.delete(sessionId)
   }
 
   /**
-   * 更新会话的 token 缓存
    */
   function updateSessionTokenCache(sessionId: string) {
     const messageStore = useMessageStore()
@@ -285,11 +267,10 @@ export const useTokenStore = defineStore('token', () => {
   }
 
   /**
-   * 清除会话的 token 缓存
    */
   function clearSessionTokenCache(sessionId: string) {
     sessionTokenCaches.value.delete(sessionId)
-    // 同时清除实时 token
+    // 閸氬本妞傚〒鍛存珟鐎圭偞锟?token
     clearRealtimeTokens(sessionId)
     persistSessionTokenCaches()
   }
@@ -307,7 +288,6 @@ export const useTokenStore = defineStore('token', () => {
   }
 
   /**
-   * 清除所有 token 缓存
    */
   function clearAllTokenCaches() {
     sessionTokenCaches.value.clear()

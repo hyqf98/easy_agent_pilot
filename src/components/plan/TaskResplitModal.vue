@@ -22,18 +22,23 @@ const emit = defineEmits<{
 const agentStore = useAgentStore()
 const agentConfigStore = useAgentConfigStore()
 
-// 表单状态
+// 表单状��?
 const customPrompt = ref('')
 const granularity = ref(3)
 const selectedAgentId = ref<string | undefined>(undefined)
 const selectedModelId = ref<string | undefined>(undefined)
 
-// 计算可用的 agent 列表
 const availableAgents = computed(() => {
-  return agentStore.agents.filter(agent => agent.status === 'online')
+  return [...agentStore.agents].sort((left, right) => {
+    const leftOnline = left.status === 'online' ? 1 : 0
+    const rightOnline = right.status === 'online' ? 1 : 0
+    if (leftOnline !== rightOnline) {
+      return rightOnline - leftOnline
+    }
+    return left.name.localeCompare(right.name)
+  })
 })
 
-// 获取当前选中 agent 的模型列表
 const availableModels = computed(() => {
   if (!selectedAgentId.value) return []
   return agentConfigStore.getModelsConfigs(selectedAgentId.value)
@@ -54,7 +59,6 @@ function close() {
 
 const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(close)
 
-// 确认配置
 function handleConfirm() {
   emit('confirm', {
     taskIndex: 0, // taskIndex 由父组件设置
@@ -66,11 +70,10 @@ function handleConfirm() {
   close()
 }
 
-// 监听 visible 变化，重置表单
 watch(() => props.visible, (newVisible) => {
   if (newVisible) {
     resetForm()
-    // 加载选中 agent 的模型列表
+    // 加载选中 agent 的模型列�?
     if (selectedAgentId.value) {
       const provider = inferAgentProvider(agentStore.agents.find(agent => agent.id === selectedAgentId.value))
       void agentConfigStore.ensureModelsConfigs(selectedAgentId.value, provider)
@@ -78,15 +81,17 @@ watch(() => props.visible, (newVisible) => {
   }
 })
 
-// 监听 agent 选择变化，加载模型列表
 watch(selectedAgentId, async (newAgentId) => {
   if (newAgentId) {
     const provider = inferAgentProvider(agentStore.agents.find(agent => agent.id === newAgentId))
     await agentConfigStore.ensureModelsConfigs(newAgentId, provider)
-    // 设置默认模型
     const models = agentConfigStore.getModelsConfigs(newAgentId)
-    const defaultModel = models.find((m: AgentModelConfig) => m.isDefault)
-    selectedModelId.value = defaultModel?.modelId || models[0]?.modelId
+    const hasSelectedModel = models.some((model: AgentModelConfig) => model.modelId === selectedModelId.value)
+    if (!hasSelectedModel) {
+      const preferredModel = models.find((model: AgentModelConfig) => model.modelId === props.defaultModelId)
+      const defaultModel = models.find((model: AgentModelConfig) => model.isDefault)
+      selectedModelId.value = preferredModel?.modelId || defaultModel?.modelId || models[0]?.modelId
+    }
   } else {
     selectedModelId.value = undefined
   }
@@ -104,8 +109,8 @@ watch(selectedAgentId, async (newAgentId) => {
       <div class="resplit-modal">
         <div class="modal-header">
           <h4>
-            <span class="modal-icon">🔄</span>
-            继续拆分任务
+            <span class="modal-icon">?</span>
+            ??????
           </h4>
           <button
             class="btn-close"
@@ -125,13 +130,12 @@ watch(selectedAgentId, async (newAgentId) => {
         </div>
 
         <div class="modal-body">
-          <!-- 任务信息预览 -->
           <div
             v-if="task"
             class="task-preview"
           >
             <div class="preview-header">
-              <span class="preview-label">原任务</span>
+              <span class="preview-label">???</span>
               <span class="task-title">{{ task.title }}</span>
             </div>
             <p
@@ -144,7 +148,7 @@ watch(selectedAgentId, async (newAgentId) => {
               v-if="task.implementationSteps?.length"
               class="task-steps"
             >
-              <span class="steps-label">实现步骤:</span>
+              <span class="steps-label">?????</span>
               <ul>
                 <li
                   v-for="(step, i) in task.implementationSteps"
@@ -158,7 +162,7 @@ watch(selectedAgentId, async (newAgentId) => {
               v-if="task.testSteps?.length"
               class="task-steps"
             >
-              <span class="steps-label">测试步骤:</span>
+              <span class="steps-label">?????</span>
               <ul>
                 <li
                   v-for="(step, i) in task.testSteps"
@@ -170,19 +174,18 @@ watch(selectedAgentId, async (newAgentId) => {
             </div>
           </div>
 
-          <!-- 配置表单 -->
           <div class="config-form">
             <div class="form-row">
-              <label>自定义提示词（可选）</label>
+              <label>??????????</label>
               <textarea
                 v-model="customPrompt"
-                placeholder="输入额外的拆分要求或说明..."
+                placeholder="????????????..."
                 rows="3"
               />
             </div>
 
             <div class="form-row">
-              <label>拆分颗粒度（最小任务数）</label>
+              <label>????????????</label>
               <div class="number-input-wrap">
                 <input
                   v-model.number="granularity"
@@ -190,16 +193,16 @@ watch(selectedAgentId, async (newAgentId) => {
                   min="2"
                   max="20"
                 >
-                <span class="input-hint">个任务</span>
+                <span class="input-hint">???</span>
               </div>
             </div>
 
             <div class="form-row">
-              <label>智能体（可选）</label>
+              <label>???????</label>
               <div class="select-wrap">
                 <select v-model="selectedAgentId">
                   <option :value="undefined">
-                    使用默认
+                    ????
                   </option>
                   <option
                     v-for="agent in availableAgents"
@@ -227,19 +230,18 @@ watch(selectedAgentId, async (newAgentId) => {
               v-if="selectedAgentId && availableModels.length > 0"
               class="form-row"
             >
-              <label>模型（可选）</label>
+              <label>??????</label>
               <div class="select-wrap">
                 <select v-model="selectedModelId">
                   <option :value="undefined">
-                    使用默认
+                    ????
                   </option>
                   <option
                     v-for="model in availableModels"
                     :key="model.id"
                     :value="model.modelId"
                   >
-                    {{ model.displayName }}
-                    <span v-if="model.isDefault">（默认）</span>
+                    {{ model.isDefault ? `${model.displayName}????` : model.displayName }}
                   </option>
                 </select>
                 <svg
@@ -263,13 +265,13 @@ watch(selectedAgentId, async (newAgentId) => {
             class="btn btn-secondary"
             @click="close"
           >
-            取消
+            ??
           </button>
           <button
             class="btn btn-primary"
             @click="handleConfirm"
           >
-            开始拆分
+            ????
           </button>
         </div>
       </div>

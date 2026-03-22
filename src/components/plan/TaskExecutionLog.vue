@@ -2,6 +2,9 @@
 import { computed, ref, watch, nextTick, onMounted } from 'vue'
 import { useTaskExecutionStore } from '@/stores/taskExecution'
 import { useTaskStore } from '@/stores/task'
+import { usePlanStore } from '@/stores/plan'
+import { useAgentStore } from '@/stores/agent'
+import { useAgentConfigStore } from '@/stores/agentConfig'
 import ExecutionTimeline from '@/components/message/ExecutionTimeline.vue'
 import StructuredContentRenderer from '@/components/message/StructuredContentRenderer.vue'
 import DynamicForm from '@/components/plan/DynamicForm.vue'
@@ -11,6 +14,11 @@ import { buildToolCallFromLogs } from '@/utils/toolCallLog'
 import { containsFormSchema } from '@/utils/structuredContent'
 import { buildStructuredResultContentFromRecord } from '@/utils/taskExecutionResult'
 import { getTaskExecutionStatusMeta, resolveTaskExecutionStatus } from '@/utils/taskExecutionStatus'
+import {
+  DEFAULT_CONTEXT_WINDOW,
+  resolveConfiguredContextWindow
+} from '@/utils/configuredModelContext'
+import { formatTokenCount } from '@/stores/token'
 
 const props = defineProps<{
   taskId: string
@@ -18,25 +26,72 @@ const props = defineProps<{
 
 const taskExecutionStore = useTaskExecutionStore()
 const taskStore = useTaskStore()
+const planStore = usePlanStore()
+const agentStore = useAgentStore()
+const agentConfigStore = useAgentConfigStore()
 
 // 日志容器引用
 const logContainerRef = ref<HTMLElement | null>(null)
 
-// 是否自动滚动
 const autoScroll = ref(true)
 const resultRecord = ref<TaskExecutionResultRecord | null>(null)
 
-// 任务信息
 const task = computed(() => {
   return taskStore.tasks.find(t => t.id === props.taskId)
 })
 
-// 执行状态
 const executionState = computed(() => {
   return taskExecutionStore.getExecutionState(props.taskId)
 })
 
-// 日志列表
+const tokenUsageWindow = computed(() => executionState.value?.tokenUsage ?? {
+  inputTokens: 0,
+  outputTokens: 0,
+  resetCount: 0,
+  lastUpdatedAt: null
+})
+
+const tokenContextLimit = computed(() => {
+  const currentTask = task.value
+  if (!currentTask) return DEFAULT_CONTEXT_WINDOW
+
+  const plan = planStore.plans.find(item => item.id === currentTask.planId)
+  const agentId = currentTask.agentId || plan?.splitAgentId
+  const modelId = currentTask.modelId || plan?.splitModelId
+  const runtimeModel = tokenUsageWindow.value.model?.trim()
+
+  if (!agentId) {
+    return DEFAULT_CONTEXT_WINDOW
+  }
+
+  const agent = agentStore.agents.find(item => item.id === agentId)
+  return resolveConfiguredContextWindow(agentConfigStore.getModelsConfigs(agentId), {
+    runtimeModelId: runtimeModel,
+    selectedModelId: modelId,
+    agentModelId: agent?.modelId
+  })
+})
+
+const tokenUsageTotal = computed(() =>
+  tokenUsageWindow.value.inputTokens + tokenUsageWindow.value.outputTokens
+)
+
+const tokenUsagePercentage = computed(() => {
+  if (tokenContextLimit.value <= 0) return 0
+  return Math.min(100, (tokenUsageTotal.value / tokenContextLimit.value) * 100)
+})
+
+const tokenUsageLevel = computed(() => {
+  if (tokenUsagePercentage.value >= 95) return 'critical'
+  if (tokenUsagePercentage.value >= 80) return 'danger'
+  if (tokenUsagePercentage.value >= 60) return 'warning'
+  return 'safe'
+})
+
+const tokenProgressStyle = computed(() => ({
+  width: `${tokenUsagePercentage.value}%`
+}))
+
 const logs = computed(() => {
   return executionState.value?.logs ?? []
 })
@@ -54,7 +109,6 @@ const effectiveStatus = computed(() => {
   return resolveTaskExecutionStatus(task.value, memoryStatus)
 })
 
-// 是否正在执行
 const isRunning = computed(() => {
   return effectiveStatus.value === 'running'
 })
@@ -64,19 +118,21 @@ const structuredResultContent = computed(() => {
   return buildStructuredResultContentFromRecord(resultRecord.value)
 })
 
-// 执行状态文本
 const statusText = computed(() => {
   return getTaskExecutionStatusMeta(effectiveStatus.value).label
 })
 
-// 状态颜色
+// 状��颜�?
 const statusColor = computed(() => {
   return getTaskExecutionStatusMeta(effectiveStatus.value).color
 })
 
-// 停止执行
 async function handleStop() {
   await taskExecutionStore.stopTaskExecution(props.taskId)
+}
+
+async function handleResume() {
+  await taskExecutionStore.resumeTaskExecution(props.taskId)
 }
 
 // 清除日志
@@ -89,7 +145,6 @@ async function handleInputSubmit(values: Record<string, unknown>) {
   await taskExecutionStore.submitTaskInput(props.taskId, values)
 }
 
-// 跳过任务
 async function handleSkip() {
   await taskExecutionStore.skipBlockedTask(props.taskId)
 }
@@ -105,7 +160,6 @@ async function loadResultRecord(taskId: string) {
   resultRecord.value = records.find(record => record.task_id === taskId) ?? null
 }
 
-// 滚动到底部
 function scrollToBottom() {
   if (logContainerRef.value && autoScroll.value) {
     nextTick(() => {
@@ -114,16 +168,13 @@ function scrollToBottom() {
   }
 }
 
-// 监听日志变化，自动滚动
 watch(logs, () => {
   scrollToBottom()
 }, { deep: true })
 
-// 监听滚动，判断是否自动滚动
 function handleScroll() {
   if (!logContainerRef.value) return
   const { scrollTop, scrollHeight, clientHeight } = logContainerRef.value
-  // 距离底部 50px 以内视为在底部
   autoScroll.value = scrollHeight - scrollTop - clientHeight < 50
 }
 
@@ -255,11 +306,10 @@ watch(
 
 <template>
   <div class="task-execution-log">
-    <!-- 头部 -->
     <div class="log-header">
       <div class="header-left">
         <h4 class="log-title">
-          {{ task?.title || '任务执行日志' }}
+          {{ task?.title || '??????' }}
         </h4>
         <span
           class="status-badge"
@@ -289,25 +339,76 @@ watch(
               height="12"
             />
           </svg>
-          停止
+          ֹͣ
+        </button>
+        <button
+          v-else-if="effectiveStatus === 'stopped'"
+          class="btn-resume"
+          @click="handleResume"
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <polygon points="5 3 19 12 5 21 5 3" />
+          </svg>
+          ??
         </button>
         <button
           v-if="logs.length > 0"
           class="btn-clear"
           @click="handleClearLogs"
         >
-          清除日志
+          ????
         </button>
       </div>
     </div>
 
+    <div
+      v-if="tokenUsageTotal > 0 || tokenUsageWindow.model"
+      class="token-usage-panel"
+    >
+      <div class="token-usage-panel__meta">
+        <div class="token-usage-panel__title">
+          <span>Token ??</span>
+          <span
+            v-if="tokenUsageWindow.model"
+            class="token-usage-panel__model"
+          >
+            {{ tokenUsageWindow.model }}
+          </span>
+        </div>
+        <div class="token-usage-panel__stats">
+          <span>{{ formatTokenCount(tokenUsageTotal) }} / {{ formatTokenCount(tokenContextLimit) }}</span>
+          <span v-if="tokenUsageWindow.resetCount > 0">?? {{ tokenUsageWindow.resetCount }} ?</span>
+        </div>
+      </div>
+      <div
+        class="token-usage-panel__bar"
+        :class="`token-usage-panel__bar--${tokenUsageLevel}`"
+      >
+        <div
+          class="token-usage-panel__fill"
+          :style="tokenProgressStyle"
+        />
+      </div>
+      <div class="token-usage-panel__breakdown">
+        <span>?? {{ formatTokenCount(tokenUsageWindow.inputTokens) }}</span>
+        <span>?? {{ formatTokenCount(tokenUsageWindow.outputTokens) }}</span>
+        <span>{{ Math.round(tokenUsagePercentage) }}%</span>
+      </div>
+    </div>
     <!-- 等待用户输入表单区域 -->
     <div
       v-if="isWaitingInput && task?.inputRequest"
       class="input-form-section"
     >
       <h5 class="section-title">
-        {{ task.inputRequest.question || '需要您的输入' }}
+        {{ task.inputRequest.question || '??????' }}
       </h5>
       <DynamicForm
         :schema="task.inputRequest.formSchema"
@@ -317,7 +418,7 @@ watch(
         class="btn-skip"
         @click="handleSkip"
       >
-        跳过此任务
+        ?????
       </button>
     </div>
 
@@ -338,8 +439,8 @@ watch(
         v-if="logs.length === 0"
         class="empty-state"
       >
-        <span v-if="isRunning">正在启动...</span>
-        <span v-else>暂无执行日志</span>
+        <span v-if="isRunning">????...</span>
+        <span v-else>??????</span>
       </div>
 
       <div
@@ -349,13 +450,13 @@ watch(
         <ExecutionTimeline :entries="timelineEntries" />
       </div>
 
-      <!-- 运行指示器 -->
+      <!-- 运行指示�?-->
       <div
         v-if="isRunning"
         class="running-indicator"
       >
         <span class="indicator-dot" />
-        <span class="indicator-text">AI 正在处理...</span>
+        <span class="indicator-text">AI ?????...</span>
       </div>
     </div>
   </div>
@@ -457,7 +558,82 @@ watch(
   gap: var(--spacing-2, 0.5rem);
 }
 
+.token-usage-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--color-border, #e2e8f0);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-surface, #ffffff) 92%, #eff6ff),
+      color-mix(in srgb, var(--color-bg-secondary, #f8fafc) 84%, #ffffff)
+    );
+}
+
+.token-usage-panel__meta,
+.token-usage-panel__breakdown,
+.token-usage-panel__title,
+.token-usage-panel__stats {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.token-usage-panel__title {
+  justify-content: flex-start;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text-primary, #1e293b);
+}
+
+.token-usage-panel__model {
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-primary-light, #dbeafe) 88%, white);
+  color: var(--color-primary, #2563eb);
+}
+
+.token-usage-panel__stats,
+.token-usage-panel__breakdown {
+  font-size: 0.6875rem;
+  color: var(--color-text-secondary, #64748b);
+}
+
+.token-usage-panel__bar {
+  height: 0.5rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-bg-tertiary, #e2e8f0) 88%, white);
+}
+
+.token-usage-panel__fill {
+  height: 100%;
+  border-radius: inherit;
+  transition: width 0.25s ease;
+}
+
+.token-usage-panel__bar--safe .token-usage-panel__fill {
+  background: var(--color-primary, #2563eb);
+}
+
+.token-usage-panel__bar--warning .token-usage-panel__fill {
+  background: var(--color-warning, #d97706);
+}
+
+.token-usage-panel__bar--danger .token-usage-panel__fill {
+  background: var(--color-orange-500, #f97316);
+}
+
+.token-usage-panel__bar--critical .token-usage-panel__fill {
+  background: var(--color-error, #dc2626);
+}
+
 .btn-stop,
+.btn-resume,
 .btn-clear {
   display: flex;
   align-items: center;
@@ -478,6 +654,16 @@ watch(
 
 .btn-stop:hover {
   background-color: var(--color-error, #dc2626);
+  color: white;
+}
+
+.btn-resume {
+  background-color: #dcfce7;
+  color: #15803d;
+}
+
+.btn-resume:hover {
+  background-color: #16a34a;
   color: white;
 }
 
@@ -678,6 +864,34 @@ watch(
       rgba(15, 23, 42, 0.88)
     );
   border-bottom-color: rgba(148, 163, 184, 0.12);
+}
+
+[data-theme='dark'] .token-usage-panel {
+  border-bottom-color: rgba(148, 163, 184, 0.14);
+  background:
+    linear-gradient(
+      180deg,
+      rgba(15, 23, 42, 0.88),
+      rgba(30, 41, 59, 0.78)
+    );
+}
+
+[data-theme='dark'] .token-usage-panel__title {
+  color: #f8fafc;
+}
+
+[data-theme='dark'] .token-usage-panel__model {
+  background: rgba(37, 99, 235, 0.2);
+  color: #bfdbfe;
+}
+
+[data-theme='dark'] .token-usage-panel__stats,
+[data-theme='dark'] .token-usage-panel__breakdown {
+  color: rgba(226, 232, 240, 0.72);
+}
+
+[data-theme='dark'] .token-usage-panel__bar {
+  background: rgba(51, 65, 85, 0.92);
 }
 
 [data-theme='dark'] .btn-clear {

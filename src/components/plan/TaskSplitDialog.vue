@@ -24,7 +24,7 @@ const isDarkTheme = computed(() => themeStore.isDark)
 const isConfirming = ref(false)
 const messagesContainerRef = ref<HTMLElement | null>(null)
 
-// 继续拆分相关状态
+// ????????
 const resplitModalVisible = ref(false)
 const resplitTargetIndex = ref<number | null>(null)
 const resplitTargetTask = ref<AITaskItem | null>(null)
@@ -32,7 +32,6 @@ const resplitTargetTask = ref<AITaskItem | null>(null)
 // 是否显示预览
 const showPreview = computed(() => taskSplitStore.splitResult !== null)
 
-// 当前表单数据
 const activeFormSchema = computed(() => taskSplitStore.activeFormSchema)
 const isSessionRunning = computed(() => taskSplitStore.session?.status === 'running')
 const showStopButton = computed(() => taskSplitStore.session?.status === 'running')
@@ -42,7 +41,7 @@ const retryActionLabel = computed(() => {
   const hasUserMessage = taskSplitStore.messages.some(message =>
     message.role === 'user' && message.content.trim()
   )
-  return hasUserMessage ? '重新发送' : '重试'
+  return hasUserMessage ? '????' : '??'
 })
 const splitErrorMessage = computed(() =>
   taskSplitStore.session?.errorMessage?.trim()
@@ -51,19 +50,19 @@ const splitErrorMessage = computed(() =>
 )
 const footerHint = computed(() => {
   if (canRetrySplit.value) {
-    return splitErrorMessage.value || 'AI 响应失败，可点击重试重新发起请求。'
+    return splitErrorMessage.value || 'AI ?????????????????'
   }
 
   if (taskSplitStore.session?.status === 'stopped') {
     if (activeFormSchema.value) {
-      return '当前会话已停止，可继续填写上方表单后再提交。'
+      return '??????????????????????'
     }
     const hasArchivedForms = taskSplitStore.logs.some(log =>
       log.type === 'content' && log.content.includes('"type": "form_request"')
     )
     return hasArchivedForms
-      ? '当前会话已停止，历史表单已固化展示，可回看每一轮的建议与表单内容。'
-      : '当前会话已停止，且没有待填写的表单数据，仅保留已有思考记录。'
+      ? '?????????????????????????????????'
+      : '??????????????????????????????'
   }
 
   if (taskSplitStore.session?.status === 'running') {
@@ -71,14 +70,14 @@ const footerHint = computed(() => {
   }
 
   if (taskSplitStore.session?.status === 'waiting_input' && activeFormSchema.value) {
-    return '请根据上方 AI 动态表单逐步补充需求'
+    return '????? AI ??????????'
   }
 
   if (!activeFormSchema.value && !showPreview.value) {
-    return '当前会话没有待展示的表单数据。'
+    return '???????????????'
   }
 
-  return '请根据上方 AI 动态表单逐步补充需求'
+  return '????? AI ??????????'
 })
 
 const latestRuntimeLog = computed(() => {
@@ -99,11 +98,11 @@ const runningStatusText = computed(() => {
   }
 
   if (latestLog.type === 'thinking') {
-    return '正在思考并拆分任务...'
+    return '?????????...'
   }
 
   if (latestLog.type === 'thinking_start') {
-    return '正在进入思考阶段...'
+    return '????????...'
   }
 
   if (latestLog.type === 'system') {
@@ -122,18 +121,18 @@ const runningStatusText = computed(() => {
   }
 
   if (latestLog.type === 'content') {
-    return '正在生成结构化结果...'
+    return '?????????...'
   }
 
   if (latestLog.type === 'tool_result') {
-    return '工具返回结果，正在继续处理...'
+    return '?????????????...'
   }
 
   if (latestLog.type === 'error') {
-    return '收到错误输出，正在等待最终状态...'
+    return '???????????????...'
   }
 
-  return '正在处理中...'
+  return '?????...'
 })
 
 function scrollMessagesToBottom() {
@@ -172,7 +171,7 @@ function buildSummaryValueMap(schema: DynamicFormSchema, content: string): Recor
 
   for (const rawLine of content.split('\n')) {
     const line = rawLine.trimEnd()
-    const fullWidthSeparatorIndex = line.indexOf('：')
+    const fullWidthSeparatorIndex = line.indexOf('?')
     const asciiSeparatorIndex = line.indexOf(':')
     const separatorIndex = fullWidthSeparatorIndex >= 0 ? fullWidthSeparatorIndex : asciiSeparatorIndex
     const candidateLabel = separatorIndex >= 0 ? line.slice(0, separatorIndex).trim() : ''
@@ -217,7 +216,7 @@ function parseFieldSummaryValue(
       return parseOptionValue(normalizedValue)
     case 'multiselect':
       return normalizedValue
-        .split('、')
+        .split('?')
         .map(item => item.trim())
         .filter(Boolean)
         .map(parseOptionValue)
@@ -227,7 +226,7 @@ function parseFieldSummaryValue(
       return Number.isFinite(numericValue) ? numericValue : normalizedValue
     }
     case 'checkbox':
-      return ['true', '1', 'yes', 'on', '是'].includes(normalizedValue.toLowerCase())
+      return ['true', '1', 'yes', 'on', '?'].includes(normalizedValue.toLowerCase())
     default:
       return normalizedValue
   }
@@ -773,7 +772,7 @@ async function initializeDialogSession() {
   })
 }
 
-// 重新拆分（清理当前状态，开始新会话）
+// ??????????????????
 async function restartSplit() {
   const dialogContext = planStore.splitDialogContext
   if (!dialogContext) return
@@ -784,11 +783,10 @@ async function restartSplit() {
   await taskSplitStore.clearPlanSplitSessions(dialogContext.planId)
   taskSplitStore.reset()
 
-  // 开始新会话
+  // ?????
   await initializeDialogSession()
 }
 
-// 处理表单提交
 async function handleFormSubmit(values: Record<string, any>) {
   if (!activeFormSchema.value) return
   await taskSplitStore.submitFormResponse(activeFormSchema.value.formId, values)
@@ -798,7 +796,6 @@ function handleTimelineFormSubmit(_entryId: string, values: Record<string, unkno
   void handleFormSubmit(values as Record<string, any>)
 }
 
-// 打开继续拆分弹框
 function handleResplit(index: number) {
   const tasks = taskSplitStore.splitResult
   if (!tasks || !tasks[index]) return
@@ -808,20 +805,17 @@ function handleResplit(index: number) {
   resplitModalVisible.value = true
 }
 
-// 确认继续拆分配置
 async function handleResplitConfirm(config: TaskResplitConfig) {
   if (resplitTargetIndex.value === null) return
 
   const dialogContext = planStore.splitDialogContext
   if (!dialogContext) return
 
-  // 更新配置中的 taskIndex
   config.taskIndex = resplitTargetIndex.value
 
   // 关闭弹框
   resplitModalVisible.value = false
 
-  // 启动子拆分模式
   await taskSplitStore.startSubSplit(resplitTargetIndex.value, config)
 }
 
@@ -833,14 +827,13 @@ async function confirmSplit() {
   // 如果是子拆分模式，先合并结果
   if (taskSplitStore.subSplitMode) {
     taskSplitStore.completeSubSplit(taskSplitStore.splitResult)
-    return // 合并后继续显示更新后的任务列表，不关闭弹框
+    return // ?????????????????????
   }
 
   const planId = splitContext.planId
   isConfirming.value = true
 
   try {
-    // 转换为 CreateTaskInput 格式
     const taskInputs = taskSplitStore.splitResult.map((task, index) => ({
       planId,
       title: task.title,
@@ -851,17 +844,14 @@ async function confirmSplit() {
       implementationSteps: task.implementationSteps,
       testSteps: task.testSteps,
       acceptanceCriteria: task.acceptanceCriteria,
-      dependsOn: task.dependsOn, // 传递依赖关系（任务标题列表）
+      dependsOn: task.dependsOn, // ??????????????
       order: index
     }))
 
-    // 批量创建任务
     await taskStore.createTasksFromSplit(planId, taskInputs)
 
-    // 重新加载任务列表，确保 TaskBoard 显示最新数据
     await taskStore.loadTasks(planId)
 
-    // 同步更新计划状态为"已拆分"
     await planStore.markPlanAsReady(planId)
     planStore.setCurrentPlan(planId)
 
@@ -877,7 +867,6 @@ async function confirmSplit() {
   }
 }
 
-// 关闭对话框（保存状态以便下次恢复）
 async function closeDialog() {
   taskSplitStore.detach()
   planStore.closeSplitDialog()
@@ -891,7 +880,7 @@ async function retrySplitTask() {
   await taskSplitStore.retry()
 }
 
-// 监听对话框打开
+// ???????
 watch(() => planStore.splitDialogVisible, async (visible) => {
   if (visible) {
     await initializeDialogSession()
@@ -954,6 +943,7 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(close
               >
                 <ExecutionTimeline
                   :entries="timelineEntries"
+                  group-tool-calls
                   @form-submit="handleTimelineFormSubmit"
                   @form-cancel="closeDialog"
                   @message-form-submit="(_formId, values) => handleTimelineFormSubmit('', values)"
@@ -991,7 +981,7 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(close
         </div>
 
         <div class="dialog-footer">
-          <!-- 无预览时通过动态表单引导，不展示自由输入 -->
+          <!-- ???????????????????? -->
           <div
             v-if="!showPreview"
             class="footer-bar"
@@ -1026,7 +1016,6 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(close
             </div>
           </div>
 
-          <!-- 确认按钮 - 仅在有预览时显示 -->
           <div
             v-else
             class="footer-actions footer-actions--confirm"
@@ -1056,14 +1045,13 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(close
               :disabled="isConfirming"
               @click="confirmSplit"
             >
-              {{ isConfirming ? '创建中...' : '确认并创建任务' }}
+              {{ isConfirming ? '???...' : '???????' }}
             </button>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- 继续拆分配置弹框 -->
     <TaskResplitModal
       v-model:visible="resplitModalVisible"
       :task="resplitTargetTask"
@@ -1235,6 +1223,7 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(close
 
 .messages-container {
   --timeline-panel-width: min(100%, 29.5rem);
+  --timeline-tool-call-shell-max-height: min(32rem, calc(100vh - 21rem));
   flex: 1;
   overflow-y: auto;
   padding: var(--spacing-4, 1rem);
@@ -1577,7 +1566,6 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(close
   color: #f8fafc;
 }
 
-/* 取消状态的消息样式 */
 .message.cancelled {
   opacity: 0.65;
 }

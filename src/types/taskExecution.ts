@@ -1,16 +1,20 @@
 /**
- * 任务执行相关类型定义
  */
 
 import type { ToolCall } from '@/stores/message'
 
-// 执行日志条目类型
 export type ExecutionLogType = 'content' | 'thinking' | 'thinking_start' | 'tool_use' | 'tool_input_delta' | 'tool_result' | 'error' | 'system'
 
-// 执行状态
 export type ExecutionStatus = 'idle' | 'queued' | 'running' | 'waiting_input' | 'completed' | 'failed' | 'stopped'
 
-// 执行日志条目
+export interface TaskTokenUsageWindow {
+  inputTokens: number
+  outputTokens: number
+  model?: string
+  resetCount: number
+  lastUpdatedAt: string | null
+}
+
 export interface ExecutionLogEntry {
   id: string
   taskId: string
@@ -26,7 +30,6 @@ export interface ExecutionLogEntry {
   }
 }
 
-// 任务执行状态
 export interface TaskExecutionState {
   taskId: string
   status: ExecutionStatus
@@ -37,16 +40,17 @@ export interface TaskExecutionState {
   accumulatedContent: string
   accumulatedThinking: string
   toolCalls: ToolCall[]
+  tokenUsage: TaskTokenUsageWindow
 }
 
-// 执行队列
 export interface ExecutionQueue {
   planId: string
   currentTaskId: string | null
   pendingTaskIds: string[]
+  isPaused: boolean
+  lastInterruptedTaskId: string | null
 }
 
-// 创建执行日志输入
 export interface CreateExecutionLogInput {
   taskId: string
   type: ExecutionLogType
@@ -60,17 +64,16 @@ export interface CreateExecutionLogInput {
   }
 }
 
-// 后端返回的执行日志结构
+// 鍚庣杩斿洖鐨勬墽琛屾棩蹇楃粨鏋?
 export interface RustExecutionLog {
   id: string
   task_id: string
   type: string
   content: string
-  metadata: string | null // JSON 字符串
+  metadata: string | null // JSON 瀛楃涓?
   created_at: string
 }
 
-// 任务执行摘要
 export interface TaskExecutionSummary {
   taskId: string
   status: ExecutionStatus

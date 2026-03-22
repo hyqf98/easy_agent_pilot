@@ -24,7 +24,7 @@ function updateField<K extends keyof PlanCreateFormState>(key: K, value: PlanCre
 
 const minDateTime = new Date().toISOString().slice(0, 16)
 
-// 是否为 AI 模式
+// ??? AI ??
 const isAiMode = () => props.form.splitMode === 'ai'
 </script>
 
@@ -37,7 +37,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
       <div class="dialog">
         <div class="dialog-header">
           <h4>
-            <span class="dialog-icon">✨</span>
+            <span class="dialog-icon">+</span>
             新建计划
           </h4>
           <button
@@ -62,7 +62,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
             <input
               :value="props.form.name"
               type="text"
-              placeholder="例如：用户认证模块开发"
+              placeholder="???????????"
               autofocus
               @input="updateField('name', ($event.target as HTMLInputElement).value)"
             >
@@ -77,7 +77,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
             />
           </div>
 
-          <!-- 模式选择器 -->
+          <!-- ???? -->
           <div class="form-field">
             <label>任务拆分模式</label>
             <div class="mode-options">
@@ -90,7 +90,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
                   :checked="props.form.splitMode === 'ai'"
                   @change="updateField('splitMode', 'ai')"
                 >
-                <span class="mode-icon">✨</span>
+                <span class="mode-icon">AI</span>
                 <div class="mode-content">
                   <span class="mode-label">AI 协同</span>
                   <span class="mode-desc">AI 帮助拆分任务</span>
@@ -105,7 +105,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
                   :checked="props.form.splitMode === 'manual'"
                   @change="updateField('splitMode', 'manual')"
                 >
-                <span class="mode-icon">✋</span>
+                <span class="mode-icon">?</span>
                 <div class="mode-content">
                   <span class="mode-label">手动模式</span>
                   <span class="mode-desc">自己创建任务</span>
@@ -118,7 +118,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
           <template v-if="isAiMode()">
             <div class="form-row">
               <div class="form-field">
-                <label>拆分智能体 <span class="required">*</span></label>
+                <label>????? <span class="required">*</span></label>
                 <select
                   :value="props.form.splitAgentId ?? ''"
                   class="project-select"
@@ -157,7 +157,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
             </div>
             <div class="form-row">
               <div class="form-field">
-                <label>任务拆分颗粒度</label>
+                <label>???????</label>
                 <input
                   :value="props.form.granularity"
                   type="number"
@@ -166,10 +166,10 @@ const isAiMode = () => props.form.splitMode === 'ai'
                   placeholder="建议 5-50"
                   @input="updateField('granularity', Number(($event.target as HTMLInputElement).value))"
                 >
-                <span class="field-hint">数值越小，任务粒度越细</span>
+                <span class="field-hint">???????????</span>
               </div>
               <div class="form-field">
-                <label>最大重试次数</label>
+                <label>??????</label>
                 <input
                   :value="props.form.maxRetryCount"
                   type="number"
@@ -178,7 +178,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
                   placeholder="建议 1-3"
                   @input="updateField('maxRetryCount', Number(($event.target as HTMLInputElement).value))"
                 >
-                <span class="field-hint">任务失败后的最大重试次数</span>
+                <span class="field-hint">????????????</span>
               </div>
             </div>
             <div class="hint-box">
@@ -197,11 +197,10 @@ const isAiMode = () => props.form.splitMode === 'ai'
                 />
                 <path d="M12 16v-4M12 8h.01" />
               </svg>
-              <span>"开始拆分"会将计划状态切为规划中，并进入 AI 拆分会话</span>
+              <span>????????????????????? AI ????</span>
             </div>
           </template>
 
-          <!-- 手动模式提示 -->
           <template v-if="!isAiMode()">
             <div class="hint-box hint-box-manual">
               <svg
@@ -251,7 +250,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
                 v-if="props.form.scheduledDateTime"
                 class="schedule-preview"
               >
-                计划将于 {{ new Date(props.form.scheduledDateTime).toLocaleString('zh-CN') }} 自动开始执行
+                ???? {{ new Date(props.form.scheduledDateTime).toLocaleString('zh-CN') }} ??????
               </span>
             </div>
           </div>
@@ -263,7 +262,6 @@ const isAiMode = () => props.form.splitMode === 'ai'
           >
             取消
           </button>
-          <!-- 手动模式按钮 -->
           <template v-if="!isAiMode()">
             <button
               class="btn btn-primary"
@@ -287,7 +285,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
               :disabled="!props.canStartSplit"
               @click="emit('startSplit')"
             >
-              开始拆分（调用模型）
+              ??????????
             </button>
           </template>
         </div>
@@ -304,6 +302,8 @@ const isAiMode = () => props.form.splitMode === 'ai'
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: max(var(--spacing-4, 1rem), env(safe-area-inset-top, 0px)) var(--spacing-3, 0.75rem);
+  overflow-y: auto;
   z-index: var(--z-modal-backdrop, 1040);
   backdrop-filter: blur(4px);
 }
@@ -311,8 +311,11 @@ const isAiMode = () => props.form.splitMode === 'ai'
 .dialog {
   background-color: var(--color-surface, #fff);
   border-radius: var(--radius-lg, 12px);
-  width: 90%;
-  max-width: 32rem;
+  width: min(100%, 32rem);
+  max-height: min(88vh, calc(100vh - 1.5rem));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   box-shadow: var(--shadow-xl, 0 20px 25px -5px rgba(0, 0, 0, 0.1));
   animation: dialog-in 0.2s var(--easing-out);
 }
@@ -369,7 +372,15 @@ const isAiMode = () => props.form.splitMode === 'ai'
 }
 
 .dialog-body {
+  flex: 1;
+  overflow-y: auto;
   padding: var(--spacing-5, 1.25rem);
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-3, 0.75rem);
 }
 
 .form-field {
@@ -391,6 +402,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
 .form-field input,
 .form-field textarea {
   width: 100%;
+  box-sizing: border-box;
   padding: var(--spacing-2, 0.5rem) var(--spacing-3, 0.75rem);
   border: 1px solid var(--color-border, #e2e8f0);
   border-radius: var(--radius-md, 8px);
@@ -412,15 +424,6 @@ const isAiMode = () => props.form.splitMode === 'ai'
   box-shadow: 0 0 0 3px var(--color-primary-light, #dbeafe);
 }
 
-.form-row {
-  display: flex;
-  gap: var(--spacing-3, 0.75rem);
-}
-
-.form-row .form-field {
-  flex: 1;
-}
-
 .field-hint {
   display: block;
   margin-top: var(--spacing-1, 0.25rem);
@@ -432,6 +435,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
   display: flex;
   align-items: flex-start;
   gap: var(--spacing-2, 0.5rem);
+  margin-bottom: var(--spacing-4, 1rem);
   padding: var(--spacing-3, 0.75rem);
   background-color: var(--color-primary-light, #eff6ff);
   border-radius: var(--radius-md, 8px);
@@ -511,6 +515,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
   display: flex;
   justify-content: flex-end;
   gap: var(--spacing-3, 0.75rem);
+  flex-wrap: wrap;
   padding: var(--spacing-4, 1rem) var(--spacing-5, 1.25rem);
   border-top: 1px solid var(--color-border, #e2e8f0);
   background-color: var(--color-bg-secondary, #f8fafc);
@@ -552,9 +557,10 @@ const isAiMode = () => props.form.splitMode === 'ai'
   border-color: var(--color-border-dark, #cbd5e1);
 }
 
-/* 模式选择器样式 */
+/* 模式选择器样�?*/
 .mode-options {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--spacing-3, 0.75rem);
 }
 
@@ -614,5 +620,26 @@ const isAiMode = () => props.form.splitMode === 'ai'
 .hint-box-manual {
   background-color: var(--color-success-light, #f0fdf4);
   color: var(--color-success, #22c55e);
+}
+
+@media (max-width: 640px) {
+  .dialog {
+    width: calc(100vw - 1.5rem);
+  }
+
+  .form-row,
+  .mode-options {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-height: 820px) {
+  .dialog-overlay {
+    align-items: flex-start;
+  }
+
+  .dialog {
+    max-height: calc(100vh - 1rem);
+  }
 }
 </style>

@@ -28,7 +28,7 @@ export default {
       terminalIntegrationDesc: 'Execute commands directly in the application'
     },
     shortcuts: {
-      createProject: 'Press ⌘ + N to quickly create a project'
+      createProject: 'Press ? + N to quickly create a project'
     }
   },
 
@@ -1097,6 +1097,8 @@ export default {
       title: 'Log Management',
       description: 'Runtime logs are written to local files for diagnosing Claude CLI, Codex CLI, SDK, and startup issues.',
       refresh: 'Refresh',
+      startListening: 'Start Listening',
+      pauseListening: 'Pause Listening',
       clear: 'Clear Logs',
       hideFiles: 'Hide Files',
       showFiles: 'Show Files',
@@ -1374,11 +1376,11 @@ export default {
 
   // Language names
   languages: {
-    zhCN: '简体中文',
+    zhCN: '????',
     enUS: 'English'
   },
 
-  // 文件引用
+  // 鏂囦欢寮曠敤
   fileMention: {
     searchFiles: 'Search files...',
     noFiles: 'No files found',
@@ -1554,11 +1556,15 @@ export default {
     actions: {
       executeAll: 'Run all',
       startExecution: 'Resume',
+      pauseExecutionFlow: 'Global stop',
+      resumeExecutionFlow: 'Continue',
       addTask: 'Add Task'
     },
     tooltips: {
       executeAll: 'Run all pending tasks',
       startExecution: 'Resume in-progress tasks',
+      pauseExecutionFlow: 'Stop the current auto-run task and pause queue automation',
+      resumeExecutionFlow: 'Resume the paused task flow and continue auto execution',
       addTask: 'Add a new task to pending list'
     },
     emptyColumn: 'No tasks'
@@ -1634,6 +1640,7 @@ export default {
       waitingInput: 'Waiting for input',
       running: 'Running...',
       queued: 'Queued #{position}',
+      stopped: 'Stopped',
       waitingDependencies: 'Waiting for dependencies ({count})'
     },
     retryCount: 'Retry: {current}/{max}',
@@ -1641,6 +1648,7 @@ export default {
     dependenciesCount: '{count} deps',
     actions: {
       stop: 'Stop execution',
+      resume: 'Continue',
       retry: 'Retry',
       edit: 'Edit',
       delete: 'Delete'
