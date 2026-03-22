@@ -239,9 +239,9 @@ fn unzip_skill_archive(zip_bytes: &[u8], target_dir: &Path) -> Result<(), String
     Ok(())
 }
 
-fn parse_skill_metadata(
-    skill_dir: &Path,
-) -> Result<(Option<String>, Option<String>, Vec<String>), String> {
+type ParsedSkillMetadata = (Option<String>, Option<String>, Vec<String>);
+
+fn parse_skill_metadata(skill_dir: &Path) -> Result<ParsedSkillMetadata, String> {
     let skill_md_path = skill_dir.join("SKILL.md");
     if !skill_md_path.exists() {
         return Ok((None, None, Vec::new()));
@@ -349,7 +349,7 @@ fn list_skill_dirs(base_dir: &Path, cli_type: &str) -> Result<Vec<InstalledSkill
             None => continue,
         };
         let disabled = dir_name.ends_with(".disabled");
-        let real_path = if disabled { path.clone() } else { path.clone() };
+        let real_path = path.clone();
         let has_skill = real_path.join("SKILL.md").exists();
         if !has_skill {
             continue;

@@ -184,7 +184,7 @@ fn normalize_file_extension(file_path: &str) -> String {
     let normalized = file_path.replace('\\', "/");
     let file_name = normalized
         .split('/')
-        .last()
+        .next_back()
         .unwrap_or(file_path)
         .to_lowercase();
 

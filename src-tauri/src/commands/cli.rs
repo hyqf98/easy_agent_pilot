@@ -78,11 +78,11 @@ fn get_scan_paths() -> Vec<PathBuf> {
 
     #[cfg(target_os = "windows")]
     {
-        if let Some(local_app_data) = std::env::var("LOCALAPPDATA").ok() {
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
             paths.push(PathBuf::from(&local_app_data).join("npm"));
             paths.push(PathBuf::from(&local_app_data).join("Programs"));
         }
-        if let Some(app_data) = std::env::var("APPDATA").ok() {
+        if let Ok(app_data) = std::env::var("APPDATA") {
             paths.push(PathBuf::from(&app_data).join("npm"));
         }
         if let Some(h) = &home {

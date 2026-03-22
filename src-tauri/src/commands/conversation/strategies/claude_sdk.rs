@@ -247,8 +247,7 @@ impl AgentExecutionStrategy for ClaudeSdkStrategy {
 /// 解析 SSE 事件
 fn parse_sse_event(session_id: &str, event_str: &str) -> Option<SdkStreamEvent> {
     for line in event_str.lines() {
-        if line.starts_with("data: ") {
-            let data = &line[6..];
+        if let Some(data) = line.strip_prefix("data: ") {
             if data == "[DONE]" {
                 return Some(SdkStreamEvent {
                     event_type: "done".to_string(),
@@ -297,8 +296,8 @@ fn parse_anthropic_stream_event(
                     output_tokens: None,
                     model: None,
                 })
-            } else if let Some(thinking) = delta.get("thinking").and_then(|t| t.as_str()) {
-                Some(SdkStreamEvent {
+            } else {
+                delta.get("thinking").and_then(|t| t.as_str()).map(|thinking| SdkStreamEvent {
                     event_type: "thinking".to_string(),
                     session_id: session_id.to_string(),
                     content: Some(thinking.to_string()),
@@ -311,8 +310,6 @@ fn parse_anthropic_stream_event(
                     output_tokens: None,
                     model: None,
                 })
-            } else {
-                None
             }
         }
         "content_block_start" => {

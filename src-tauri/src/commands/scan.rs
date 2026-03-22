@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::commands::cli_support::resolve_cli_name;
@@ -230,7 +230,7 @@ pub(crate) fn parse_mcp_server_config(
 }
 
 /// 扫描 MCP 配置
-fn scan_mcp_config(config_dir: &PathBuf, config_file: &PathBuf) -> Result<Vec<ScannedMcpServer>> {
+fn scan_mcp_config(config_dir: &Path, config_file: &Path) -> Result<Vec<ScannedMcpServer>> {
     let mut servers = Vec::new();
 
     // 1. 首先尝试从 ~/.claude.json (或对应 CLI 的配置文件) 读取用户级 MCP 配置 (user scope)
@@ -305,7 +305,7 @@ fn parse_yaml_frontmatter(content: &str) -> (Option<String>, Option<String>) {
 }
 
 /// 检查 Skill 目录的子目录结构
-fn check_skill_subdirectories(skill_path: &PathBuf) -> SkillSubdirectories {
+fn check_skill_subdirectories(skill_path: &Path) -> SkillSubdirectories {
     SkillSubdirectories {
         has_scripts: skill_path.join("scripts").exists(),
         has_references: skill_path.join("references").exists(),
@@ -313,29 +313,29 @@ fn check_skill_subdirectories(skill_path: &PathBuf) -> SkillSubdirectories {
     }
 }
 
-fn resolve_scan_entry_path(path: &PathBuf) -> PathBuf {
+fn resolve_scan_entry_path(path: &Path) -> PathBuf {
     if !path.is_symlink() {
-        return path.clone();
+        return path.to_path_buf();
     }
 
     match fs::read_link(path) {
         Ok(target) if target.is_relative() => path
             .parent()
             .map(|parent| parent.join(&target))
-            .unwrap_or_else(|| path.clone()),
+            .unwrap_or_else(|| path.to_path_buf()),
         Ok(target) => target,
-        Err(_) => path.clone(),
+        Err(_) => path.to_path_buf(),
     }
 }
 
-fn find_skill_markdown_path(skill_dir: &PathBuf) -> Option<PathBuf> {
+fn find_skill_markdown_path(skill_dir: &Path) -> Option<PathBuf> {
     ["SKILL.md", "skill.md"]
         .iter()
         .map(|name| skill_dir.join(name))
         .find(|path| path.exists())
 }
 
-fn build_directory_skill(path: &PathBuf, actual_path: &PathBuf) -> ScannedSkill {
+fn build_directory_skill(path: &Path, actual_path: &Path) -> ScannedSkill {
     let dir_name = path
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
@@ -379,7 +379,7 @@ fn build_markdown_skill(path: &PathBuf) -> ScannedSkill {
 }
 
 /// 扫描 Skills 目录
-fn scan_skills_directory(claude_dir: &PathBuf) -> Result<Vec<ScannedSkill>> {
+fn scan_skills_directory(claude_dir: &Path) -> Result<Vec<ScannedSkill>> {
     let mut skills = Vec::new();
     let skills_dir = claude_dir.join("skills");
 
@@ -410,9 +410,7 @@ fn scan_skills_directory(claude_dir: &PathBuf) -> Result<Vec<ScannedSkill>> {
 }
 
 /// 解析 plugin.json 文件
-fn parse_plugin_json(
-    plugin_json_path: &PathBuf,
-) -> (Option<String>, Option<String>, Option<String>) {
+fn parse_plugin_json(plugin_json_path: &Path) -> (Option<String>, Option<String>, Option<String>) {
     if let Ok(content) = fs::read_to_string(plugin_json_path) {
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
             let version = json
@@ -434,7 +432,7 @@ fn parse_plugin_json(
 }
 
 /// 检查 Plugin 目录的子目录结构
-fn check_plugin_subdirectories(plugin_path: &PathBuf) -> PluginSubdirectories {
+fn check_plugin_subdirectories(plugin_path: &Path) -> PluginSubdirectories {
     PluginSubdirectories {
         has_agents: plugin_path.join("agents").exists(),
         has_commands: plugin_path.join("commands").exists(),
@@ -445,7 +443,7 @@ fn check_plugin_subdirectories(plugin_path: &PathBuf) -> PluginSubdirectories {
 }
 
 /// 扫描 Plugins 目录
-fn scan_plugins_directory(claude_dir: &PathBuf) -> Result<Vec<ScannedPlugin>> {
+fn scan_plugins_directory(claude_dir: &Path) -> Result<Vec<ScannedPlugin>> {
     let mut plugins = Vec::new();
     let plugins_dir = claude_dir.join("plugins");
 
@@ -515,36 +513,34 @@ fn scan_plugins_directory(claude_dir: &PathBuf) -> Result<Vec<ScannedPlugin>> {
     // 如果没有从 installed_plugins.json 解析到插件，则扫描目录（向后兼容）
     if plugins.is_empty() {
         let entries = fs::read_dir(&plugins_dir)?;
-        for entry in entries {
-            if let Ok(entry) = entry {
-                let path = entry.path();
-                if path.is_dir() {
-                    let name = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
 
-                    // 检查是否启用（可以通过存在 .disabled 文件来判断）
-                    let disabled_marker = path.join(".disabled");
-                    let enabled = !disabled_marker.exists();
+                // 检查是否启用（可以通过存在 .disabled 文件来判断）
+                let disabled_marker = path.join(".disabled");
+                let enabled = !disabled_marker.exists();
 
-                    // 尝试解析 plugin.json
-                    let plugin_json_path = path.join(".claude-plugin").join("plugin.json");
-                    let (version, description, author) = parse_plugin_json(&plugin_json_path);
+                // 尝试解析 plugin.json
+                let plugin_json_path = path.join(".claude-plugin").join("plugin.json");
+                let (version, description, author) = parse_plugin_json(&plugin_json_path);
 
-                    // 检查子目录
-                    let subdirectories = check_plugin_subdirectories(&path);
+                // 检查子目录
+                let subdirectories = check_plugin_subdirectories(&path);
 
-                    plugins.push(ScannedPlugin {
-                        name,
-                        path: path.to_string_lossy().to_string(),
-                        enabled,
-                        version,
-                        description,
-                        author,
-                        subdirectories,
-                    });
-                }
+                plugins.push(ScannedPlugin {
+                    name,
+                    path: path.to_string_lossy().to_string(),
+                    enabled,
+                    version,
+                    description,
+                    author,
+                    subdirectories,
+                });
             }
         }
     }
@@ -814,7 +810,7 @@ fn extract_session_info(
     })
 }
 
-fn list_cli_session_project_paths(cli_name: &str, config_dir: &PathBuf) -> Vec<String> {
+fn list_cli_session_project_paths(cli_name: &str, config_dir: &Path) -> Vec<String> {
     let mut project_paths = Vec::new();
 
     match cli_name {
@@ -1222,10 +1218,7 @@ fn scan_cli_sessions_internal(
                 if let Some(filter_project) = &input.project_path {
                     // 如果指定了项目路径，只扫描该项目的会话
                     // Claude CLI 将路径中的分隔符替换为 "-"，Windows 路径需要同时处理 \ 和 /
-                    let project_dir_name = filter_project
-                        .replace('\\', "-")
-                        .replace('/', "-")
-                        .replace(':', "-"); // Windows 盘符如 C:
+                    let project_dir_name = filter_project.replace(['\\', '/', ':'], "-"); // Windows 盘符如 C:
                     let project_session_dir = projects_dir.join(&project_dir_name);
                     if project_session_dir.exists() {
                         if let Ok(entries) = fs::read_dir(&project_session_dir) {

@@ -189,10 +189,7 @@ pub async fn fetch_plugins_market(
     // Filter by category (component type)
     if let Some(category) = &query.category {
         if !category.is_empty() && category != "all" {
-            filtered_items = filtered_items
-                .into_iter()
-                .filter(|item| item.component_types.contains(category))
-                .collect();
+            filtered_items.retain(|item| item.component_types.contains(category));
         }
     }
 
@@ -200,18 +197,15 @@ pub async fn fetch_plugins_market(
     if let Some(search) = &query.search {
         if !search.is_empty() {
             let search_lower = search.to_lowercase();
-            filtered_items = filtered_items
-                .into_iter()
-                .filter(|item| {
-                    item.name.to_lowercase().contains(&search_lower)
-                        || item.description.to_lowercase().contains(&search_lower)
-                        || item.author.to_lowercase().contains(&search_lower)
-                        || item
-                            .tags
-                            .iter()
-                            .any(|t| t.to_lowercase().contains(&search_lower))
-                })
-                .collect();
+            filtered_items.retain(|item| {
+                item.name.to_lowercase().contains(&search_lower)
+                    || item.description.to_lowercase().contains(&search_lower)
+                    || item.author.to_lowercase().contains(&search_lower)
+                    || item
+                        .tags
+                        .iter()
+                        .any(|t| t.to_lowercase().contains(&search_lower))
+            });
         }
     }
 

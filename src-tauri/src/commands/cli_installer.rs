@@ -424,7 +424,7 @@ fn execute_install_command(
     if let Some(stdout) = child.stdout.take() {
         thread::spawn(move || {
             let reader = BufReader::new(stdout);
-            for line in reader.lines().filter_map(|l| l.ok()) {
+            for line in reader.lines().map_while(Result::ok) {
                 emit_log_event(&app_clone, &cli_name_clone, &line);
             }
         });
@@ -438,7 +438,7 @@ fn execute_install_command(
     if let Some(stderr) = child.stderr.take() {
         thread::spawn(move || {
             let reader = BufReader::new(stderr);
-            for line in reader.lines().filter_map(|l| l.ok()) {
+            for line in reader.lines().map_while(Result::ok) {
                 emit_log_event(&app_clone, &cli_name_clone, &line);
             }
         });
@@ -618,7 +618,7 @@ async fn execute_upgrade_command(
     if let Some(stdout) = child.stdout.take() {
         thread::spawn(move || {
             let reader = BufReader::new(stdout);
-            for line in reader.lines().filter_map(|l| l.ok()) {
+            for line in reader.lines().map_while(Result::ok) {
                 emit_log_event(&app_clone, &cli_name_clone, &line);
             }
         });
@@ -632,7 +632,7 @@ async fn execute_upgrade_command(
     if let Some(stderr) = child.stderr.take() {
         thread::spawn(move || {
             let reader = BufReader::new(stderr);
-            for line in reader.lines().filter_map(|l| l.ok()) {
+            for line in reader.lines().map_while(Result::ok) {
                 emit_log_event(&app_clone, &cli_name_clone, &line);
             }
         });

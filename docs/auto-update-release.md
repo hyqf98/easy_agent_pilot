@@ -6,8 +6,10 @@
 
 - 应用内更新源：`https://github.com/hyqf98/easy-agent-pilot/releases/latest/download/latest.json`
 - 发布工作流：[`../.github/workflows/release.yml`](../.github/workflows/release.yml)
+- CI 构建工作流：[`../.github/workflows/ci.yml`](../.github/workflows/ci.yml)
 - GitHub 密钥位置：`Settings -> Secrets and variables -> Actions -> Repository secrets`
 - 使用同一把 Tauri updater 私钥对所有后续版本签名
+- CI 使用 [`../src-tauri/tauri.ci.conf.json`](../src-tauri/tauri.ci.conf.json) 关闭 updater 产物签名，只做构建校验
 
 ## 必备前提
 

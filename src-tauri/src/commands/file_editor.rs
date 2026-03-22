@@ -20,9 +20,8 @@ pub struct ProjectFileContent {
 }
 
 fn resolve_path(path: &str) -> Result<PathBuf, String> {
-    if path.starts_with('~') {
+    if let Some(rest) = path.strip_prefix('~') {
         let home = dirs::home_dir().ok_or_else(|| "无法获取用户主目录".to_string())?;
-        let rest = &path[1..];
         let rest = rest.strip_prefix('/').unwrap_or(rest);
         return Ok(home.join(rest));
     }

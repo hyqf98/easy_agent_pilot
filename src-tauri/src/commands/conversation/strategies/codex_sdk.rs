@@ -288,8 +288,7 @@ impl AgentExecutionStrategy for CodexSdkStrategy {
 /// 解析 OpenAI SSE 事件
 fn parse_openai_sse_event(session_id: &str, event_str: &str) -> Option<SdkStreamEvent> {
     for line in event_str.lines() {
-        if line.starts_with("data: ") {
-            let data = &line[6..];
+        if let Some(data) = line.strip_prefix("data: ") {
 
             // 检查是否是结束标记
             if data == "[DONE]" {
