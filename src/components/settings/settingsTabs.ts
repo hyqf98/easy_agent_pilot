@@ -9,6 +9,7 @@ import DataSettings from './tabs/DataSettings.vue'
 import LogSettings from './tabs/LogSettings.vue'
 import LspSettings from './tabs/LspSettings.vue'
 import SessionManagementSettings from './tabs/SessionManagementSettings.vue'
+import AppUpdateSettings from './tabs/AppUpdateSettings.vue'
 import MarketplacePage from '@/components/marketplace/MarketplacePage.vue'
 
 export interface SettingsTabDescriptor {
@@ -53,6 +54,13 @@ export const SETTINGS_TAB_DESCRIPTORS: SettingsTabDescriptor[] = [
     labelKey: 'settings.nav.providerSwitch',
     icon: 'repeat',
     component: markRaw(ProviderSwitch),
+    layout: 'default'
+  },
+  {
+    id: 'appUpdate',
+    labelKey: 'settings.nav.appUpdate',
+    icon: 'download',
+    component: markRaw(AppUpdateSettings),
     layout: 'default'
   },
   {

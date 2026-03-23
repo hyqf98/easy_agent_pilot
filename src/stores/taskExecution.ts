@@ -11,7 +11,7 @@ import type {
 } from '@/types/taskExecution'
 import type { ToolCall } from '@/stores/message'
 import type { StreamEvent, McpServerConfig } from '@/services/conversation/strategies/types'
-import type { AIFormRequest } from '@/types/plan'
+import type { AIFormRequest, UpdatePlanInput, UpdateTaskInput } from '@/types/plan'
 import { useTaskStore } from '@/stores/task'
 import { usePlanStore } from '@/stores/plan'
 import { useProjectStore } from '@/stores/project'
@@ -19,7 +19,12 @@ import { useAgentStore } from '@/stores/agent'
 import { agentExecutor } from '@/services/conversation/AgentExecutor'
 import type { ConversationContext } from '@/services/conversation/strategies/types'
 import { extractFirstFormRequest } from '@/utils/structuredContent'
-import { buildExecutionPrompt, compactExecutionSummary, parseExecutionResult } from '@/utils/taskExecutionText'
+import {
+  buildExecutionPrompt,
+  buildResumeExecutionContext,
+  compactExecutionSummary,
+  parseExecutionResult
+} from '@/utils/taskExecutionText'
 import { resolvePlanTaskAgentSelection } from '@/utils/planExecutionProgress'
 import {
   createExecutionLogEntry,
@@ -58,6 +63,7 @@ import {
 } from './taskExecutionTaskRuntime'
 import { loadAgentMcpServers } from '@/utils/mcpServerConfig'
 import { mergeToolInputArguments } from '@/utils/toolInput'
+import { getErrorMessage } from '@/utils/api'
 
 function finalizeRunningToolCalls(toolCalls: ToolCall[]): void {
   for (const toolCall of toolCalls) {
@@ -67,28 +73,26 @@ function finalizeRunningToolCalls(toolCalls: ToolCall[]): void {
   }
 }
 
+const TASK_EXECUTION_STOPPED_ERROR = '__TASK_EXECUTION_STOPPED__'
+
+function isMissingRecordError(error: unknown): boolean {
+  return /query returned no rows/i.test(getErrorMessage(error))
+}
+
 /**
- * 任务执行状态管理 Store
  *
- * 功能：
- * - 执行队列管理：同时只能执行一个任务
- * - 流式事件处理：记录 AI 执行日志
- * - 日志持久化：保存到后端数据库
+ * 功能�?
  */
 
 export const useTaskExecutionStore = defineStore('taskExecution', () => {
   // ==================== State ====================
 
-  // 任务执行状态映射 (taskId -> TaskExecutionState)
   const executionStates = ref<Map<string, TaskExecutionState>>(new Map())
 
-  // 执行队列映射 (planId -> ExecutionQueue)
   const executionQueues = ref<Map<string, ExecutionQueue>>(new Map())
 
-  // 当前查看的任务 ID（用于右侧面板显示日志）
   const currentViewingTaskId = ref<string | null>(null)
 
-  // 按任务记录用户主动停止请求，避免不同计划/任务串状态
   const stopRequestedTaskIds = ref<Set<string>>(new Set())
 
   // 待持久化的日志缓冲区 (taskId -> PendingLogBuffer)
@@ -97,7 +101,6 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
   // ==================== Getters ====================
 
   /**
-   * 获取任务的执行状态
    */
   const getExecutionState = computed(() => {
     return (taskId: string): TaskExecutionState | undefined => {
@@ -106,7 +109,6 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
   })
 
   /**
-   * 判断任务是否正在执行（包括排队中）
    */
   const isTaskExecuting = computed(() => {
     return (taskId: string): boolean => {
@@ -117,7 +119,6 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
   })
 
   /**
-   * 判断任务是否正在运行（不包括排队中）
    */
   const isTaskRunning = computed(() => {
     return (taskId: string): boolean => {
@@ -126,8 +127,14 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
     }
   })
 
+  const isTaskStopped = computed(() => {
+    return (taskId: string): boolean => {
+      const state = executionStates.value.get(taskId)
+      return state?.status === 'stopped'
+    }
+  })
+
   /**
-   * 获取计划的执行队列
    */
   const getExecutionQueue = computed(() => {
     return (planId: string): ExecutionQueue | undefined => {
@@ -136,7 +143,6 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
   })
 
   /**
-   * 获取计划中正在执行的任务 ID
    */
   const getCurrentRunningTaskId = computed(() => {
     return (planId: string): string | null => {
@@ -146,7 +152,6 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
   })
 
   /**
-   * 获取任务的排队位置（0 表示正在执行，-1 表示不在队列中）
    */
   const getQueuePosition = computed(() => {
     return (taskId: string): number => {
@@ -164,7 +169,6 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
   })
 
   /**
-   * 获取任务的执行日志
    */
   const getTaskLogs = computed(() => {
     return (taskId: string): ExecutionLogEntry[] => {
@@ -176,7 +180,6 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
   // ==================== Actions ====================
 
   /**
-   * 初始化任务执行状态
    */
   function initExecutionState(taskId: string): TaskExecutionState {
     let state = executionStates.value.get(taskId)
@@ -205,6 +208,73 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
     clearPendingBuffer(taskId)
   }
 
+  async function updateTaskSafely(taskId: string, updates: UpdateTaskInput): Promise<void> {
+    const taskStore = useTaskStore()
+    if (!taskStore.tasks.some(task => task.id === taskId)) {
+      return
+    }
+
+    try {
+      await taskStore.updateTask(taskId, updates)
+    } catch (error) {
+      if (isMissingRecordError(error) || !taskStore.tasks.some(task => task.id === taskId)) {
+        console.warn('[TaskExecution] Ignoring stale task update for removed task:', taskId)
+        return
+      }
+      throw error
+    }
+  }
+
+  async function updatePlanSafely(planId: string, updates: UpdatePlanInput): Promise<void> {
+    const planStore = usePlanStore()
+    if (!planStore.plans.some(plan => plan.id === planId)) {
+      return
+    }
+
+    try {
+      await planStore.updatePlan(planId, updates)
+    } catch (error) {
+      if (isMissingRecordError(error) || !planStore.plans.some(plan => plan.id === planId)) {
+        console.warn('[TaskExecution] Ignoring stale plan update for removed plan:', planId)
+        return
+      }
+      throw error
+    }
+  }
+
+  function updateTaskTokenUsage(
+    taskId: string,
+    usage: Pick<StreamEvent, 'inputTokens' | 'outputTokens' | 'model'>
+  ): void {
+    const state = executionStates.value.get(taskId)
+    if (!state) return
+
+    const current = state.tokenUsage
+    const nextInputTokens = typeof usage.inputTokens === 'number'
+      ? usage.inputTokens
+      : current.inputTokens
+    const nextOutputTokens = typeof usage.outputTokens === 'number'
+      ? usage.outputTokens
+      : current.outputTokens
+    const nextModel = usage.model || current.model
+    const didReset = (
+      typeof usage.inputTokens === 'number'
+      || typeof usage.outputTokens === 'number'
+    ) && (
+      nextInputTokens < current.inputTokens
+      || nextOutputTokens < current.outputTokens
+      || (nextInputTokens + nextOutputTokens) < (current.inputTokens + current.outputTokens)
+    )
+
+    state.tokenUsage = {
+      inputTokens: nextInputTokens,
+      outputTokens: nextOutputTokens,
+      model: nextModel,
+      resetCount: didReset ? current.resetCount + 1 : current.resetCount,
+      lastUpdatedAt: new Date().toISOString()
+    }
+  }
+
   async function persistTaskResult(
     taskId: string,
     status: 'success' | 'failed',
@@ -230,11 +300,54 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
     const task = taskStore.tasks.find(item => item.id === taskId)
     if (!task || task.status === 'in_progress') return
 
-    await taskStore.updateTask(taskId, {
+    await updateTaskSafely(taskId, {
       status: 'in_progress',
       errorMessage: undefined,
       blockReason: undefined
     })
+  }
+
+  function getOrCreateQueue(planId: string): ExecutionQueue {
+    let queue = executionQueues.value.get(planId)
+    if (!queue) {
+      queue = createExecutionQueue(planId)
+      executionQueues.value.set(planId, queue)
+    }
+    return queue
+  }
+
+  function removeTaskFromQueue(queue: ExecutionQueue, taskId: string): void {
+    if (queue.currentTaskId === taskId) {
+      queue.currentTaskId = null
+    }
+
+    const pendingIndex = queue.pendingTaskIds.indexOf(taskId)
+    if (pendingIndex >= 0) {
+      queue.pendingTaskIds.splice(pendingIndex, 1)
+    }
+  }
+
+  async function markTaskStopped(taskId: string, options: { persistLog?: boolean } = {}): Promise<void> {
+    const state = executionStates.value.get(taskId)
+    if (!state) {
+      return
+    }
+
+    finalizeRunningToolCalls(state.toolCalls)
+    state.status = 'stopped'
+    state.completedAt = new Date().toISOString()
+    await flushPendingLogs(taskId)
+
+    if (options.persistLog !== false) {
+      const lastLog = state.logs[state.logs.length - 1]
+      if (lastLog?.type !== 'system' || lastLog.content !== '???????') {
+        await addExecutionLog({
+          taskId,
+          type: 'system',
+          content: '???????'
+        })
+      }
+    }
   }
 
   async function syncPlanRuntimeState(planId: string): Promise<void> {
@@ -244,10 +357,10 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
 
     const tasksInPlan = getPlanTasks(useTaskStore().tasks, planId)
     const queue = executionQueues.value.get(planId)
-    const nextPlanState = computePlanRuntimeUpdate(plan, tasksInPlan, queue)
+    const nextPlanState = computePlanRuntimeUpdate(plan, tasksInPlan, queue, executionStates.value)
 
     if (nextPlanState) {
-      await planStore.updatePlan(planId, nextPlanState)
+      await updatePlanSafely(planId, nextPlanState)
     }
   }
 
@@ -272,22 +385,29 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
   }
 
   /**
-   * 将任务加入执行队列
    */
   async function enqueueTask(planId: string, taskId: string): Promise<void> {
     await markTaskInProgress(taskId)
 
-    // 确保队列存在
-    let queue = executionQueues.value.get(planId)
-    if (!queue) {
-      queue = createExecutionQueue(planId)
-      executionQueues.value.set(planId, queue)
+    const queue = getOrCreateQueue(planId)
+    const state = initExecutionState(taskId)
+    const isResumingStoppedTask = state.status === 'stopped'
+
+    if (queue.currentTaskId === taskId && state.status === 'running') {
+      await syncPlanRuntimeState(planId)
+      return
     }
 
-    // 初始化执行状态
-    const state = initExecutionState(taskId)
+    if (queue.pendingTaskIds.includes(taskId) && state.status === 'queued') {
+      await syncPlanRuntimeState(planId)
+      return
+    }
 
-    // 如果当前有任务在执行，加入排队
+    removeTaskFromQueue(queue, taskId)
+    if (queue.lastInterruptedTaskId === taskId) {
+      queue.lastInterruptedTaskId = null
+    }
+
     if (queue.currentTaskId) {
       if (!queue.pendingTaskIds.includes(taskId)) {
         queue.pendingTaskIds.push(taskId)
@@ -297,29 +417,34 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
       return
     }
 
-    // 开始执行
+    if (queue.isPaused) {
+      if (!queue.pendingTaskIds.includes(taskId)) {
+        queue.pendingTaskIds.push(taskId)
+        state.status = 'queued'
+      }
+      await syncPlanRuntimeState(planId)
+      return
+    }
+
     queue.currentTaskId = taskId
     await syncPlanRuntimeState(planId)
-    await executeTask(planId, taskId)
+    await executeTask(planId, taskId, { resume: isResumingStoppedTask })
   }
 
   /**
-   * 执行任务
    */
-  async function executeTask(planId: string, taskId: string): Promise<void> {
+  async function executeTask(planId: string, taskId: string, options: { resume?: boolean } = {}): Promise<void> {
     const taskStore = useTaskStore()
     const planStore = usePlanStore()
     const projectStore = useProjectStore()
     const agentStore = useAgentStore()
 
-    // 获取任务信息
     const task = taskStore.tasks.find(t => t.id === taskId)
     if (!task) {
       console.error('[TaskExecution] Task not found:', taskId)
       return
     }
 
-    // 获取计划信息
     const plan = planStore.plans.find(p => p.id === planId)
     if (!plan) {
       console.error('[TaskExecution] Plan not found:', planId)
@@ -330,26 +455,30 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
     const project = projectStore.projects.find(p => p.id === plan.projectId)
     const workingDirectory = project?.path
 
-    // 获取最大重试次数（从计划配置读取）
     const maxRetries = plan.maxRetryCount ?? 3
 
-    // 初始化执行状态
     const state = initExecutionState(taskId)
+    const isResume = options.resume === true
+    const resumeContext = isResume ? buildResumeExecutionContext(state) : ''
     clearTaskStopRequested(taskId, stopRequestedTaskIds.value)
     state.status = 'running'
-    state.startedAt = new Date().toISOString()
-    state.accumulatedContent = ''
-    state.accumulatedThinking = ''
-    state.toolCalls = []
-    state.logs = []
+    state.startedAt = isResume ? (state.startedAt ?? new Date().toISOString()) : new Date().toISOString()
+    state.completedAt = null
 
-    resetExecutionRuntime(taskId)
+    if (!isResume) {
+      state.accumulatedContent = ''
+      state.accumulatedThinking = ''
+      state.toolCalls = []
+      state.logs = []
+      resetExecutionRuntime(taskId)
+    }
 
-    // 添加系统日志
     await addExecutionLog({
       taskId,
       type: 'system',
-      content: `开始执行任务: ${task.title}${task.retryCount > 0 ? ` (重试第 ${task.retryCount} 次)` : ''}`
+      content: isResume
+        ? `继续执行任务: ${task.title}`
+        : `??????: ${task.title}${task.retryCount > 0 ? ` (??? ${task.retryCount} ?)` : ''}`
     })
     await syncPlanRuntimeState(planId)
 
@@ -371,7 +500,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
         || agentStore.agents[0]
 
       if (!baseAgent) {
-        throw new Error('未找到可用的智能体')
+        throw new Error('?????????')
       }
 
       const agent = {
@@ -379,24 +508,21 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
         modelId: selection.modelId || baseAgent.modelId
       }
 
-      // 检查策略支持
       if (!agentExecutor.isSupported(agent)) {
-        throw new Error(`不支持的智能体类型: ${agent.type}`)
+        throw new Error(`?????????: ${agent.type}`)
       }
 
-      // 读取同计划最近任务结果，作为上下文注入
       const recentResults = await listRecentPlanResults(planId, 5)
       const planProgress = await getPlanExecutionProgress(planId)
 
-      // 构建执行提示
-      const prompt = buildExecutionPrompt(task, recentResults, planProgress)
+      const prompt = buildExecutionPrompt(task, recentResults, planProgress, resumeContext || undefined)
 
       const mcpServers = await loadAgentMcpServers(agent).catch((error) => {
         console.warn('[TaskExecution] Failed to load MCP servers:', error)
         return [] as McpServerConfig[]
       })
 
-      // 构建对话上下文
+      // 构建对话上下�?
       const context: ConversationContext = {
         sessionId: `task-${taskId}`,
         agent,
@@ -410,14 +536,17 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
         }],
         workingDirectory,
         mcpServers: mcpServers.length > 0 ? mcpServers : undefined,
-        executionMode: 'chat',
+        executionMode: 'task_execution',
         responseMode: 'stream_text'
       }
 
-      // 执行对话
       await agentExecutor.execute(context, (event: StreamEvent) => {
         handleStreamEvent(taskId, event)
       })
+
+      if (isTaskStopRequested(taskId, stopRequestedTaskIds.value)) {
+        throw new Error(TASK_EXECUTION_STOPPED_ERROR)
+      }
 
       const fatalErrorLog = [...state.logs]
         .reverse()
@@ -427,15 +556,12 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
         throw new Error(fatalErrorLog.content.trim())
       }
 
-      // 执行完成
       finalizeRunningToolCalls(state.toolCalls)
       state.status = 'completed'
       state.completedAt = new Date().toISOString()
 
-      // 检查是否包含表单请求（AI 需要用户输入）
       const formRequest = parseFormRequest(state.accumulatedContent)
       if (formRequest) {
-        // 任务需要等待用户输入
         await blockTaskForInput(taskId, formRequest)
         return
       }
@@ -448,9 +574,8 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
 
       await persistTaskResult(taskId, 'success', '任务执行完成')
 
-      // 更新任务状态为完成（状态更新失败不影响主流程）
       try {
-        await taskStore.updateTask(taskId, { status: 'completed' })
+        await updateTaskSafely(taskId, { status: 'completed' })
       } catch (statusError) {
         console.warn('[TaskExecution] Failed to update task status to completed:', statusError)
       }
@@ -458,40 +583,23 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
 
-      // 检查是否是用户主动停止
       const wasStopped = isTaskStopRequested(taskId, stopRequestedTaskIds.value)
 
       if (wasStopped) {
-        // 用户主动停止
-        finalizeRunningToolCalls(state.toolCalls)
-        state.status = 'stopped'
-        state.completedAt = new Date().toISOString()
-        await addExecutionLog({
-          taskId,
-          type: 'system',
-          content: '任务执行已停止'
-        })
-        // 更新任务状态为 pending
-        try {
-          await taskStore.updateTask(taskId, { status: 'pending' })
-        } catch (statusError) {
-          console.warn('[TaskExecution] Failed to update task status to pending:', statusError)
-        }
+        await markTaskStopped(taskId)
       } else {
-        // 执行失败 - 检查是否需要重试
         const currentRetryCount = task.retryCount + 1
 
         if (currentRetryCount < maxRetries) {
-          // 还可以重试
           await addExecutionLog({
             taskId,
             type: 'system',
-            content: `任务执行失败: ${errorMessage}，准备第 ${currentRetryCount + 1} 次重试...`
+            content: `??????: ${errorMessage}???? ${currentRetryCount + 1} ???...`
           })
 
           // 更新重试次数
           try {
-            await taskStore.updateTask(taskId, {
+            await updateTaskSafely(taskId, {
               retryCount: currentRetryCount,
               errorMessage
             })
@@ -501,21 +609,18 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
 
           await persistTaskResult(taskId, 'failed', `任务执行失败: ${errorMessage}`, errorMessage)
 
-          // 重新加入队列执行（延迟一小段时间）
           finalizeRunningToolCalls(state.toolCalls)
           state.status = 'queued'
           state.completedAt = new Date().toISOString()
           skipQueueAdvance = true
 
-          // 使用 setTimeout 延迟重试，避免立即重试
+          // 使用 setTimeout 延迟重试，避免立即重�?
           setTimeout(() => {
             void executeTask(planId, taskId)
           }, 1000)
 
-          // 不处理队列中的下一个任务，因为当前任务会重试
           return
         } else {
-          // 超过最大重试次数，标记为执行失败
           finalizeRunningToolCalls(state.toolCalls)
           state.status = 'failed'
           state.completedAt = new Date().toISOString()
@@ -526,9 +631,8 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
             content: `任务执行失败（已重试 ${currentRetryCount} 次）: ${errorMessage}`
           })
 
-          // 更新任务状态为 failed（执行失败）
           try {
-            await taskStore.updateTask(taskId, {
+            await updateTaskSafely(taskId, {
               status: 'failed',
               retryCount: currentRetryCount,
               errorMessage
@@ -542,9 +646,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
       }
     } finally {
       clearTaskStopRequested(taskId, stopRequestedTaskIds.value)
-      // 确保所有缓冲的日志都被持久化
       await flushPendingLogs(taskId)
-      // 处理队列中下一个任务
       if (!skipQueueAdvance) {
         await processNextInQueue(planId)
       }
@@ -552,17 +654,19 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
   }
 
   /**
-   * 处理流式事件
    */
   function handleStreamEvent(taskId: string, event: StreamEvent): void {
     const state = executionStates.value.get(taskId)
     if (!state) return
 
+    if (event.inputTokens !== undefined || event.outputTokens !== undefined || event.model) {
+      updateTaskTokenUsage(taskId, event)
+    }
+
     switch (event.type) {
       case 'content':
         if (event.content) {
           state.accumulatedContent += event.content
-          // 使用批量持久化机制
           addStreamLogToBuffer(taskId, 'content', event.content)
         }
         break
@@ -578,7 +682,6 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
       case 'thinking':
         if (event.content) {
           state.accumulatedThinking += event.content
-          // 使用批量持久化机制
           addStreamLogToBuffer(taskId, 'thinking', event.content)
         }
         break
@@ -677,11 +780,16 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
           })
         }
         break
+
+      case 'usage':
+      case 'done':
+      case 'system':
+      case 'file_edit':
+        break
     }
   }
 
   /**
-   * 初始化待持久化缓冲区
    */
   async function addExecutionLog(input: CreateExecutionLogInput, persist: boolean = true): Promise<void> {
     const state = executionStates.value.get(input.taskId)
@@ -707,13 +815,11 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
   }
 
   /**
-   * 清除计划的执行结果（同时清除关联任务的日志）
    */
   async function clearPlanExecutionResults(planId: string): Promise<number> {
     try {
       const deletedCount = await clearPlanExecutionResultsFromBackend(planId)
 
-      // 清除内存中相关任务的执行状态
       const taskStore = useTaskStore()
       const planTasks = taskStore.tasks.filter(t => t.planId === planId)
       for (const task of planTasks) {
@@ -725,7 +831,6 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
           state.toolCalls = []
         }
 
-        // 清除缓冲区
         clearPendingBuffer(task.id)
       }
 
@@ -737,7 +842,6 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
   }
 
   /**
-   * 提交任务输入并恢复执行
    */
   async function submitTaskInput(taskId: string, values: Record<string, unknown>): Promise<void> {
     const taskStore = useTaskStore()
@@ -748,7 +852,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
     }
 
     // 保存用户输入
-    await taskStore.updateTask(taskId, {
+    await updateTaskSafely(taskId, {
       inputResponse: values,
       status: 'pending',
       blockReason: undefined,
@@ -759,15 +863,14 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
     await addExecutionLog({
       taskId,
       type: 'system',
-      content: `用户已提交输入: ${JSON.stringify(values)}`
+      content: `???????: ${JSON.stringify(values)}`
     })
 
-    // 重新加入执行队列
     await enqueueTask(task.planId, taskId)
   }
 
   /**
-   * 跳过阻塞的任务
+   * 跳过阻塞的任�?
    */
   async function skipBlockedTask(taskId: string): Promise<void> {
     const taskStore = useTaskStore()
@@ -777,8 +880,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
       return
     }
 
-    // 更新任务状态为 pending
-    await taskStore.updateTask(taskId, {
+    await updateTaskSafely(taskId, {
       status: 'pending',
       blockReason: undefined,
       inputRequest: undefined
@@ -795,7 +897,6 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
   }
 
   /**
-   * 阻塞任务以等待用户输入
    */
   async function blockTaskForInput(taskId: string, request: AIFormRequest): Promise<void> {
     const taskStore = useTaskStore()
@@ -803,14 +904,12 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
     const task = taskStore.tasks.find(item => item.id === taskId)
     const inputRequest = buildTaskInputRequest(request)
 
-    // 更新任务状态
-    await taskStore.updateTask(taskId, {
+    await updateTaskSafely(taskId, {
       status: 'blocked',
       blockReason: 'waiting_input',
       inputRequest
     })
 
-    // 更新执行状态
     if (state) {
       state.status = 'waiting_input'
       state.completedAt = new Date().toISOString()
@@ -829,38 +928,33 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
   }
 
   /**
-   * 处理队列中下一个任务
    */
   async function processNextInQueue(planId: string): Promise<void> {
     const taskStore = useTaskStore()
     const queue = executionQueues.value.get(planId)
     if (!queue) return
 
-    // 清除当前任务
     queue.currentTaskId = null
 
-    // 自动补充依赖已满足的待办任务
+    if (queue.isPaused) {
+      await syncPlanRuntimeState(planId)
+      return
+    }
+
     await seedReadyPendingTasks(planId)
 
-    // 查找下一个可执行任务
     const nextTaskId = findNextExecutableTask(taskStore.tasks, queue.pendingTaskIds, taskStore.areDependenciesMet)
 
     if (nextTaskId) {
-      // 从队列中移除
-      const index = queue.pendingTaskIds.indexOf(nextTaskId)
-      if (index >= 0) {
-        queue.pendingTaskIds.splice(index, 1)
-      }
-
+      removeTaskFromQueue(queue, nextTaskId)
       queue.currentTaskId = nextTaskId
+      queue.lastInterruptedTaskId = null
 
-      // 更新排队状态
       const state = executionStates.value.get(nextTaskId)
       if (state && state.status === 'queued') {
         state.status = 'running'
       }
 
-      // 执行下一个任务
       await executeTask(planId, nextTaskId)
       return
     }
@@ -869,83 +963,146 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
   }
 
   /**
-   * 查找下一个可执行任务
-   * 跳过阻塞任务，检查依赖关系
    */
   /**
-   * 停止任务执行
    */
-  async function stopTaskExecution(taskId: string): Promise<void> {
-    const state = executionStates.value.get(taskId)
-    if (!state) return
+  async function stopTaskExecution(
+    taskId: string,
+    options: { pauseQueue?: boolean; autoAdvance?: boolean } = {}
+  ): Promise<void> {
+    const state = initExecutionState(taskId)
 
-    // 使用正确的 sessionId 格式调用 agentExecutor.abort
-    // 这会同时中止前端状态和通知后端停止执行
+    const taskStore = useTaskStore()
+    const task = taskStore.tasks.find(t => t.id === taskId)
+    if (!task) return
+
+    const queue = getOrCreateQueue(task.planId)
+    const pauseQueue = options.pauseQueue === true
+    const autoAdvance = options.autoAdvance !== false
+    const isCurrentTask = queue.currentTaskId === taskId
+    const isRunningTask = state.status === 'running' && isCurrentTask
+
+    if (pauseQueue) {
+      queue.isPaused = true
+      queue.lastInterruptedTaskId = taskId
+    }
+
     const sessionId = `task-${taskId}`
     markTaskStopRequested(taskId, stopRequestedTaskIds.value)
-    agentExecutor.abort(sessionId)
 
-    // 更新状态
-    state.status = 'stopped'
-    state.completedAt = new Date().toISOString()
-
-    // 先刷新缓冲区中的日志
-    await flushPendingLogs(taskId)
-
-    // 添加停止日志
-    await addExecutionLog({
-      taskId,
-      type: 'system',
-      content: '任务执行已停止'
-    })
-
-    // 更新任务状态
-    const taskStore = useTaskStore()
-    try {
-      await taskStore.updateTask(taskId, { status: 'pending' })
-    } catch (statusError) {
-      console.warn('[TaskExecution] Failed to update task status while stopping:', statusError)
+    if (isRunningTask) {
+      state.status = 'stopped'
+      state.completedAt = new Date().toISOString()
+      finalizeRunningToolCalls(state.toolCalls)
+      agentExecutor.abort(sessionId)
+      await syncPlanRuntimeState(task.planId)
+      return
     }
 
-    // 从队列中移除
-    const task = taskStore.tasks.find(t => t.id === taskId)
-    if (task) {
-      const queue = executionQueues.value.get(task.planId)
-      if (queue) {
-        if (queue.currentTaskId === taskId) {
-          queue.currentTaskId = null
-          // 处理下一个任务
-          await processNextInQueue(task.planId)
-        } else {
-          // 从排队中移除
-          const index = queue.pendingTaskIds.indexOf(taskId)
-          if (index >= 0) {
-            queue.pendingTaskIds.splice(index, 1)
-          }
-        }
+    agentExecutor.abort(sessionId)
+    removeTaskFromQueue(queue, taskId)
+    if (!pauseQueue && queue.lastInterruptedTaskId === taskId) {
+      queue.lastInterruptedTaskId = null
+    }
+    await markTaskStopped(taskId)
+
+    if (autoAdvance && !pauseQueue) {
+      await processNextInQueue(task.planId)
+      return
+    }
+
+    await syncPlanRuntimeState(task.planId)
+  }
+
+  async function pausePlanExecutionFlow(planId: string): Promise<void> {
+    const queue = getOrCreateQueue(planId)
+    queue.isPaused = true
+
+    if (queue.currentTaskId) {
+      queue.lastInterruptedTaskId = queue.currentTaskId
+      await stopTaskExecution(queue.currentTaskId, {
+        pauseQueue: true,
+        autoAdvance: false
+      })
+      return
+    }
+
+    await syncPlanRuntimeState(planId)
+  }
+
+  async function resumePlanExecutionFlow(planId: string): Promise<void> {
+    const queue = getOrCreateQueue(planId)
+    const taskStore = useTaskStore()
+    const planStore = usePlanStore()
+    queue.isPaused = false
+
+    const plan = planStore.plans.find(item => item.id === planId)
+    const resumeTaskId = queue.lastInterruptedTaskId
+      ?? plan?.currentTaskId
+      ?? taskStore.tasks
+        .filter(item => item.planId === planId && item.status === 'in_progress')
+        .sort((a, b) => a.order - b.order)[0]?.id
+
+    if (resumeTaskId) {
+      const task = taskStore.tasks.find(item => item.id === resumeTaskId)
+      const prepared = await prepareInterruptedTaskForResume(resumeTaskId)
+      if (prepared && task?.status === 'in_progress') {
+        removeTaskFromQueue(queue, resumeTaskId)
+        queue.currentTaskId = resumeTaskId
+        queue.lastInterruptedTaskId = null
+        await syncPlanRuntimeState(planId)
+        await executeTask(planId, resumeTaskId, { resume: true })
+        return
+      }
+      queue.lastInterruptedTaskId = null
+    }
+
+    const resumableTasks = taskStore.tasks
+      .filter((item) => item.planId === planId && item.status === 'in_progress')
+      .sort((a, b) => a.order - b.order)
+
+    if (resumableTasks.length > 0) {
+      for (const task of resumableTasks) {
+        await enqueueTask(planId, task.id)
+      }
+      return
+    }
+
+    await processNextInQueue(planId)
+  }
+
+  async function resumeTaskExecution(taskId: string): Promise<void> {
+    const taskStore = useTaskStore()
+    const task = taskStore.tasks.find(item => item.id === taskId)
+    if (!task) return
+
+    const queue = getOrCreateQueue(task.planId)
+    if (queue.isPaused) {
+      if (queue.lastInterruptedTaskId === taskId) {
+        await resumePlanExecutionFlow(task.planId)
+        return
       }
 
+      queue.isPaused = false
+      queue.lastInterruptedTaskId = null
       await syncPlanRuntimeState(task.planId)
     }
+
+    await enqueueTask(task.planId, taskId)
   }
 
   /**
-   * 设置当前查看的任务
    */
   function setCurrentViewingTask(taskId: string | null): void {
     currentViewingTaskId.value = taskId
   }
 
   /**
-   * 加载任务历史日志
-   * 如果任务正在执行中，不会覆盖内存中的日志（因为内存中的日志是最新的）
    */
   async function loadTaskLogs(taskId: string): Promise<void> {
     try {
-      // 检查任务是否正在执行中
       const existingState = executionStates.value.get(taskId)
       if (!canHydrateTaskLogs(existingState)) {
-        // 任务正在执行中，内存中的日志是最新的，不需要从后端加载
         return
       }
 
@@ -953,7 +1110,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
 
       const state = initExecutionState(taskId)
 
-      // 如果已有日志且数量大于等于后端返回的日志数量，不覆盖（可能内存中更新）
+      // 如果已有日志且数量大于等于后端返回的日志数量，不覆盖（可能内存中更新�?
       if (shouldKeepInMemoryLogs(existingState, rustLogs.length)) {
         return
       }
@@ -966,8 +1123,32 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
     }
   }
 
+  async function prepareInterruptedTaskForResume(taskId: string): Promise<boolean> {
+    const taskStore = useTaskStore()
+    const task = taskStore.tasks.find(item => item.id === taskId)
+    if (!task || task.status !== 'in_progress') {
+      return false
+    }
+
+    const state = initExecutionState(taskId)
+    if (state.logs.length === 0) {
+      const rustLogs = await loadTaskLogsFromBackend(taskId)
+      hydrateTaskLogs(state, rustLogs, task)
+    }
+
+    if (state.status === 'running' || state.status === 'queued' || state.status === 'idle') {
+      state.status = 'stopped'
+    }
+
+    if (!state.startedAt) {
+      state.startedAt = state.logs[0]?.timestamp ?? task.updatedAt ?? new Date().toISOString()
+    }
+    state.completedAt = null
+
+    return state.logs.length > 0
+  }
+
   /**
-   * 清除任务的执行日志
    */
   async function clearTaskLogs(taskId: string): Promise<void> {
     try {
@@ -980,15 +1161,34 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
   }
 
   /**
-   * 清除计划的执行状态
    */
   function clearPlanExecution(planId: string): void {
+    const queue = executionQueues.value.get(planId)
+    const taskIds = [
+      queue?.currentTaskId ?? null,
+      ...(queue?.pendingTaskIds ?? [])
+    ].filter((taskId): taskId is string => Boolean(taskId))
+
+    taskIds.forEach((taskId) => {
+      markTaskStopRequested(taskId, stopRequestedTaskIds.value)
+      clearPendingBuffer(taskId)
+      agentExecutor.abort(`task-${taskId}`)
+    })
+
     clearPlanExecutionRuntime(planId, executionQueues.value, executionStates.value)
+
+    if (currentViewingTaskId.value) {
+      const taskStore = useTaskStore()
+      const currentTask = taskStore.tasks.find(task => task.id === currentViewingTaskId.value)
+      if (!currentTask || currentTask.planId === planId) {
+        currentViewingTaskId.value = null
+      }
+    }
   }
 
   function clearPlansExecution(planIds: string[]): void {
     planIds.forEach((planId) => {
-      clearPlanExecutionRuntime(planId, executionQueues.value, executionStates.value)
+      clearPlanExecution(planId)
     })
 
     if (currentViewingTaskId.value) {
@@ -1010,6 +1210,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
     getExecutionState,
     isTaskExecuting,
     isTaskRunning,
+    isTaskStopped,
     getExecutionQueue,
     getCurrentRunningTaskId,
     getQueuePosition,
@@ -1020,6 +1221,9 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
     enqueueTask,
     executeTask,
     stopTaskExecution,
+    pausePlanExecutionFlow,
+    resumePlanExecutionFlow,
+    resumeTaskExecution,
     submitTaskInput,
     skipBlockedTask,
     setCurrentViewingTask,

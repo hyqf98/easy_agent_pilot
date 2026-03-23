@@ -4,25 +4,22 @@ import { invoke } from '@tauri-apps/api/core'
 import { useNotificationStore } from './notification'
 import { useAgentConfigStore } from './agentConfig'
 import { getErrorMessage } from '@/utils/api'
-// 智能体类型: cli 或 sdk
+// 智能体类�? cli �?sdk
 export type AgentType = 'cli' | 'sdk'
-// 提供商: claude 或 codex
+// 提供�? claude �?codex
 export type AgentProvider = 'claude' | 'codex'
-// 智能体状态
+// 智能体状�?
 export type AgentStatus = 'online' | 'offline' | 'error' | 'testing'
 
 /**
- * 统一智能体配置接口
- * 支持 CLI 和 SDK 两种类型的智能体配置
  */
 export interface AgentConfig {
   id: string
   name: string
-  /** 智能体类型: cli 或 sdk */
+  /** 智能体类�? cli �?sdk */
   type: AgentType
-  /** 提供商: claude 或 codex */
+  /** 提供�? claude �?codex */
   provider?: AgentProvider
-  /** CLI 可执行文件路径 (CLI 类型专用) */
   cliPath?: string
   /** API 密钥 (SDK 类型专用) */
   apiKey?: string
@@ -30,11 +27,11 @@ export interface AgentConfig {
   baseUrl?: string
   /** 模型 ID */
   modelId?: string
-  /** 是否启用自定义模型 */
+  /** 是否启用自定义模�?*/
   customModelEnabled?: boolean
-  /** 兼容旧字段: 模式 */
+  /** 兼容旧字�? 模式 */
   mode?: string
-  /** 兼容旧字段: 模型 */
+  /** 兼容旧字�? 模型 */
   model?: string
   status?: AgentStatus
   testMessage?: string
@@ -65,7 +62,7 @@ export function inferAgentProvider(
   return undefined
 }
 
-// 后端返回的原始数据结构（snake_case）
+// 后端返回的原始数据结构（snake_case�?
 interface RawAgentData {
   id: string
   name: string
@@ -91,11 +88,9 @@ interface TestConnectionResult {
   message: string
 }
 
-// 从 settings store 导入 CLI 相关类型并重新导出
 import type { CliTool, DetectionResult, CliStatus } from './settings'
 export type { CliTool, DetectionResult, CliStatus }
 
-// 将后端数据转换为前端格式
 function transformAgent(raw: RawAgentData): AgentConfig {
   return {
     id: raw.id,
@@ -118,6 +113,8 @@ function transformAgent(raw: RawAgentData): AgentConfig {
 }
 
 export const useAgentStore = defineStore('agent', () => {
+  const CLI_SCAN_CACHE_MS = 60_000
+
   // State
   const agents = ref<AgentConfig[]>([])
   const currentAgentId = ref<string | null>(null)
@@ -125,6 +122,8 @@ export const useAgentStore = defineStore('agent', () => {
   const testingAgentId = ref<string | null>(null)
   const detectedTools = ref<CliTool[]>([])
   const isScanning = ref(false)
+  let lastCliScanAt = 0
+  let cliScanPromise: Promise<void> | null = null
 
   // Getters
   const currentAgent = computed(() =>
@@ -141,11 +140,9 @@ export const useAgentStore = defineStore('agent', () => {
       agents.value.filter(a => a.provider === provider)
   })
 
-  // 未添加的可用 CLI 工具
   const availableToolsToAdd = computed(() => {
     return detectedTools.value.filter(tool => {
       if (tool.status !== 'available') return false
-      // 检查是否已存在相同路径的智能体
       return !agents.value.some(agent =>
         agent.type === 'cli' && agent.cliPath === tool.path
       )
@@ -163,7 +160,7 @@ export const useAgentStore = defineStore('agent', () => {
       console.error('Failed to load agents:', error)
       agents.value = []
       notificationStore.networkError(
-        '加载智能体列表',
+        '???????',
         getErrorMessage(error),
         loadAgents
       )
@@ -194,7 +191,6 @@ export const useAgentStore = defineStore('agent', () => {
       const newAgent = transformAgent(rawAgent)
       agents.value.push(newAgent)
 
-      // 初始化内置模型
       if (agent.provider) {
         try {
           await agentConfigStore.initBuiltinModels(newAgent.id, agent.provider)
@@ -206,7 +202,7 @@ export const useAgentStore = defineStore('agent', () => {
     } catch (error) {
       console.error('Failed to create agent:', error)
       notificationStore.databaseError(
-        '创建智能体失败',
+        '???????',
         getErrorMessage(error),
         async () => { await createAgent(agent) }
       )
@@ -241,7 +237,7 @@ export const useAgentStore = defineStore('agent', () => {
     } catch (error) {
       console.error('Failed to update agent:', error)
       notificationStore.databaseError(
-        '更新智能体失败',
+        '???????',
         getErrorMessage(error),
         () => updateAgent(id, updates)
       )
@@ -264,7 +260,7 @@ export const useAgentStore = defineStore('agent', () => {
     } catch (error) {
       console.error('Failed to delete agent:', error)
       notificationStore.databaseError(
-        '删除智能体失败',
+        '???????',
         getErrorMessage(error),
         () => deleteAgent(id)
       )
@@ -294,7 +290,7 @@ export const useAgentStore = defineStore('agent', () => {
       // 调用 Tauri 命令测试连接
       const result = await invoke<TestConnectionResult>('test_agent_connection', { id })
 
-      // 更新前端状态
+      // 更新前端状��?
       if (index !== -1) {
         const rawAgent = await invoke<RawAgentData>('update_agent', {
           id,
@@ -307,7 +303,7 @@ export const useAgentStore = defineStore('agent', () => {
 
       return result
     } catch (error) {
-      // 更新状态为 error
+      // 更新状��为 error
       if (index !== -1) {
         agents.value[index] = { ...agents.value[index], status: 'error' }
       }
@@ -317,26 +313,43 @@ export const useAgentStore = defineStore('agent', () => {
     }
   }
 
-  // 扫描系统中的 CLI 工具
-  async function scanCliTools() {
-    isScanning.value = true
-    try {
-      const result = await invoke<DetectionResult>('detect_cli_tools')
-      detectedTools.value = result.tools.map(tool => ({
-        name: tool.name,
-        path: tool.path,
-        version: tool.version,
-        status: tool.status as CliStatus
-      }))
-    } catch (error) {
-      console.error('Failed to scan CLI tools:', error)
-      detectedTools.value = []
-    } finally {
-      isScanning.value = false
+  async function scanCliTools(options: { force?: boolean } = {}) {
+    const force = options.force ?? false
+    const now = Date.now()
+
+    if (!force && detectedTools.value.length > 0 && now - lastCliScanAt < CLI_SCAN_CACHE_MS) {
+      return
     }
+
+    if (cliScanPromise) {
+      return cliScanPromise
+    }
+
+    isScanning.value = true
+    cliScanPromise = (async () => {
+      try {
+        const result = await invoke<DetectionResult>('detect_cli_tools')
+        detectedTools.value = result.tools.map(tool => ({
+          name: tool.name,
+          path: tool.path,
+          version: tool.version,
+          status: tool.status as CliStatus
+        }))
+        lastCliScanAt = Date.now()
+      } catch (error) {
+        console.error('Failed to scan CLI tools:', error)
+        detectedTools.value = []
+        lastCliScanAt = 0
+      } finally {
+        isScanning.value = false
+        cliScanPromise = null
+      }
+    })()
+
+    return cliScanPromise
   }
 
-  // 快速添加检测到的 CLI 工具
+  // 快��添加检测到�?CLI 工具
   async function addDetectedTool(tool: CliTool) {
     const provider = tool.name.toLowerCase().includes('claude') ? 'claude' as AgentProvider
                   : tool.name.toLowerCase().includes('codex') ? 'codex' as AgentProvider

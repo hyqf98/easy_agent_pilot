@@ -29,7 +29,9 @@
     "global-shortcut:allow-register",
     "global-shortcut:allow-is-registered",
     "global-shortcut:allow-unregister",
+    "process:default",
     "sql:default",
+    "updater:default",
     "mcp-bridge:default"
   ]
 }

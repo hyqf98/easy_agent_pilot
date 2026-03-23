@@ -12,6 +12,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'click', task: Task): void
   (e: 'stop', task: Task): void
+  (e: 'resume', task: Task): void
   (e: 'retry', task: Task): void
   (e: 'edit', task: Task): void
   (e: 'delete', task: Task): void
@@ -21,34 +22,36 @@ const taskExecutionStore = useTaskExecutionStore()
 const taskStore = useTaskStore()
 const { t } = useI18n()
 
-// 是否正在执行（包括排队中）
 const isExecuting = computed(() => {
   return taskExecutionStore.isTaskExecuting(props.task.id)
 })
 
-// 是否正在运行（不包括排队中）
+// 鏄惁姝ｅ湪杩愯锛堜笉鍖呮嫭鎺掗槦涓級
 const isRunning = computed(() => {
   return taskExecutionStore.isTaskRunning(props.task.id)
 })
 
-// 是否等待用户输入
+const isStopped = computed(() => {
+  return taskExecutionStore.isTaskStopped(props.task.id)
+})
+
+// 鏄惁绛夊緟鐢ㄦ埛杈撳叆
 const isWaitingInput = computed(() => {
   return props.task.status === 'blocked' && props.task.blockReason === 'waiting_input'
 })
 
-// 排队位置
+// 鎺掗槦浣嶇疆
 const queuePosition = computed(() => {
   return taskExecutionStore.getQueuePosition(props.task.id)
 })
 
-// 未满足的依赖数量
 const unmetDependenciesCount = computed(() => {
   return taskStore.getUnmetDependenciesCount(props.task.id)
 })
 
-// 执行状态文本
 const executionStatusText = computed(() => {
   if (isWaitingInput.value) return t('task.execution.waitingInput')
+  if (isStopped.value) return t('task.execution.stopped')
   if (isRunning.value) return t('task.execution.running')
   if (queuePosition.value > 0) return t('task.execution.queued', { position: queuePosition.value })
   if (unmetDependenciesCount.value > 0) {
@@ -57,71 +60,73 @@ const executionStatusText = computed(() => {
   return ''
 })
 
-// 是否显示停止按钮
+// 鏄惁鏄剧ず鍋滄鎸夐挳
 const showStopButton = computed(() => {
-  return isExecuting.value || props.task.status === 'in_progress'
+  return !isStopped.value && (isExecuting.value || props.task.status === 'in_progress')
 })
 
-// 是否显示重试按钮 - 执行失败(failed)的任务显示
+const showResumeButton = computed(() => {
+  return isStopped.value && props.task.status === 'in_progress'
+})
+
 const showRetryButton = computed(() => {
   return props.task.status === 'failed'
 })
 
-// 是否显示删除按钮 - 待办且未执行中，或已完成的任务
 const showDeleteButton = computed(() => {
   if (props.task.status === 'completed') return true
   return props.task.status === 'pending' && !isExecuting.value
 })
 
-// 是否显示编辑按钮 - 正在运行和已完成的任务不能编辑
 const showEditButton = computed(() => {
   if (isRunning.value) return false
   if (props.task.status === 'completed') return false
   return true
 })
 
-// 优先级标签
-// 优先级颜色
+// 浼樺厛绾ф爣绛?
+// 浼樺厛绾ч鑹?
 const priorityColors: Record<TaskPriority, string> = {
   low: 'gray',
   medium: 'yellow',
   high: 'red'
 }
 
-// 获取优先级标签
+// 鑾峰彇浼樺厛绾ф爣绛?
 function getPriorityLabel(priority: TaskPriority): string {
   return t(`task.priority.${priority}`)
 }
 
-// 获取优先级颜色
+// 鑾峰彇浼樺厛绾ч鑹?
 function getPriorityColor(priority: TaskPriority): string {
   return priorityColors[priority] || 'gray'
 }
 
-// 点击卡片
+// 鐐瑰嚮鍗＄墖
 function handleClick() {
   emit('click', props.task)
 }
 
-// 停止任务
 function handleStop(event: Event) {
   event.stopPropagation()
   emit('stop', props.task)
 }
 
-// 重试任务
+function handleResume(event: Event) {
+  event.stopPropagation()
+  emit('resume', props.task)
+}
+
 function handleRetry(event: Event) {
   event.stopPropagation()
   emit('retry', props.task)
 }
 
-// 编辑任务
 function handleEdit(event: Event) {
   event.stopPropagation()
   emit('edit', props.task)
 }
 
-// 删除任务
 function handleDelete(event: Event) {
   event.stopPropagation()
   emit('delete', props.task)
@@ -138,7 +143,8 @@ function handleDelete(event: Event) {
       'is-failed': task.status === 'failed',
       'is-waiting-input': isWaitingInput,
       'is-running': isRunning,
-      'is-queued': queuePosition > 0
+      'is-queued': queuePosition > 0,
+      'is-stopped': isStopped
     }"
     @click="handleClick"
   >
@@ -159,16 +165,15 @@ function handleDelete(event: Event) {
       {{ task.description }}
     </p>
 
-    <!-- 等待输入状态提示 -->
+    <!-- 绛夊緟杈撳叆鐘舵€佹彁绀?-->
     <div
       v-if="isWaitingInput"
       class="waiting-input-badge"
     >
-      <span class="badge-icon">⏸</span>
+      <span class="badge-icon">?</span>
       <span class="badge-text">{{ t('task.execution.waitingInput') }}</span>
     </div>
 
-    <!-- 执行状态指示器 -->
     <div
       v-if="executionStatusText && !isWaitingInput"
       class="execution-status"
@@ -178,7 +183,7 @@ function handleDelete(event: Event) {
       <span class="status-text">{{ executionStatusText }}</span>
     </div>
 
-    <!-- 重试信息 -->
+    <!-- 閲嶈瘯淇℃伅 -->
     <div
       v-if="task.retryCount > 0 || task.status === 'failed'"
       class="retry-info"
@@ -194,7 +199,7 @@ function handleDelete(event: Event) {
         class="error-hint"
         :title="task.errorMessage"
       >
-        ⚠️ {{ t('task.errorHint') }}
+        鈿狅笍 {{ t('task.errorHint') }}
       </span>
     </div>
 
@@ -215,7 +220,7 @@ function handleDelete(event: Event) {
       </div>
 
       <div class="card-actions">
-        <!-- 停止按钮 -->
+        <!-- 鍋滄鎸夐挳 -->
         <button
           v-if="showStopButton"
           class="btn-action btn-stop"
@@ -240,7 +245,25 @@ function handleDelete(event: Event) {
           </svg>
         </button>
 
-        <!-- 重试按钮 -->
+        <button
+          v-if="showResumeButton"
+          class="btn-action btn-resume"
+          :title="t('task.actions.resume')"
+          @click="handleResume"
+        >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <polygon points="5 3 19 12 5 21 5 3" />
+          </svg>
+        </button>
+
+        <!-- 閲嶈瘯鎸夐挳 -->
         <button
           v-if="showRetryButton"
           class="btn-action btn-retry"
@@ -260,7 +283,6 @@ function handleDelete(event: Event) {
           </svg>
         </button>
 
-        <!-- 编辑按钮 -->
         <button
           v-if="showEditButton"
           class="btn-action btn-edit"
@@ -280,7 +302,6 @@ function handleDelete(event: Event) {
           </svg>
         </button>
 
-        <!-- 删除按钮 -->
         <button
           v-if="showDeleteButton"
           class="btn-action btn-delete"
@@ -313,7 +334,7 @@ function handleDelete(event: Event) {
   background-color: var(--color-surface, #fff);
   border-radius: var(--radius-md, 8px);
   border: 1px solid var(--color-border-light, #f1f5f9);
-  /* 移除 cursor: pointer，让父元素 .drag-item 的 cursor: grab 生效 */
+  /* 绉婚櫎 cursor: pointer锛岃鐖跺厓绱?.drag-item 鐨?cursor: grab 鐢熸晥 */
   transition: all var(--transition-fast, 150ms) var(--easing-default);
   user-select: none;
 }
@@ -344,7 +365,6 @@ function handleDelete(event: Event) {
   background-color: #fffbeb;
 }
 
-/* 正在执行的任务 - 淡绿色背景 + 进度条动画 */
 .kanban-card.is-running {
   position: relative;
   border-color: #86efac;
@@ -352,7 +372,7 @@ function handleDelete(event: Event) {
   overflow: hidden;
 }
 
-/* 进度条动画层 */
+/* 杩涘害鏉″姩鐢诲眰 */
 .kanban-card.is-running::before {
   content: '';
   position: absolute;
@@ -382,10 +402,14 @@ function handleDelete(event: Event) {
   }
 }
 
-/* 排队中的任务 - 淡黄色背景 */
 .kanban-card.is-queued {
   border-color: #fde68a;
   background-color: #fffbeb;
+}
+
+.kanban-card.is-stopped {
+  border-color: #cbd5e1;
+  background-color: #f8fafc;
 }
 
 .execution-status {
@@ -518,7 +542,7 @@ function handleDelete(event: Event) {
 }
 
 .deps::before {
-  content: '🔗';
+  content: '馃敆';
   font-size: 0.625rem;
 }
 
@@ -557,6 +581,11 @@ function handleDelete(event: Event) {
 .btn-retry:hover {
   background-color: var(--color-primary-light, #dbeafe);
   color: var(--color-primary, #3b82f6);
+}
+
+.btn-resume:hover {
+  background-color: #dcfce7;
+  color: #15803d;
 }
 
 .btn-edit:hover {

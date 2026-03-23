@@ -505,7 +505,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
 
             let mut reader = tokio::io::BufReader::new(stdout);
             let mut full_output = String::new();
-            if let Err(_) = reader.read_to_string(&mut full_output).await {
+            if reader.read_to_string(&mut full_output).await.is_err() {
                 log_error!("[stdout] 读取失败");
                 return StdoutReadOutcome::none();
             }
@@ -581,7 +581,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
         let stderr_handle = tokio::spawn(async move {
             let mut reader = tokio::io::BufReader::new(stderr);
             let mut error_output = String::new();
-            if let Err(_) = reader.read_to_string(&mut error_output).await {
+            if reader.read_to_string(&mut error_output).await.is_err() {
                 return StderrReadOutcome::none();
             }
 

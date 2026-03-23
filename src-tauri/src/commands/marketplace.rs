@@ -317,12 +317,10 @@ pub async fn test_and_update_market_source(id: String) -> Result<TestConnectionR
             .prepare("SELECT type, url_or_path FROM market_sources WHERE id = ?1")
             .map_err(|e| e.to_string())?;
 
-        let source_info = stmt
-            .query_row(params![&id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })
-            .map_err(|e| e.to_string())?;
-        source_info
+        stmt.query_row(params![&id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| e.to_string())?
     }; // conn and stmt are dropped here
 
     // Test connection (async)

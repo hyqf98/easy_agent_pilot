@@ -8,10 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 // ============================================================================
-// MCP 配置相关结构和命令
 // ============================================================================
 
-/// SDK 智能体 MCP 配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentMcpConfig {
     pub id: String,
@@ -29,7 +27,6 @@ pub struct AgentMcpConfig {
     pub updated_at: String,
 }
 
-/// 创建 MCP 配置输入
 #[derive(Debug, Deserialize)]
 pub struct CreateAgentMcpConfigInput {
     pub agent_id: String,
@@ -43,7 +40,6 @@ pub struct CreateAgentMcpConfigInput {
     pub scope: Option<String>,
 }
 
-/// 更新 MCP 配置输入
 #[derive(Debug, Deserialize)]
 pub struct UpdateAgentMcpConfigInput {
     pub name: Option<String>,
@@ -112,7 +108,7 @@ const MODELS_SELECT_BY_ID_SQL: &str = r#"
 "#;
 
 const CODEX_BUILTIN_MODELS: &[BuiltinModelDef] = &[
-    ("", "使用默认模型", 0, true, None),
+    ("", "\u{4F7F}\u{7528}\u{9ED8}\u{8BA4}\u{6A21}\u{578B}", 0, true, Some(400000)),
     ("gpt-5.4", "GPT-5.4", 1, false, Some(400000)),
     ("gpt-5.3-codex", "GPT-5.3 Codex", 2, false, Some(400000)),
     ("gpt-5.2", "GPT-5.2", 3, false, Some(400000)),
@@ -121,7 +117,7 @@ const CODEX_BUILTIN_MODELS: &[BuiltinModelDef] = &[
 ];
 
 const CLAUDE_BUILTIN_MODELS: &[BuiltinModelDef] = &[
-    ("", "使用默认模型", 0, true, None),
+    ("", "\u{4F7F}\u{7528}\u{9ED8}\u{8BA4}\u{6A21}\u{578B}", 0, true, Some(200000)),
     ("claude-opus-4-6", "Claude Opus 4.6", 1, false, Some(200000)),
     (
         "claude-sonnet-4-6",
@@ -373,7 +369,7 @@ fn sync_builtin_models(
     let existing_builtin_map = {
         let mut stmt = tx
             .prepare(
-                "SELECT id, model_id
+                "SELECT id, model_id, display_name, is_default, enabled, context_window
                  FROM agent_models
                  WHERE agent_id = ?1 AND is_builtin = 1",
             )
@@ -381,7 +377,16 @@ fn sync_builtin_models(
 
         let rows = stmt
             .query_map([agent_id], |row| {
-                Ok((row.get::<_, String>(1)?, row.get::<_, String>(0)?))
+                Ok((
+                    row.get::<_, String>(1)?,
+                    (
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(2)?,
+                        bool_from_db(row.get::<_, Option<i32>>(3)?, false),
+                        bool_from_db(row.get::<_, Option<i32>>(4)?, true),
+                        row.get::<_, Option<i32>>(5)?,
+                    ),
+                ))
             })
             .map_err(|e| e.to_string())?;
 
@@ -390,21 +395,35 @@ fn sync_builtin_models(
     };
 
     for (model_id, display_name, sort_order, is_default, context_window) in models {
-        if let Some(existing_id) = existing_builtin_map.get(*model_id) {
+        if let Some((
+            existing_id,
+            existing_display_name,
+            existing_is_default,
+            existing_enabled,
+            existing_context_window,
+        )) = existing_builtin_map.get(*model_id)
+        {
+            let next_display_name = if existing_display_name.trim().is_empty() {
+                *display_name
+            } else {
+                existing_display_name.as_str()
+            };
+
             tx.execute(
                 "UPDATE agent_models
                  SET display_name = ?1,
                      is_default = ?2,
                      sort_order = ?3,
-                     enabled = 1,
-                     context_window = ?4,
-                     updated_at = ?5
-                 WHERE id = ?6",
+                     enabled = ?4,
+                     context_window = ?5,
+                     updated_at = ?6
+                   WHERE id = ?7",
                 rusqlite::params![
-                    display_name,
-                    if *is_default { 1 } else { 0 },
+                    next_display_name,
+                    if *existing_is_default { 1 } else { 0 },
                     sort_order,
-                    context_window,
+                    if *existing_enabled { 1 } else { 0 },
+                    (*existing_context_window).or(*context_window),
                     now,
                     existing_id
                 ],
@@ -449,7 +468,6 @@ fn list_models_for_agent(
     Ok(models)
 }
 
-/// 获取智能体的所有 MCP 配置
 #[tauri::command]
 pub fn list_agent_mcp_configs(agent_id: String) -> Result<Vec<AgentMcpConfig>, String> {
     let conn = open_conn()?;
@@ -461,7 +479,6 @@ pub fn list_agent_mcp_configs(agent_id: String) -> Result<Vec<AgentMcpConfig>, S
     )
 }
 
-/// 创建 MCP 配置
 #[tauri::command]
 pub fn create_agent_mcp_config(input: CreateAgentMcpConfigInput) -> Result<AgentMcpConfig, String> {
     let conn = open_conn()?;
@@ -509,7 +526,6 @@ pub fn create_agent_mcp_config(input: CreateAgentMcpConfigInput) -> Result<Agent
     })
 }
 
-/// 更新 MCP 配置
 #[tauri::command]
 pub fn update_agent_mcp_config(
     id: String,
@@ -557,12 +573,10 @@ pub fn update_agent_mcp_config(
     get_mcp_config_by_id(&conn, &id)
 }
 
-/// 获取单个 MCP 配置
 fn get_mcp_config_by_id(conn: &Connection, id: &str) -> Result<AgentMcpConfig, String> {
     fetch_config_by_id(conn, MCP_SELECT_BY_ID_SQL, id, map_agent_mcp_config_row)
 }
 
-/// 删除 MCP 配置
 #[tauri::command]
 pub fn delete_agent_mcp_config(id: String) -> Result<(), String> {
     let conn = open_conn()?;
@@ -574,10 +588,8 @@ pub fn delete_agent_mcp_config(id: String) -> Result<(), String> {
 }
 
 // ============================================================================
-// Skills 配置相关结构和命令
 // ============================================================================
 
-/// SDK 智能体 Skills 配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSkillsConfig {
     pub id: String,
@@ -593,7 +605,6 @@ pub struct AgentSkillsConfig {
     pub updated_at: String,
 }
 
-/// 创建 Skills 配置输入
 #[derive(Debug, Deserialize)]
 pub struct CreateAgentSkillsConfigInput {
     pub agent_id: String,
@@ -605,7 +616,6 @@ pub struct CreateAgentSkillsConfigInput {
     pub assets_path: Option<String>,
 }
 
-/// 更新 Skills 配置输入
 #[derive(Debug, Deserialize)]
 pub struct UpdateAgentSkillsConfigInput {
     pub name: Option<String>,
@@ -617,7 +627,6 @@ pub struct UpdateAgentSkillsConfigInput {
     pub enabled: Option<bool>,
 }
 
-/// 获取智能体的所有 Skills 配置
 #[tauri::command]
 pub fn list_agent_skills_configs(agent_id: String) -> Result<Vec<AgentSkillsConfig>, String> {
     let conn = open_conn()?;
@@ -629,7 +638,6 @@ pub fn list_agent_skills_configs(agent_id: String) -> Result<Vec<AgentSkillsConf
     )
 }
 
-/// 创建 Skills 配置
 #[tauri::command]
 pub fn create_agent_skills_config(
     input: CreateAgentSkillsConfigInput,
@@ -673,7 +681,6 @@ pub fn create_agent_skills_config(
     })
 }
 
-/// 更新 Skills 配置
 #[tauri::command]
 pub fn update_agent_skills_config(
     id: String,
@@ -718,7 +725,6 @@ pub fn update_agent_skills_config(
     get_skills_config_by_id(&conn, &id)
 }
 
-/// 获取单个 Skills 配置
 fn get_skills_config_by_id(conn: &Connection, id: &str) -> Result<AgentSkillsConfig, String> {
     fetch_config_by_id(
         conn,
@@ -728,7 +734,6 @@ fn get_skills_config_by_id(conn: &Connection, id: &str) -> Result<AgentSkillsCon
     )
 }
 
-/// 删除 Skills 配置
 #[tauri::command]
 pub fn delete_agent_skills_config(id: String) -> Result<(), String> {
     let conn = open_conn()?;
@@ -740,10 +745,8 @@ pub fn delete_agent_skills_config(id: String) -> Result<(), String> {
 }
 
 // ============================================================================
-// Plugins 配置相关结构和命令
 // ============================================================================
 
-/// SDK 智能体 Plugins 配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentPluginsConfig {
     pub id: String,
@@ -757,7 +760,6 @@ pub struct AgentPluginsConfig {
     pub updated_at: String,
 }
 
-/// 创建 Plugins 配置输入
 #[derive(Debug, Deserialize)]
 pub struct CreateAgentPluginsConfigInput {
     pub agent_id: String,
@@ -767,7 +769,6 @@ pub struct CreateAgentPluginsConfigInput {
     pub plugin_path: String,
 }
 
-/// 更新 Plugins 配置输入
 #[derive(Debug, Deserialize)]
 pub struct UpdateAgentPluginsConfigInput {
     pub name: Option<String>,
@@ -777,7 +778,6 @@ pub struct UpdateAgentPluginsConfigInput {
     pub enabled: Option<bool>,
 }
 
-/// 获取智能体的所有 Plugins 配置
 #[tauri::command]
 pub fn list_agent_plugins_configs(agent_id: String) -> Result<Vec<AgentPluginsConfig>, String> {
     let conn = open_conn()?;
@@ -789,7 +789,6 @@ pub fn list_agent_plugins_configs(agent_id: String) -> Result<Vec<AgentPluginsCo
     )
 }
 
-/// 创建 Plugins 配置
 #[tauri::command]
 pub fn create_agent_plugins_config(
     input: CreateAgentPluginsConfigInput,
@@ -829,7 +828,6 @@ pub fn create_agent_plugins_config(
     })
 }
 
-/// 更新 Plugins 配置
 #[tauri::command]
 pub fn update_agent_plugins_config(
     id: String,
@@ -869,7 +867,6 @@ pub fn update_agent_plugins_config(
     get_plugins_config_by_id(&conn, &id)
 }
 
-/// 获取单个 Plugins 配置
 fn get_plugins_config_by_id(conn: &Connection, id: &str) -> Result<AgentPluginsConfig, String> {
     fetch_config_by_id(
         conn,
@@ -879,7 +876,6 @@ fn get_plugins_config_by_id(conn: &Connection, id: &str) -> Result<AgentPluginsC
     )
 }
 
-/// 删除 Plugins 配置
 #[tauri::command]
 pub fn delete_agent_plugins_config(id: String) -> Result<(), String> {
     let conn = open_conn()?;
@@ -891,10 +887,8 @@ pub fn delete_agent_plugins_config(id: String) -> Result<(), String> {
 }
 
 // ============================================================================
-// 模型配置相关结构和命令
 // ============================================================================
 
-/// SDK 智能体模型配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentModelConfig {
     pub id: String,
@@ -910,7 +904,6 @@ pub struct AgentModelConfig {
     pub updated_at: String,
 }
 
-/// 创建模型配置输入
 #[derive(Debug, Deserialize)]
 pub struct CreateAgentModelInput {
     pub agent_id: String,
@@ -922,7 +915,6 @@ pub struct CreateAgentModelInput {
     pub context_window: Option<i32>,
 }
 
-/// 更新模型配置输入
 #[derive(Debug, Deserialize)]
 pub struct UpdateAgentModelInput {
     pub model_id: Option<String>,
@@ -933,14 +925,13 @@ pub struct UpdateAgentModelInput {
     pub context_window: Option<i32>,
 }
 
-/// 批量创建内置模型输入
+/// 鎵归噺鍒涘缓鍐呯疆妯″��杈撳叆
 #[derive(Debug, Deserialize)]
 pub struct CreateBuiltinModelsInput {
     pub agent_id: String,
     pub provider: String,
 }
 
-/// 获取智能体的所有模型配置
 #[tauri::command]
 pub fn list_agent_models(agent_id: String) -> Result<Vec<AgentModelConfig>, String> {
     let mut conn = open_conn()?;
@@ -954,7 +945,6 @@ pub fn list_agent_models(agent_id: String) -> Result<Vec<AgentModelConfig>, Stri
     list_models_for_agent(&conn, &agent_id)
 }
 
-/// 创建模型配置
 #[tauri::command]
 pub fn create_agent_model(input: CreateAgentModelInput) -> Result<AgentModelConfig, String> {
     let conn = open_conn()?;
@@ -966,7 +956,7 @@ pub fn create_agent_model(input: CreateAgentModelInput) -> Result<AgentModelConf
     let sort_order = input.sort_order.unwrap_or(0);
     let context_window = input.context_window;
 
-    // 如果设置为默认，需要先清除其他默认设置
+    // 濡傛灉璁剧疆涓洪粯璁わ紝闇€瑕佸厛娓呴櫎鍏朵粬榛樿璁剧�?
     if is_default {
         clear_default_models(&conn, &input.agent_id)?;
     }
@@ -1005,7 +995,7 @@ pub fn create_agent_model(input: CreateAgentModelInput) -> Result<AgentModelConf
     })
 }
 
-/// 批量创建内置模型
+/// 鎵归噺鍒涘缓鍐呯疆妯″��?
 #[tauri::command]
 pub fn create_builtin_models(
     input: CreateBuiltinModelsInput,
@@ -1027,7 +1017,7 @@ pub fn create_builtin_models(
     list_models_for_agent(&conn, &input.agent_id)
 }
 
-/// 更新模型配置
+/// 鏇存柊妯″��閰嶇疆
 #[tauri::command]
 pub fn update_agent_model(
     id: String,
@@ -1037,7 +1027,7 @@ pub fn update_agent_model(
 
     let now = now_rfc3339();
 
-    // 如果设置为默认，需要先清除其他默认设置
+    // 濡傛灉璁剧疆涓洪粯璁わ紝闇€瑕佸厛娓呴櫎鍏朵粬榛樿璁剧�?
     if input.is_default.unwrap_or(false) {
         clear_default_models(&conn, &get_model_agent_id(&conn, &id)?)?;
     }
@@ -1082,7 +1072,6 @@ pub fn update_agent_model(
     get_model_config_by_id(&conn, &id)
 }
 
-/// 获取单个模型配置
 fn get_model_config_by_id(conn: &Connection, id: &str) -> Result<AgentModelConfig, String> {
     fetch_config_by_id(
         conn,
@@ -1092,7 +1081,7 @@ fn get_model_config_by_id(conn: &Connection, id: &str) -> Result<AgentModelConfi
     )
 }
 
-/// 删除模型配置
+/// 鍒犻櫎妯″��閰嶇疆
 #[tauri::command]
 pub fn delete_agent_model(id: String) -> Result<(), String> {
     let conn = open_conn()?;
@@ -1103,7 +1092,6 @@ pub fn delete_agent_model(id: String) -> Result<(), String> {
     Ok(())
 }
 
-/// 重置内置模型（删除所有模型并重新创建内置模型）
 #[allow(dead_code)]
 #[tauri::command]
 pub fn reset_builtin_models(
@@ -1113,10 +1101,9 @@ pub fn reset_builtin_models(
 
     let now = now_rfc3339();
 
-    // 使用事务：先删除所有模型，再创建内置模型
     let tx = conn.transaction().map_err(|e| e.to_string())?;
 
-    // 删除该智能体的所有模型
+    // 鍒犻櫎璇ユ櫤鑳戒綋鐨勬墍鏈夋ā�?
     tx.execute(
         "DELETE FROM agent_models WHERE agent_id = ?1",
         [&input.agent_id],

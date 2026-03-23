@@ -15,6 +15,8 @@ export interface AppSettings {
   editorWordWrap: boolean
   enableDebugMode: boolean
   logLevel: 'debug' | 'info' | 'warn' | 'error'
+  autoCheckAppUpdate: boolean
+  appUpdateLastCheckedAt: string | null
   compressionStrategy: 'simple' | 'smart' | 'summary'
   compressionThreshold: number
   autoCompressionEnabled: boolean
@@ -37,6 +39,8 @@ export const defaultSettings: AppSettings = {
   editorWordWrap: true,
   enableDebugMode: false,
   logLevel: 'info',
+  autoCheckAppUpdate: true,
+  appUpdateLastCheckedAt: null,
   compressionStrategy: 'summary',
   compressionThreshold: 80,
   autoCompressionEnabled: true
@@ -87,6 +91,16 @@ function stringCodec(
   }
 }
 
+function nullableStringCodec(
+  key: keyof AppSettings
+): SettingsFieldCodec {
+  return {
+    key,
+    parse: (raw) => (raw && raw !== 'null' ? raw : null),
+    stringify: (value) => (value == null ? 'null' : String(value))
+  }
+}
+
 function enumCodec(
   key: keyof AppSettings,
   allowedValues: readonly SettingsValue[],
@@ -114,6 +128,8 @@ export const settingsFieldCodecs: SettingsFieldCodec[] = [
   booleanCodec('editorWordWrap'),
   booleanCodec('enableDebugMode'),
   enumCodec('logLevel', ['debug', 'info', 'warn', 'error'] as const, defaultSettings.logLevel),
+  booleanCodec('autoCheckAppUpdate'),
+  nullableStringCodec('appUpdateLastCheckedAt'),
   enumCodec('compressionStrategy', ['simple', 'smart', 'summary'] as const, defaultSettings.compressionStrategy),
   integerCodec('compressionThreshold', defaultSettings.compressionThreshold),
   booleanCodec('autoCompressionEnabled')

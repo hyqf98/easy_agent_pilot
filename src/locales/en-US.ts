@@ -28,7 +28,7 @@ export default {
       terminalIntegrationDesc: 'Execute commands directly in the application'
     },
     shortcuts: {
-      createProject: 'Press ⌘ + N to quickly create a project'
+      createProject: 'Press ? + N to quickly create a project'
     }
   },
 
@@ -348,6 +348,7 @@ export default {
       integration: 'Agent Integration',
       mcp: 'MCP Servers',
       marketplace: 'Marketplace',
+      appUpdate: 'Software Update',
       sessions: 'Session Management',
       skills: 'Skills',
       plugins: 'Plugins',
@@ -421,6 +422,38 @@ export default {
       compressionStrategySummaryDesc: 'Use AI to generate conversation summary, preserving key information',
       compressionThreshold: 'Compression Threshold',
       compressionThresholdDesc: 'Trigger compression when token usage reaches this threshold'
+    },
+    appUpdate: {
+      title: 'Software Update',
+      summaryTitle: 'Update Summary',
+      statusTitle: 'Update Status',
+      releaseNotesTitle: 'Release Notes',
+      description: 'Use GitHub Release updater metadata to detect, download and install new desktop versions.',
+      currentVersion: 'Current Version',
+      newVersion: 'New Version',
+      latestStatus: 'Latest Status',
+      lastCheckedAt: 'Last Checked',
+      publishedAt: 'Published At',
+      downloadedBytes: 'Downloaded Bytes',
+      totalBytes: 'Total Bytes',
+      neverChecked: 'Never checked',
+      autoCheck: 'Check for updates on startup',
+      autoCheckDesc: 'After the main window launches, silently check GitHub Release metadata in the background.',
+      checkNow: 'Check for Updates',
+      installNow: 'Install Update',
+      noReleaseNotes: 'No release notes available.',
+      checkFailed: 'Unable to check for updates right now.',
+      availableDescription: 'Current version v{current}, latest version v{latest} is ready to install.',
+      upToDateDescription: 'You are already using the latest version v{version}.',
+      statusIdle: 'Ready to check',
+      statusChecking: 'Checking for updates...',
+      statusUpToDate: 'Already up to date',
+      statusAvailable: 'Update available: v{version}',
+      statusDownloading: 'Downloading update package...',
+      statusInstalling: 'Installing update...',
+      statusCompleted: 'Update installed',
+      statusError: 'Update failed',
+      statusUnsupported: 'Updater unavailable in current environment'
     },
     cli: {
       title: 'CLI Path Settings',
@@ -1097,6 +1130,8 @@ export default {
       title: 'Log Management',
       description: 'Runtime logs are written to local files for diagnosing Claude CLI, Codex CLI, SDK, and startup issues.',
       refresh: 'Refresh',
+      startListening: 'Start Listening',
+      pauseListening: 'Pause Listening',
       clear: 'Clear Logs',
       hideFiles: 'Hide Files',
       showFiles: 'Show Files',
@@ -1374,11 +1409,11 @@ export default {
 
   // Language names
   languages: {
-    zhCN: '简体中文',
+    zhCN: '????',
     enUS: 'English'
   },
 
-  // 文件引用
+  // 鏂囦欢寮曠敤
   fileMention: {
     searchFiles: 'Search files...',
     noFiles: 'No files found',
@@ -1554,11 +1589,15 @@ export default {
     actions: {
       executeAll: 'Run all',
       startExecution: 'Resume',
+      pauseExecutionFlow: 'Global stop',
+      resumeExecutionFlow: 'Continue',
       addTask: 'Add Task'
     },
     tooltips: {
       executeAll: 'Run all pending tasks',
       startExecution: 'Resume in-progress tasks',
+      pauseExecutionFlow: 'Stop the current auto-run task and pause queue automation',
+      resumeExecutionFlow: 'Resume the paused task flow and continue auto execution',
       addTask: 'Add a new task to pending list'
     },
     emptyColumn: 'No tasks'
@@ -1634,6 +1673,7 @@ export default {
       waitingInput: 'Waiting for input',
       running: 'Running...',
       queued: 'Queued #{position}',
+      stopped: 'Stopped',
       waitingDependencies: 'Waiting for dependencies ({count})'
     },
     retryCount: 'Retry: {current}/{max}',
@@ -1641,6 +1681,7 @@ export default {
     dependenciesCount: '{count} deps',
     actions: {
       stop: 'Stop execution',
+      resume: 'Continue',
       retry: 'Retry',
       edit: 'Edit',
       delete: 'Delete'

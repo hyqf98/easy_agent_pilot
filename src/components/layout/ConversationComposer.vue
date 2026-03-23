@@ -69,6 +69,7 @@ const {
   handleMessageFormSubmit,
   handleOpenCompress,
   handlePaste,
+  resendMessage,
   handleSlashCommandSelect,
   inputPlaceholder,
   inputText,
@@ -152,6 +153,7 @@ onUnmounted(() => {
 defineExpose({
   focusInput,
   handleMessageFormSubmit,
+  resendMessage,
   openCompressionDialog: handleOpenCompress
 })
 </script>
@@ -224,7 +226,7 @@ defineExpose({
             name="archive"
             :size="12"
           />
-          <span>{{ isCompressing ? '压缩中' : '压缩' }}</span>
+          <span>{{ isCompressing ? '???' : '??' }}</span>
         </button>
 
         <div
@@ -316,7 +318,7 @@ defineExpose({
             name="image-up"
             :size="12"
           />
-          <span>{{ isUploadingImages ? '上传中…' : '图片' }}</span>
+          <span>{{ isUploadingImages ? '???...' : '??' }}</span>
         </button>
       </div>
     </div>
@@ -372,7 +374,7 @@ defineExpose({
             </Transition>
           </div>
 
-          <!-- 模型选择器 - 移到智能体旁边 -->
+          <!-- 模型选择�?- 移到智能体旁�?-->
           <div
             v-if="currentAgent"
             ref="modelDropdownRef"
@@ -425,7 +427,7 @@ defineExpose({
               name="image-up"
               :size="12"
             />
-            <span>{{ isUploadingImages ? '上传中…' : '图片' }}</span>
+            <span>{{ isUploadingImages ? '???...' : '??' }}</span>
           </button>
 
           <div
@@ -436,7 +438,7 @@ defineExpose({
               name="clock-3"
               :size="12"
             />
-            <span>待发送 {{ queuedMessages.length }}</span>
+            <span>??? {{ queuedMessages.length }}</span>
           </div>
         </div>
       </div>
@@ -490,11 +492,11 @@ defineExpose({
           </div>
           <div class="conversation-composer__queue-body">
             <div class="conversation-composer__queue-top">
-              <span>{{ draft.status === 'failed' ? '失败' : '待发送' }}</span>
-              <span v-if="draft.attachments.length > 0">{{ draft.attachments.length }} 图</span>
+              <span>{{ draft.status === 'failed' ? '??' : '???' }}</span>
+              <span v-if="draft.attachments.length > 0">{{ draft.attachments.length }} ?</span>
             </div>
             <div class="conversation-composer__queue-preview">
-              {{ buildQueuedMessagePreview(draft) || '空消息' }}
+              {{ buildQueuedMessagePreview(draft) || '???' }}
             </div>
             <div
               v-if="draft.status === 'failed' && draft.errorMessage"
@@ -559,13 +561,13 @@ defineExpose({
             v-else
             class="conversation-composer__placeholder"
           >
-            {{ inputPlaceholder || '输入消息，按 Enter 发送' }}
+            {{ inputPlaceholder || '?????? Enter ??' }}
           </span>
           <span
             v-if="isMainPanel && !inputText"
             class="conversation-composer__hint"
           >
-            按 Enter 发送，Shift+Enter 换行
+            ? Enter ???Shift+Enter ??
           </span>
         </div>
 
@@ -658,7 +660,7 @@ defineExpose({
 }
 
 .conversation-composer--drag-over::after {
-  content: '拖拽文件到这里即可插入路径引用';
+  content: '???????????????';
   position: absolute;
   inset: 10px;
   display: flex;
@@ -1058,7 +1060,6 @@ defineExpose({
   box-shadow: none;
 }
 
-/* 移除编辑器激活样式 */
 .conversation-composer--main .conversation-composer__editor-shell:focus-within {
   border-color: var(--color-border);
   box-shadow: none;
@@ -1098,7 +1099,6 @@ defineExpose({
   -webkit-text-fill-color: transparent;
 }
 
-/* 隐藏 textarea 的文本选择背景 */
 .conversation-composer__textarea::selection {
   background: transparent;
   color: transparent;
@@ -1263,7 +1263,6 @@ defineExpose({
   transform: translateY(-6px);
 }
 
-/* 暗色模式优化 */
 :global([data-theme='dark']) .conversation-composer--main,
 :global(.dark) .conversation-composer--main {
   background: var(--color-bg-primary);

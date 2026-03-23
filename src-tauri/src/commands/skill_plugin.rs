@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Skill 文件内容
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,7 +87,7 @@ pub struct PluginDetails {
 }
 
 /// 根据文件扩展名获取文件类型
-fn get_file_type(path: &PathBuf) -> String {
+fn get_file_type(path: &Path) -> String {
     let extension = path
         .extension()
         .and_then(|e| e.to_str())
@@ -130,7 +130,7 @@ fn slugify_name(value: &str, fallback: &str) -> String {
     }
 }
 
-fn unique_markdown_path(base_dir: &PathBuf, desired_stem: &str) -> PathBuf {
+fn unique_markdown_path(base_dir: &Path, desired_stem: &str) -> PathBuf {
     let safe_stem = slugify_name(desired_stem, "reference");
     let mut candidate = base_dir.join(format!("{}.md", safe_stem));
     let mut index = 2;
@@ -379,32 +379,30 @@ pub fn list_skill_references(skill_path: String) -> Result<Vec<ReferenceFile>, S
 
     let mut files = Vec::new();
 
-    fn scan_directory(dir: &PathBuf, files: &mut Vec<ReferenceFile>) -> Result<(), String> {
+    fn scan_directory(dir: &Path, files: &mut Vec<ReferenceFile>) -> Result<(), String> {
         let entries = fs::read_dir(dir).map_err(|e| format!("Failed to read directory: {}", e))?;
 
-        for entry in entries {
-            if let Ok(entry) = entry {
-                let path = entry.path();
+        for entry in entries.flatten() {
+            let path = entry.path();
 
-                if path.is_dir() {
-                    // 递归扫描子目录
-                    scan_directory(&path, files)?;
-                } else if path.is_file() {
-                    let name = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
+            if path.is_dir() {
+                // 递归扫描子目录
+                scan_directory(&path, files)?;
+            } else if path.is_file() {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
 
-                    let metadata = fs::metadata(&path).ok();
-                    let size = metadata.map(|m| m.len()).unwrap_or(0);
+                let metadata = fs::metadata(&path).ok();
+                let size = metadata.map(|m| m.len()).unwrap_or(0);
 
-                    files.push(ReferenceFile {
-                        name,
-                        path: path.to_string_lossy().to_string(),
-                        file_type: get_file_type(&path),
-                        size,
-                    });
-                }
+                files.push(ReferenceFile {
+                    name,
+                    path: path.to_string_lossy().to_string(),
+                    file_type: get_file_type(&path),
+                    size,
+                });
             }
         }
 
@@ -521,7 +519,7 @@ fn parse_skill_description(skill_md_path: &PathBuf) -> Option<String> {
     None
 }
 
-fn first_existing_description_path(base_path: &PathBuf, file_names: &[&str]) -> Option<PathBuf> {
+fn first_existing_description_path(base_path: &Path, file_names: &[&str]) -> Option<PathBuf> {
     file_names
         .iter()
         .map(|name| base_path.join(name))
@@ -529,7 +527,7 @@ fn first_existing_description_path(base_path: &PathBuf, file_names: &[&str]) -> 
 }
 
 fn collect_internal_items(
-    base_dir: &PathBuf,
+    base_dir: &Path,
     item_type: &str,
     description_files: &[&str],
 ) -> Vec<InternalItem> {
@@ -576,7 +574,7 @@ fn collect_internal_items(
 
 /// 扫描 Plugin 内部的 skills/commands/agents 目录
 fn scan_plugin_internal_items(
-    plugin_path: &PathBuf,
+    plugin_path: &Path,
 ) -> (Vec<InternalItem>, Vec<InternalItem>, Vec<InternalItem>) {
     (
         collect_internal_items(

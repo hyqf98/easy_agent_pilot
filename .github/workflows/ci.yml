@@ -47,6 +47,9 @@ jobs:
       - name: type check
         run: pnpm typecheck
 
+      - name: run app update regression tests
+        run: pnpm test:update
+
   build-test:
     strategy:
       fail-fast: false
@@ -101,4 +104,4 @@ jobs:
         run: pnpm install --frozen-lockfile --prefer-offline
 
       - name: build the app
-        run: pnpm tauri build ${{ matrix.args }}
+        run: pnpm tauri build --config src-tauri/tauri.ci.conf.json ${{ matrix.args }}

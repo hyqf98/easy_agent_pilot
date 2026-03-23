@@ -31,7 +31,8 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi", "dmg", "app", "deb", "rpm", "appimage"],
+    "createUpdaterArtifacts": true,
+    "targets": ["nsis", "dmg", "app", "deb", "appimage"],
     "resources": {
       "../scripts/mcpmarket-fetcher.mjs": "scripts/mcpmarket-fetcher.mjs",
       "../node_modules/.pnpm/playwright-core@1.58.2/node_modules/playwright-core/": "playwright-core/"
@@ -60,9 +61,6 @@
       "digestAlgorithm": "sha256",
       "timestampUrl": "",
       "tsp": false,
-      "wix": {
-        "language": ["zh-CN", "en-US"]
-      },
       "nsis": {
         "languages": ["SimpChinese", "English"],
         "displayLanguageSelector": true
@@ -72,13 +70,20 @@
       "deb": {
         "depends": ["libwebkit2gtk-4.1-0"]
       },
-      "rpm": {
-        "depends": ["webkit2gtk4.1"]
-      },
       "appimage": {
         "bundleMediaFramework": false
       }
     }
   },
-  "plugins": {}
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDA2MTU5NzIzMDE3Q0U1NTYKUldSVzVYd0JJNWNWQmxUSFNHc1c5ZkJPeUIyeFN6R21zaHRyWHp5dmdwNDZjUTlRbUk2bC9BMGYK",
+      "endpoints": [
+        "https://github.com/hyqf98/easy-agent-pilot/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
 }

@@ -46,8 +46,12 @@ const { t } = useI18n()
               />
             </span>
             <div class="transfer-panel__hero-copy">
-              <div class="transfer-panel__title">{{ t('settings.data.exportData') }}</div>
-              <div class="transfer-panel__desc">{{ t('settings.data.exportDataDesc') }}</div>
+              <div class="transfer-panel__title">
+                {{ t('settings.data.exportData') }}
+              </div>
+              <div class="transfer-panel__desc">
+                {{ t('settings.data.exportDataDesc') }}
+              </div>
             </div>
           </div>
           <EaButton
@@ -63,8 +67,12 @@ const { t } = useI18n()
         <div class="option-panel">
           <div class="option-panel__header">
             <div>
-              <div class="option-panel__title">{{ t('settings.data.exportOptions') }}</div>
-              <div class="option-panel__subtitle">{{ t('settings.data.exportOptionsHint') }}</div>
+              <div class="option-panel__title">
+                {{ t('settings.data.exportOptions') }}
+              </div>
+              <div class="option-panel__subtitle">
+                {{ t('settings.data.exportOptionsHint') }}
+              </div>
             </div>
             <div class="option-panel__actions">
               <button
@@ -125,8 +133,12 @@ const { t } = useI18n()
               />
             </span>
             <div class="transfer-panel__hero-copy">
-              <div class="transfer-panel__title">{{ t('settings.data.importData') }}</div>
-              <div class="transfer-panel__desc">{{ t('settings.data.importDataDesc') }}</div>
+              <div class="transfer-panel__title">
+                {{ t('settings.data.importData') }}
+              </div>
+              <div class="transfer-panel__desc">
+                {{ t('settings.data.importDataDesc') }}
+              </div>
             </div>
           </div>
           <EaButton
@@ -165,8 +177,12 @@ const { t } = useI18n()
         >
           <div class="import-stats__header">
             <div>
-              <div class="import-stats__title">{{ t('settings.data.importStats') }}</div>
-              <div class="import-stats__subtitle">{{ t('settings.data.importStatsHint') }}</div>
+              <div class="import-stats__title">
+                {{ t('settings.data.importStats') }}
+              </div>
+              <div class="import-stats__subtitle">
+                {{ t('settings.data.importStatsHint') }}
+              </div>
             </div>
             <EaIcon
               name="sparkles"

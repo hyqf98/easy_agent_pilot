@@ -1,4 +1,4 @@
-import enUS from './en-US'
+﻿import enUS from './en-US'
 
 const zhCN = {
   ...enUS,
@@ -258,6 +258,7 @@ const zhCN = {
       integration: 'Agent 集成',
       mcp: 'MCP 服务器',
       marketplace: '技能市场',
+      appUpdate: '软件更新',
       sessions: '会话管理',
       skills: '技能',
       plugins: '插件',
@@ -331,6 +332,38 @@ const zhCN = {
       compressionStrategySummaryDesc: '使用 AI 生成对话摘要，保留关键信息',
       compressionThreshold: '压缩阈值',
       compressionThresholdDesc: '当 token 使用率达到此阈值时触发压缩'
+    },
+    appUpdate: {
+      title: '软件更新',
+      summaryTitle: '更新概览',
+      statusTitle: '更新状态',
+      releaseNotesTitle: '更新说明',
+      description: '通过 GitHub Release 的 updater 元数据检测、下载并安装新的桌面版本。',
+      currentVersion: '当前版本',
+      newVersion: '新版本',
+      latestStatus: '最新状态',
+      lastCheckedAt: '上次检查',
+      publishedAt: '发布时间',
+      downloadedBytes: '已下载字节',
+      totalBytes: '总字节数',
+      neverChecked: '从未检查',
+      autoCheck: '启动时自动检查更新',
+      autoCheckDesc: '主窗口启动后在后台静默检查 GitHub Release 更新信息。',
+      checkNow: '检查更新',
+      installNow: '立即升级',
+      noReleaseNotes: '暂无更新说明。',
+      checkFailed: '暂时无法检查更新。',
+      availableDescription: '当前版本 v{current}，检测到可安装的新版本 v{latest}。',
+      upToDateDescription: '当前已是最新版本 v{version}。',
+      statusIdle: '可以开始检查',
+      statusChecking: '正在检查更新...',
+      statusUpToDate: '已是最新版本',
+      statusAvailable: '发现可用更新：v{version}',
+      statusDownloading: '正在下载更新包...',
+      statusInstalling: '正在安装更新...',
+      statusCompleted: '更新已安装',
+      statusError: '更新失败',
+      statusUnsupported: '当前环境不可用'
     },
     cli: {
       ...enUS.settings.cli,
@@ -927,6 +960,8 @@ const zhCN = {
       title: '日志管理',
       description: '将运行期日志写入本地文件，便于排查 Claude CLI、Codex CLI、SDK 和启动阶段问题。',
       refresh: '刷新',
+      startListening: '开始监听',
+      pauseListening: '暂停监听',
       clear: '清空日志',
       hideFiles: '隐藏文件列表',
       showFiles: '显示文件列表',
@@ -1096,11 +1131,15 @@ const zhCN = {
     actions: {
       executeAll: '一键执行',
       startExecution: '开始',
+      pauseExecutionFlow: '全局停止',
+      resumeExecutionFlow: '继续',
       addTask: '添加任务'
     },
     tooltips: {
       executeAll: '一键执行所有待办任务',
       startExecution: '开始执行进行中的任务',
+      pauseExecutionFlow: '停止当前自动执行任务，并暂停自动选择后续任务',
+      resumeExecutionFlow: '继续当前暂停的任务流程，并恢复自动执行',
       addTask: '添加新任务到待办列表'
     },
     emptyColumn: '暂无任务'
@@ -1177,6 +1216,7 @@ const zhCN = {
       waitingInput: '等待输入',
       running: '执行中...',
       queued: '排队中 #{position}',
+      stopped: '已停止',
       waitingDependencies: '等待依赖 ({count})'
     },
     retryCount: '重试: {current}/{max}',
@@ -1184,6 +1224,7 @@ const zhCN = {
     dependenciesCount: '{count} 个依赖',
     actions: {
       stop: '停止执行',
+      resume: '继续',
       retry: '重试',
       edit: '编辑',
       delete: '删除'

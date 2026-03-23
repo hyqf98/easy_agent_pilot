@@ -20,13 +20,11 @@ const { t } = useI18n()
 const agentStore = useAgentStore()
 const skillConfigStore = useSkillConfigStore()
 
-// 当前标签页
 const activeTab = ref<'mcp' | 'skills' | 'plugins'>('mcp')
 
-// 是否显示 Plugins 标签页（根据 CLI 能力判断）
 const showPluginsTab = computed(() => skillConfigStore.supportsPlugins)
 
-// 内容区域引用，用于重置滚动位置
+// 鍐呭鍖哄煙寮曠敤锛岀敤浜庨噸缃粴鍔ㄤ綅缃?
 const contentRef = ref<HTMLElement | null>(null)
 const showSyncModal = ref(false)
 const syncType = ref<SyncConfigType>('mcp')
@@ -41,7 +39,6 @@ const {
   showDeleteConfirm.value = false
 })
 
-// 监听标签页切换，重置滚动位置
 watch(activeTab, () => {
   if (activeTab.value !== 'skills') {
     showSkillBuilder.value = false
@@ -54,22 +51,35 @@ watch(activeTab, () => {
   })
 })
 
+watch(
+  () => [activeTab.value, skillConfigStore.selectedAgent?.id, skillConfigStore.selectedAgent?.type] as const,
+  ([tab, agentId, agentType]) => {
+    if (!agentId || agentType !== 'cli') {
+      return
+    }
+
+    if (tab === 'skills' || tab === 'plugins') {
+      void skillConfigStore.ensureCliInventoryLoaded()
+    }
+  },
+  { immediate: true }
+)
+
 watch(showSkillModal, (value) => {
   if (!value) {
     editingSkill.value = null
   }
 })
 
-// 删除确认状态
 const showDeleteConfirm = ref(false)
 const deletingConfig = ref<{ type: 'mcp' | 'skills' | 'plugins'; config: UnifiedMcpConfig | UnifiedSkillConfig | UnifiedPluginConfig } | null>(null)
 
-// 加载智能体列表
+// 鍔犺浇鏅鸿兘浣撳垪琛?
 onMounted(async () => {
   await agentStore.loadAgents()
 })
 
-// 选择智能体
+// 閫夋嫨鏅鸿兘浣?
 async function handleSelectAgent(agent: any) {
   showSkillBuilder.value = false
   showSkillModal.value = false
@@ -77,7 +87,7 @@ async function handleSelectAgent(agent: any) {
   await skillConfigStore.selectAgent(agent)
 }
 
-// MCP 操作
+// MCP 鎿嶄綔
 async function handleSaveMcp(config: Partial<UnifiedMcpConfig>, originalId?: string) {
   if (originalId) {
     await skillConfigStore.updateMcpConfig(originalId, config)
@@ -117,7 +127,7 @@ async function confirmDelete() {
   }
 }
 
-// Skills 操作
+// Skills 鎿嶄綔
 async function handleAddSkill() {
   const agent = skillConfigStore.selectedAgent
   if (!agent) {
@@ -180,9 +190,9 @@ async function handleCreateVisualSkill(input: CreateVisualSkillInput) {
   }
 }
 
-// Plugins 操作
+// Plugins 鎿嶄綔
 function handleAddPlugin() {
-  // TODO: 实现 Plugins 添加
+  // TODO: 瀹炵幇 Plugins 娣诲姞
 }
 
 function handleViewPluginDetail(config: UnifiedPluginConfig) {
@@ -190,7 +200,6 @@ function handleViewPluginDetail(config: UnifiedPluginConfig) {
 }
 
 function handleEditPlugin() {
-  // TODO: 实现 Plugins 编辑
 }
 
 function handleDeletePlugin(config: UnifiedPluginConfig) {
@@ -207,12 +216,10 @@ async function handleDeletePluginFromDetail(plugin: UnifiedPluginConfig) {
   showDeleteConfirm.value = true
 }
 
-// 刷新 CLI 配置
 async function handleRefresh() {
   await skillConfigStore.refreshCliConfigs()
 }
 
-// 打开配置文件
 async function handleOpenFile() {
   await skillConfigStore.openConfigFile()
 }
@@ -256,13 +263,13 @@ function handleSyncCompleted(payload: { targetAgentId: string; result: CliSyncRe
 
 <template>
   <div class="skill-config-page">
-    <!-- 智能体选择器 -->
+    <!-- 鏅鸿兘浣撻€夋嫨鍣?-->
     <AgentSelector
       :model-value="skillConfigStore.selectedAgent"
       @update:model-value="handleSelectAgent"
     />
 
-    <!-- Skill 详情视图 -->
+    <!-- Skill 璇︽儏瑙嗗浘 -->
     <SkillDetailView
       v-if="skillConfigStore.selectedSkill && activeTab === 'skills'"
       :skill="skillConfigStore.selectedSkill"
@@ -279,7 +286,7 @@ function handleSyncCompleted(payload: { targetAgentId: string; result: CliSyncRe
       @save="handleCreateVisualSkill"
     />
 
-    <!-- Plugin 详情视图 -->
+    <!-- Plugin 璇︽儏瑙嗗浘 -->
     <PluginDetailView
       v-else-if="skillConfigStore.selectedPlugin && activeTab === 'plugins' && showPluginsTab"
       :plugin="skillConfigStore.selectedPlugin"
@@ -287,9 +294,7 @@ function handleSyncCompleted(payload: { targetAgentId: string; result: CliSyncRe
       @delete="handleDeletePluginFromDetail"
     />
 
-    <!-- 列表视图 -->
     <template v-else>
-      <!-- 标签页导航 -->
       <div class="skill-config-page__tabs">
         <button
           class="skill-config-page__tab"
@@ -318,7 +323,6 @@ function handleSyncCompleted(payload: { targetAgentId: string; result: CliSyncRe
         </button>
       </div>
 
-      <!-- 标签页内容 -->
       <div
         ref="contentRef"
         class="skill-config-page__content"
@@ -375,7 +379,6 @@ function handleSyncCompleted(payload: { targetAgentId: string; result: CliSyncRe
       @save="handleSaveSkill"
     />
 
-    <!-- 删除确认弹窗 -->
     <div
       v-if="showDeleteConfirm"
       class="delete-confirm-overlay"
@@ -454,7 +457,6 @@ function handleSyncCompleted(payload: { targetAgentId: string; result: CliSyncRe
   box-shadow: var(--shadow-sm);
 }
 
-/* 标签页颜色区分 */
 .skill-config-page__tab--mcp {
   color: #8b5cf6;
 }
@@ -495,7 +497,6 @@ function handleSyncCompleted(payload: { targetAgentId: string; result: CliSyncRe
   flex-direction: column;
 }
 
-/* 删除确认弹窗 */
 .delete-confirm-overlay {
   position: fixed;
   inset: 0;

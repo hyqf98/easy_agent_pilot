@@ -93,9 +93,9 @@ fn resolve_path_input(input: &str, current_directory: &Path) -> Result<PathBuf, 
         return Ok(current_directory.to_path_buf());
     }
 
-    let candidate = if trimmed.starts_with('~') {
+    let candidate = if let Some(stripped) = trimmed.strip_prefix('~') {
         let home = home_directory()?;
-        let rest = trimmed[1..].strip_prefix('/').unwrap_or(&trimmed[1..]);
+        let rest = stripped.strip_prefix('/').unwrap_or(stripped);
         home.join(rest)
     } else {
         let path = PathBuf::from(trimmed);
@@ -144,9 +144,9 @@ fn resolve_partial_path_context(
         return Ok((current_directory.to_path_buf(), String::new(), separator));
     }
 
-    let expanded = if trimmed.starts_with('~') {
+    let expanded = if let Some(stripped) = trimmed.strip_prefix('~') {
         let home = home_directory()?;
-        let rest = trimmed[1..].strip_prefix('/').unwrap_or(&trimmed[1..]);
+        let rest = stripped.strip_prefix('/').unwrap_or(stripped);
         home.join(rest)
     } else {
         let path = PathBuf::from(trimmed);

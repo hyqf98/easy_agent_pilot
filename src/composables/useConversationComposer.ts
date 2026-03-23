@@ -537,7 +537,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     const agentId = resolveSessionAgentId(currentSession.value, agentStore.agents) || currentAgent.value?.id
 
     if (!agentId) {
-      notificationStore.smartError('压缩会话', new Error('无法获取智能体信息'))
+      notificationStore.smartError('????', new Error('?????????'))
       showCompressionDialog.value = false
       return
     }
@@ -641,20 +641,17 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       }
     }
 
-    // 先直接更新 textarea 的 DOM 值，确保立即生效
+    // ????? textarea ? DOM ????????
     if (textarea) {
       textarea.value = newText
     }
 
-    // 然后更新响应式状态
     inputText.value = newText
 
-    // 使用 requestAnimationFrame 确保在浏览器下一帧渲染前设置光标
     requestAnimationFrame(() => {
       if (textarea) {
         textarea.focus()
         textarea.setSelectionRange(newPosition, newPosition)
-        // 强制触发滚动同步
         if (renderLayerRef.value) {
           renderLayerRef.value.scrollTop = textarea.scrollTop
         }
@@ -985,13 +982,13 @@ export function useConversationComposer(options: UseConversationComposerOptions)
   const validateCurrentAgentAvailability = () => {
     const executionAgent = getExecutionAgentConfig()
     if (!executionAgent) {
-      notificationStore.smartError('发送消息', new Error('请先选择一个智能体'))
+      notificationStore.smartError('????', new Error('?????????'))
       return false
     }
 
     const availability = conversationService.isAgentAvailable(executionAgent)
     if (!availability.available) {
-      notificationStore.smartError('发送消息', new Error(availability.reason || '智能体不可用'))
+      notificationStore.smartError('????', new Error(availability.reason || '??????'))
       return false
     }
 
@@ -1015,13 +1012,13 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
     const executionAgent = getExecutionAgentConfig()
     if (!executionAgent) {
-      notificationStore.smartError('发送消息', new Error('请先选择一个智能体'))
+      notificationStore.smartError('????', new Error('?????????'))
       return false
     }
 
     const availability = conversationService.isAgentAvailable(executionAgent)
     if (!availability.available) {
-      notificationStore.smartError('发送消息', new Error(availability.reason || '智能体不可用'))
+      notificationStore.smartError('????', new Error(availability.reason || '??????'))
       return false
     }
 
@@ -1040,7 +1037,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       return true
     } catch (error) {
       console.error('Failed to send message:', error)
-      notificationStore.smartError('发送消息', error instanceof Error ? error : new Error(String(error)))
+      notificationStore.smartError('????', error instanceof Error ? error : new Error(String(error)))
       sessionExecutionStore.endSending(sessionId)
       return false
     }
@@ -1151,6 +1148,29 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     }
   }
 
+  const resendMessage = async (content: string, attachments: MessageAttachment[] = []) => {
+    const sessionId = currentSessionId.value
+    const normalizedContent = content.trim()
+    if (!sessionId || isUploadingImages.value || isSending.value) {
+      return false
+    }
+
+    if (!normalizedContent && attachments.length === 0) {
+      return false
+    }
+
+    if (!validateCurrentAgentAvailability()) {
+      return false
+    }
+
+    const success = await sendWithCurrentAgent(normalizedContent, attachments)
+    if (success) {
+      focusInput()
+    }
+
+    return success
+  }
+
   const handleMessageFormSubmit = async (formId: string, values: Record<string, unknown>) => {
     if (!currentSessionId.value || !currentAgent.value || isSending.value) {
       return
@@ -1217,20 +1237,16 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     const newText = sanitizeComposerText(`${inputText.value.slice(0, start)}${insertText}${inputText.value.slice(end)}`)
     const newPosition = start + insertText.length
 
-    // 先直接更新 textarea 的 DOM 值
     textarea.value = newText
 
-    // 然后更新响应式状态
     inputText.value = newText
     if (currentSessionId.value) {
       sessionExecutionStore.setFileMentions(currentSessionId.value, nextMentions)
     }
 
-    // 使用 requestAnimationFrame 确保在浏览器下一帧渲染前设置光标
     requestAnimationFrame(() => {
       textarea.focus()
       textarea.setSelectionRange(newPosition, newPosition)
-      // 强制触发滚动同步
       if (renderLayerRef.value) {
         renderLayerRef.value.scrollTop = textarea.scrollTop
       }
@@ -1266,6 +1282,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     handleMessageFormSubmit,
     handleOpenCompress,
     handlePaste,
+    resendMessage,
     handleSend,
     handleSlashCommandSelect,
     inputPlaceholder,

@@ -142,7 +142,7 @@ onMounted(async () => {
 
     if (result.success) {
       await Promise.all([
-        agentStore.scanCliTools(),
+        agentStore.scanCliTools({ force: true }),
         loadInstallOptions(),
         checkAllUpdates()
       ])
@@ -180,7 +180,7 @@ onUnmounted(() => {
         name="info"
         :size="16"
       />
-      <span>{{ t('settings.agentList.detectedTools') }}，安装完成后会自动出现在上方，可直接一键添加为 Agent。</span>
+      <span>{{ t('settings.agentList.detectedTools') }}??????????????????????? Agent?</span>
     </div>
 
     <CliInstallerSection

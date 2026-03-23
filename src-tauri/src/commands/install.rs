@@ -339,7 +339,7 @@ pub fn rollback_install(session_id: String, error_reason: String) -> Result<Inst
     if session.status != "active" {
         return Ok(InstallResult {
             success: false,
-            message: format!("安装会话已结束，无法回滚"),
+            message: "安装会话已结束，无法回滚".to_string(),
             session_id: Some(session_id),
             rollback_performed: false,
             rollback_error: None,
@@ -509,16 +509,14 @@ pub fn list_pending_install_sessions() -> Result<Vec<InstallSession>, String> {
     let mut sessions = Vec::new();
 
     let entries = fs::read_dir(&backup_base).map_err(|e| e.to_string())?;
-    for entry in entries {
-        if let Ok(entry) = entry {
-            let session_file = entry.path().join("session.json");
-            if session_file.exists() {
-                if let Ok(content) = fs::read_to_string(&session_file) {
-                    if let Ok(session) = serde_json::from_str::<InstallSession>(&content) {
-                        // 只返回未完成的会话
-                        if session.status == "active" || session.status == "rolling_back" {
-                            sessions.push(session);
-                        }
+    for entry in entries.flatten() {
+        let session_file = entry.path().join("session.json");
+        if session_file.exists() {
+            if let Ok(content) = fs::read_to_string(&session_file) {
+                if let Ok(session) = serde_json::from_str::<InstallSession>(&content) {
+                    // 只返回未完成的会话
+                    if session.status == "active" || session.status == "rolling_back" {
+                        sessions.push(session);
                     }
                 }
             }
@@ -540,14 +538,12 @@ pub fn list_all_install_sessions() -> Result<Vec<InstallSession>, String> {
     let mut sessions = Vec::new();
 
     let entries = fs::read_dir(&backup_base).map_err(|e| e.to_string())?;
-    for entry in entries {
-        if let Ok(entry) = entry {
-            let session_file = entry.path().join("session.json");
-            if session_file.exists() {
-                if let Ok(content) = fs::read_to_string(&session_file) {
-                    if let Ok(session) = serde_json::from_str::<InstallSession>(&content) {
-                        sessions.push(session);
-                    }
+    for entry in entries.flatten() {
+        let session_file = entry.path().join("session.json");
+        if session_file.exists() {
+            if let Ok(content) = fs::read_to_string(&session_file) {
+                if let Ok(session) = serde_json::from_str::<InstallSession>(&content) {
+                    sessions.push(session);
                 }
             }
         }

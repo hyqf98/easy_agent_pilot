@@ -11,8 +11,10 @@ const props = withDefaults(defineProps<{
   title: string
   color: string
   tasks: Task[]
+  globalPaused?: boolean
 }>(), {
-  tasks: () => []
+  tasks: () => [],
+  globalPaused: false
 })
 
 const emit = defineEmits<{
@@ -21,26 +23,23 @@ const emit = defineEmits<{
   (e: 'taskReorder', taskId: string, targetIndex: number): void
   (e: 'taskEdit', task: Task): void
   (e: 'taskStop', task: Task): void
+  (e: 'taskResume', task: Task): void
   (e: 'taskRetry', task: Task): void
   (e: 'taskDelete', task: Task): void
   (e: 'executeAll'): void
   (e: 'startExecution'): void
+  (e: 'toggleGlobalExecution'): void
   (e: 'addTask'): void
 }>()
 
 const taskExecutionStore = useTaskExecutionStore()
 const { t } = useI18n()
 
-// 本地任务列表（用于 vuedraggable）
 const localTasks = ref<Task[]>([...(props.tasks || [])])
 
-// 记录上一次的任务数据快照，用于检测变化
 let lastTasksSnapshot: string = ''
 
-// 监听外部 tasks 变化，同步到本地
-// 需要检测任务属性变化（如 dependencies），而不仅仅是 ID 列表变化
 watch(() => props.tasks, (newTasks) => {
-  // 序列化任务数据以检测任何属性变化
   const snapshot = JSON.stringify((newTasks || []).map(t => ({
     id: t.id,
     status: t.status,
@@ -53,12 +52,10 @@ watch(() => props.tasks, (newTasks) => {
   }
 }, { immediate: true })
 
-// 拖拽组配置 - 只禁止正在运行的任务拖出（排队中的任务可以拖动）
 const dragGroup = computed(() => ({
   name: 'tasks',
   pull: (value: any) => {
     const taskId = value?.element?.id
-    // 只禁止正在运行的任务拖出（不包括排队中）
     if (taskId && taskExecutionStore.isTaskRunning(taskId)) {
       return false
     }
@@ -67,67 +64,63 @@ const dragGroup = computed(() => ({
   put: true
 }))
 
-// 检查是否允许移动 - 只禁止正在运行的任务拖拽（排队中的任务可以拖动）
 function checkMove(evt: any): boolean {
   const task = evt.draggedContext?.element
   if (!task) return true
 
-  // 只禁止正在运行的任务拖拽（不包括排队中）
   if (taskExecutionStore.isTaskRunning(task.id)) {
     return false
   }
   return true
 }
 
-// 拖拽变化处理
 function onDragChange(evt: any) {
   if (evt.added) {
-    // 从其他列拖入
     const { element } = evt.added
     emit('taskDrop', element.id, props.status)
   } else if (evt.moved) {
-    // 同列内移动
+    // 鍚屽垪鍐呯Щ鍔?
     const { element, newIndex } = evt.moved
     emit('taskReorder', element.id, newIndex)
   }
 }
 
-// 处理任务点击
 function handleTaskClick(task: Task) {
   emit('taskClick', task)
 }
 
-// 处理任务编辑
 function handleTaskEdit(task: Task) {
   emit('taskEdit', task)
 }
 
-// 处理任务停止
 function handleTaskStop(task: Task) {
   emit('taskStop', task)
 }
 
-// 处理任务重试
+function handleTaskResume(task: Task) {
+  emit('taskResume', task)
+}
+
 function handleTaskRetry(task: Task) {
   emit('taskRetry', task)
 }
 
-// 处理任务删除
 function handleTaskDelete(task: Task) {
   emit('taskDelete', task)
 }
 
-// 处理一键执行
 function handleExecuteAll() {
   emit('executeAll')
 }
 
-// 处理开始执行
 function handleStartExecution() {
   emit('startExecution')
 }
 
-// 处理添加任务
+function handleToggleGlobalExecution() {
+  emit('toggleGlobalExecution')
+}
+
 function handleAddTask() {
   emit('addTask')
 }
@@ -145,7 +138,6 @@ function handleAddTask() {
         <span class="column-count">{{ tasks.length }}</span>
       </div>
       <div class="header-right">
-        <!-- 待办列：添加任务按钮 -->
         <button
           v-if="status === 'pending'"
           class="btn-header btn-add"
@@ -164,7 +156,6 @@ function handleAddTask() {
           </svg>
           <span>{{ t('taskBoard.actions.addTask') }}</span>
         </button>
-        <!-- 待办列：一键执行按钮 -->
         <button
           v-if="status === 'pending' && tasks.length > 0"
           class="btn-header btn-execute-all"
@@ -183,9 +174,9 @@ function handleAddTask() {
           </svg>
           <span>{{ t('taskBoard.actions.executeAll') }}</span>
         </button>
-        <!-- 进行中列：开始执行按钮 -->
+        <!-- 杩涜涓垪锛氬紑濮嬫墽琛屾寜閽?-->
         <button
-          v-if="status === 'in_progress' && tasks.length > 0"
+          v-if="status === 'in_progress' && tasks.length > 0 && props.globalPaused"
           class="btn-header btn-start"
           :title="t('taskBoard.tooltips.startExecution')"
           @click="handleStartExecution"
@@ -201,6 +192,43 @@ function handleAddTask() {
             <polygon points="5 3 19 12 5 21 5 3" />
           </svg>
           <span>{{ t('taskBoard.actions.startExecution') }}</span>
+        </button>
+        <button
+          v-if="status === 'in_progress' && tasks.length > 0 && !props.globalPaused"
+          class="btn-header"
+          :class="props.globalPaused ? 'btn-resume-flow' : 'btn-stop-flow'"
+          :title="props.globalPaused ? t('taskBoard.tooltips.resumeExecutionFlow') : t('taskBoard.tooltips.pauseExecutionFlow')"
+          @click="handleToggleGlobalExecution"
+        >
+          <svg
+            v-if="props.globalPaused"
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <polygon points="5 3 19 12 5 21 5 3" />
+          </svg>
+          <svg
+            v-else
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <rect
+              x="6"
+              y="6"
+              width="12"
+              height="12"
+              rx="2"
+            />
+          </svg>
+          <span>{{ props.globalPaused ? t('taskBoard.actions.resumeExecutionFlow') : t('taskBoard.actions.pauseExecutionFlow') }}</span>
         </button>
       </div>
     </div>
@@ -231,6 +259,7 @@ function handleAddTask() {
             @click="handleTaskClick"
             @edit="handleTaskEdit"
             @stop="handleTaskStop"
+            @resume="handleTaskResume"
             @retry="handleTaskRetry"
             @delete="handleTaskDelete"
           />
@@ -326,6 +355,22 @@ function handleAddTask() {
   transform: translateY(-1px);
 }
 
+.btn-stop-flow {
+  background-color: #dc2626;
+}
+
+.btn-stop-flow:hover {
+  background-color: #b91c1c;
+}
+
+.btn-resume-flow {
+  background-color: #16a34a;
+}
+
+.btn-resume-flow:hover {
+  background-color: #15803d;
+}
+
 .btn-header:active {
   transform: translateY(0);
 }
@@ -419,7 +464,6 @@ function handleAddTask() {
     );
 }
 
-/* vuedraggable 拖拽样式 */
 .ghost-card {
   opacity: 0.5;
   background: #c8ebfb !important;

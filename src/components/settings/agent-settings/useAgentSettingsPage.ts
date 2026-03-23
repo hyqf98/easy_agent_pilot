@@ -241,7 +241,7 @@ export function useAgentSettingsPage() {
 
   onMounted(async () => {
     await agentStore.loadAgents()
-    await agentStore.scanCliTools()
+    void agentStore.scanCliTools()
     void checkMigrationNeeded()
   })
 

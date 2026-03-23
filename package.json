@@ -12,6 +12,7 @@
     "tauri:clean:debug": "cargo clean --manifest-path src-tauri/Cargo.toml --profile dev",
     "typecheck": "vue-tsc --noEmit",
     "lint": "eslint src --fix",
+    "test:update": "vitest run src/stores/__tests__/appUpdate.test.ts",
     "test:claude-json": "node scripts/test-claude-program-json-output.mjs",
     "build:mac": "pnpm tauri build --target universal-apple-darwin",
     "build:mac-arm": "pnpm tauri build --target aarch64-apple-darwin",
@@ -26,8 +27,10 @@
     "@tauri-apps/plugin-fs": "^2",
     "@tauri-apps/plugin-global-shortcut": "^2",
     "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-shell": "^2",
     "@tauri-apps/plugin-sql": "^2",
+    "@tauri-apps/plugin-updater": "^2.10.0",
     "@types/markdown-it": "^14.1.2",
     "@vicons/ionicons5": "^0.12.0",
     "echarts": "^5.6.0",
@@ -57,6 +60,7 @@
     "typescript": "~5.6.2",
     "typescript-eslint": "^8.56.1",
     "vite": "^6.0.3",
+    "vitest": "^3.2.4",
     "vue-eslint-parser": "^10.4.0",
     "vue-tsc": "^2.1.10"
   }

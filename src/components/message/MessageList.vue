@@ -39,16 +39,14 @@ const resizeObservers = new Map<string, ResizeObserver>()
 const DEFAULT_MESSAGE_HEIGHT = 220
 const VIRTUALIZE_THRESHOLD = 40
 const VIRTUAL_OVERSCAN_PX = 1200
+const BOTTOM_SCROLL_BUFFER = 160
 
-// 跟踪用户是否在底部（用于控制自动滚动）
 const isUserAtBottom = ref(true)
-// 距离底部的阈值（像素），小于此值视为在底部
+// 距离底部的阈值（像素），小于此��视为在底部
 const SCROLL_THRESHOLD = 100
-// 距离顶部的阈值（像素），小于此值触发加载更多
 const LOAD_MORE_THRESHOLD = 100
-// 上一条消息数量，用于判断是否有新消息
 const previousMessageCount = ref(0)
-// 加载更多时保存滚动位置
+// 加载更多时保存滚动位�?
 const savedScrollHeight = ref(0)
 // 是否显示回到底部按钮
 const showScrollToBottom = ref(false)
@@ -67,8 +65,6 @@ const currentIsSending = computed(() => {
 
 const shouldVirtualize = computed(() => currentMessages.value.length > VIRTUALIZE_THRESHOLD)
 
-// 消息气泡包含 markdown、工具调用和文件追踪，直接 deep watch 整个数组会在流式输出时持续触发深层比较。
-// 这里改成轻量级签名，只监听会影响列表布局和滚动策略的字段。
 const currentMessageSignature = computed(() => currentMessages.value
   .map(message => [
     message.id,
@@ -89,14 +85,12 @@ const currentMessageSignature = computed(() => currentMessages.value
   ].join(':'))
   .join('|'))
 
-// 获取当前会话的分页状态
 const currentPagination = computed(() => {
   const targetSessionId = props.sessionId || sessionStore.currentSessionId
   if (!targetSessionId) return null
   return messageStore.getPagination(targetSessionId)
 })
 
-// 是否有更多历史消息
 const hasMoreMessages = computed(() => currentPagination.value?.hasMore ?? false)
 
 // 是否正在加载更多
@@ -165,27 +159,23 @@ const visibleMessages = computed(() => {
   return messageLayout.value.slice(virtualWindow.value.start, virtualWindow.value.end)
 })
 
-// 检查是否滚动到底部
 const checkIsAtBottom = () => {
   if (!listRef.value) return true
   const { scrollTop, scrollHeight, clientHeight } = listRef.value
-  // 距离底部小于阈值则视为在底部
+  // 距离底部小于阈��则视为在底�?
   return scrollHeight - scrollTop - clientHeight < SCROLL_THRESHOLD
 }
 
-// 检查是否滚动到顶部
 const checkIsAtTop = () => {
   if (!listRef.value) return false
   return listRef.value.scrollTop < LOAD_MORE_THRESHOLD
 }
 
-// 处理用户滚动事件
 const handleScroll = () => {
   if (scrollFramePending) {
     return
   }
 
-  // 滚动事件频率很高，压到一帧内处理，避免消息很多时频繁读写布局。
   scrollFramePending = true
   requestAnimationFrame(() => {
     scrollFramePending = false
@@ -201,17 +191,16 @@ const handleScroll = () => {
   })
 }
 
-// 平滑滚动到底部
 const scrollToBottom = (smooth = true) => {
   if (!listRef.value) return
 
   if (smooth && 'scrollBehavior' in document.documentElement.style) {
     listRef.value.scrollTo({
-      top: listRef.value.scrollHeight,
+      top: listRef.value.scrollHeight + BOTTOM_SCROLL_BUFFER,
       behavior: 'smooth'
     })
   } else {
-    listRef.value.scrollTop = listRef.value.scrollHeight
+    listRef.value.scrollTop = listRef.value.scrollHeight + BOTTOM_SCROLL_BUFFER
   }
 }
 
@@ -321,6 +310,19 @@ watch(currentMessages, (messages) => {
   messageHeights.value = nextHeights
 })
 
+watch(totalMessageHeight, async (currentHeight, previousHeight) => {
+  if (currentHeight === previousHeight) {
+    return
+  }
+
+  await nextTick()
+  updateViewportMetrics()
+
+  if (isUserAtBottom.value) {
+    scrollToBottom(false)
+  }
+})
+
 onMounted(() => {
   if (listRef.value) {
     listRef.value.addEventListener('scroll', handleScroll, { passive: true })
@@ -421,7 +423,7 @@ const handleOpenEditTrace = (messageId: string, traceId: string) => {
       />
     </div>
 
-    <!-- 空状态 -->
+    <!-- 空状�?-->
     <div
       v-if="currentMessages.length === 0"
       class="message-list__empty"
@@ -478,7 +480,8 @@ const handleOpenEditTrace = (messageId: string, traceId: string) => {
   flex: 1;
   overflow-y: auto;
   padding: var(--spacing-3);
-  padding-bottom: var(--spacing-6);
+  padding-bottom: calc(112px + env(safe-area-inset-bottom, 0px));
+  scroll-padding-bottom: 112px;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
@@ -504,7 +507,6 @@ const handleOpenEditTrace = (messageId: string, traceId: string) => {
   flex-shrink: 0;
 }
 
-/* 自定义滚动条样式 */
 .message-list::-webkit-scrollbar {
   width: var(--scrollbar-size);
 }
@@ -524,7 +526,6 @@ const handleOpenEditTrace = (messageId: string, traceId: string) => {
   background: var(--scrollbar-thumb-hover);
 }
 
-/* 加载更多提示样式 */
 .message-list__load-more {
   display: flex;
   justify-content: center;

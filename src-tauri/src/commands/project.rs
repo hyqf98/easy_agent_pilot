@@ -560,10 +560,9 @@ pub fn validate_project_path(path: String) -> Result<PathValidationResult, Strin
     }
 
     // 如果是 ~ 开头的路径，展开后验证
-    let resolved_path = if path_str.starts_with('~') {
+    let resolved_path = if let Some(rest) = path_str.strip_prefix('~') {
         // 简单的波浪号展开验证
         let home = dirs::home_dir().ok_or_else(|| "无法获取用户主目录".to_string())?;
-        let rest = &path_str[1..];
         let rest = rest.strip_prefix('/').unwrap_or(rest);
         home.join(rest)
     } else {
@@ -712,9 +711,8 @@ fn resolve_path(path_str: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(path_str);
 
     // 处理 ~ 开头的路径
-    let resolved_path = if path_str.starts_with('~') {
+    let resolved_path = if let Some(rest) = path_str.strip_prefix('~') {
         let home = dirs::home_dir().ok_or_else(|| "无法获取用户主目录".to_string())?;
-        let rest = &path_str[1..];
         let rest = rest.strip_prefix('/').unwrap_or(rest);
         home.join(rest)
     } else {
@@ -1090,7 +1088,7 @@ fn rank_project_mentions(
 }
 
 #[allow(dead_code)]
-fn build_global_search_result(path: &PathBuf, node_type: FileNodeType) -> FileMentionSearchResult {
+fn build_global_search_result(path: &Path, node_type: FileNodeType) -> FileMentionSearchResult {
     let display_path = shorten_home_path(path);
     let extension = path
         .extension()

@@ -260,7 +260,7 @@ pub(crate) fn parse_mcp_server_config(
 }
 
 /// 扫描 MCP 配置
-fn scan_mcp_config(config_dir: &PathBuf, config_file: &PathBuf) -> Result<Vec<ScannedMcpServer>> {
+fn scan_mcp_config(config_dir: &Path, config_file: &Path) -> Result<Vec<ScannedMcpServer>> {
     let mut servers = Vec::new();
 
     // 1. 首先尝试从 ~/.claude.json (或对应 CLI 的配置文件) 读取用户级 MCP 配置 (user scope)
@@ -339,7 +339,7 @@ fn parse_yaml_frontmatter(content: &str) -> (Option<String>, Option<String>) {
 }
 
 /// 检查 Skill 目录的子目录结构
-fn check_skill_subdirectories(skill_path: &PathBuf) -> SkillSubdirectories {
+fn check_skill_subdirectories(skill_path: &Path) -> SkillSubdirectories {
     SkillSubdirectories {
         has_scripts: skill_path.join("scripts").exists(),
         has_references: skill_path.join("references").exists(),
@@ -347,29 +347,29 @@ fn check_skill_subdirectories(skill_path: &PathBuf) -> SkillSubdirectories {
     }
 }
 
-fn resolve_scan_entry_path(path: &PathBuf) -> PathBuf {
+fn resolve_scan_entry_path(path: &Path) -> PathBuf {
     if !path.is_symlink() {
-        return path.clone();
+        return path.to_path_buf();
     }
 
     match fs::read_link(path) {
         Ok(target) if target.is_relative() => path
             .parent()
             .map(|parent| parent.join(&target))
-            .unwrap_or_else(|| path.clone()),
+            .unwrap_or_else(|| path.to_path_buf()),
         Ok(target) => target,
-        Err(_) => path.clone(),
+        Err(_) => path.to_path_buf(),
     }
 }
 
-fn find_skill_markdown_path(skill_dir: &PathBuf) -> Option<PathBuf> {
+fn find_skill_markdown_path(skill_dir: &Path) -> Option<PathBuf> {
     ["SKILL.md", "skill.md"]
         .iter()
         .map(|name| skill_dir.join(name))
         .find(|path| path.exists())
 }
 
-fn build_directory_skill(path: &PathBuf, actual_path: &PathBuf) -> ScannedSkill {
+fn build_directory_skill(path: &Path, actual_path: &Path) -> ScannedSkill {
     let dir_name = path
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
@@ -411,7 +411,7 @@ fn build_markdown_skill(path: &PathBuf) -> ScannedSkill {
 }
 
 /// 扫描 Skills 目录
-fn scan_skills_directory(claude_dir: &PathBuf) -> Result<Vec<ScannedSkill>> {
+fn scan_skills_directory(claude_dir: &Path) -> Result<Vec<ScannedSkill>> {
     let mut skills = Vec::new();
     let skills_dir = claude_dir.join("skills");
 
@@ -500,7 +500,6 @@ fn scan_installed_plugins_file(plugins_dir: &Path) -> Vec<ScannedPlugin> {
     let Some(plugins_obj) = json.get("plugins").and_then(|value| value.as_object()) else {
         return Vec::new();
     };
-
     let mut plugins = Vec::new();
 
     for (plugin_key, plugin_entries) in plugins_obj {

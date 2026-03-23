@@ -378,8 +378,7 @@ fn render_runtime_notice_markdown(value: &serde_json::Value) -> Option<String> {
     let mcp_names = extract_mcp_items(value.get("mcp_servers").or_else(|| value.get("mcpServers")));
     let agent_names = extract_named_items(value.get("agents"));
     let command_names = extract_named_items(
-        value
-            .get("slash_commands")
+        value.get("slash_commands")
             .or_else(|| value.get("slashCommands"))
             .or_else(|| value.get("commands")),
     );

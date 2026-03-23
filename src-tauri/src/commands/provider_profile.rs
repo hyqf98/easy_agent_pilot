@@ -125,8 +125,7 @@ pub fn list_provider_profiles(cli_type: Option<String>) -> Result<Vec<ProviderPr
 
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
 
-    let profiles = if cli_type.is_some() {
-        let ct = cli_type.unwrap();
+    let profiles = if let Some(ct) = cli_type {
         stmt.query_map([&ct], map_provider_profile_row)
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
@@ -736,8 +735,9 @@ pub fn read_cli_connection_info(cli_type: String) -> Result<CliConnectionInfo, S
             // 2. 从 config.toml 读取模型和 base_url
             if config_file.exists() {
                 if let Ok(content) = fs::read_to_string(&config_file) {
-                    if let Ok(config) = toml::from_str::<toml::Value>(&content) {
-                        if let toml::Value::Table(ref table) = config {
+                    if let Ok(toml::Value::Table(ref table)) =
+                        toml::from_str::<toml::Value>(&content)
+                    {
                             // 读取模型
                             if let Some(model) = table.get("model").and_then(|v| v.as_str()) {
                                 info.main_model = Some(model.to_string());
@@ -764,8 +764,7 @@ pub fn read_cli_connection_info(cli_type: String) -> Result<CliConnectionInfo, S
                                 }
                             }
 
-                            info.is_valid = true;
-                        }
+                        info.is_valid = true;
                     }
                 }
             }

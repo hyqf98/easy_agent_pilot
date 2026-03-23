@@ -111,31 +111,6 @@ pub fn build_stdio_command(command: &str, args: Option<&str>, env: Option<&str>)
     cmd
 }
 
-#[cfg(test)]
-mod tests {
-    use super::parse_args_string;
-
-    #[test]
-    fn parse_args_string_supports_quoted_values() {
-        let args = parse_args_string(Some("--flag \"C:\\Program Files\\demo\" 'two words' plain"));
-        assert_eq!(
-            args,
-            vec![
-                "--flag".to_string(),
-                "C:\\Program Files\\demo".to_string(),
-                "two words".to_string(),
-                "plain".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn parse_args_string_supports_json_array() {
-        let args = parse_args_string(Some("[\"--flag\",\"two words\"]"));
-        assert_eq!(args, vec!["--flag".to_string(), "two words".to_string()]);
-    }
-}
-
 pub fn read_json_config_or_default(path: &Path, default_value: Value) -> Result<Value, String> {
     if !path.exists() {
         return Ok(default_value);
@@ -238,4 +213,29 @@ pub fn format_call_tool_result(call_result: &rmcp::model::CallToolResult) -> Val
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_args_string;
+
+    #[test]
+    fn parse_args_string_supports_quoted_values() {
+        let args = parse_args_string(Some("--flag \"C:\\Program Files\\demo\" 'two words' plain"));
+        assert_eq!(
+            args,
+            vec![
+                "--flag".to_string(),
+                "C:\\Program Files\\demo".to_string(),
+                "two words".to_string(),
+                "plain".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_args_string_supports_json_array() {
+        let args = parse_args_string(Some("[\"--flag\",\"two words\"]"));
+        assert_eq!(args, vec!["--flag".to_string(), "two words".to_string()]);
+    }
 }

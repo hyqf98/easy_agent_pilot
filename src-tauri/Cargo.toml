@@ -84,6 +84,8 @@ rmcp = { version = "0.17", features = [
     "transport-io",
     "transport-streamable-http-client-reqwest",
 ] }
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = [

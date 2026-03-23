@@ -18,24 +18,44 @@ const emit = defineEmits<{
   (e: 'task-click', task: Task): void
 }>()
 
-// 编辑对话框状态
 const showEditModal = ref(false)
 const editingTask = ref<Task | null>(null)
 
-// 创建任务对话框状态
 const showCreateModal = ref(false)
 const createMode = ref<'create' | 'edit'>('create')
 
-// 当前计划 ID
 const currentPlanId = computed(() => planStore.currentPlanId)
 
-// 当前计划
 const currentPlan = computed(() => planStore.currentPlan)
 
-// 是否为手动模式
+const currentExecutionQueue = computed(() => {
+  if (!currentPlanId.value) return undefined
+  return taskExecutionStore.getExecutionQueue(currentPlanId.value)
+})
+
+const hasInterruptedTasksAwaitingResume = computed(() => {
+  if (!currentPlan.value || tasksByStatus.value.in_progress.length === 0) {
+    return false
+  }
+
+  const queue = currentExecutionQueue.value
+  const hasActiveQueueWork = Boolean(queue?.currentTaskId) || (queue?.pendingTaskIds.length ?? 0) > 0
+  return !hasActiveQueueWork
+    && (
+      currentPlan.value.executionStatus === 'paused'
+      || currentPlan.value.executionStatus === 'running'
+    )
+})
+
+const isCurrentPlanPaused = computed(() =>
+  currentExecutionQueue.value?.isPaused
+  ?? hasInterruptedTasksAwaitingResume.value
+)
+
+// ???????
 const isManualMode = computed(() => currentPlan.value?.splitMode === 'manual')
 
-// 新任务模板
+// ?????
 const newTaskTemplate = reactive<Partial<Task>>({
   planId: '',
   title: '',
@@ -56,13 +76,11 @@ const emptyTasksByStatus: Record<TaskStatus, Task[]> = {
   cancelled: []
 }
 
-// 当前计划的任务
 const tasks = computed(() => {
   if (!currentPlanId.value) return []
   return taskStore.tasks.filter(t => t.planId === currentPlanId.value)
 })
 
-// 任务按状态分组
 const tasksByStatus = computed(() => {
   if (!currentPlanId.value) return emptyTasksByStatus
 
@@ -81,7 +99,6 @@ const tasksByStatus = computed(() => {
     }
   })
 
-  // 每个分组内按顺序排序
   Object.keys(result).forEach(status => {
     result[status as TaskStatus].sort((a, b) => a.order - b.order)
   })
@@ -99,7 +116,6 @@ const taskStats = computed(() => ({
   failed: tasks.value.filter(t => t.status === 'failed').length
 }))
 
-// 看板列配置
 const columns = computed<Array<{ status: TaskStatus; label: string; color: string }>>(() => [
   { status: 'pending', label: t('taskBoard.columns.pending'), color: 'gray' },
   { status: 'in_progress', label: t('taskBoard.columns.in_progress'), color: 'blue' },
@@ -108,40 +124,33 @@ const columns = computed<Array<{ status: TaskStatus; label: string; color: strin
   { status: 'failed', label: t('taskBoard.columns.failed'), color: 'red' }
 ])
 
-// 加载任务数据
 async function loadTasks() {
   if (currentPlanId.value) {
     await taskStore.loadTasks(currentPlanId.value)
   }
 }
 
-// 监听计划变化，加载任务
 watch(currentPlanId, (newPlanId) => {
   if (newPlanId) {
     loadTasks()
   }
 }, { immediate: true })
 
-// 处理任务拖放（跨列）
 async function handleTaskDrop(taskId: string, newStatus: TaskStatus) {
   const task = tasks.value.find(t => t.id === taskId)
   if (!task || task.status === newStatus) return
 
-  // 检查是否正在执行（禁止拖动执行中的任务）
   if (taskExecutionStore.isTaskExecuting(taskId)) {
     return
   }
 
-  // 计算新位置
   const targetColumnTasks = tasksByStatus.value[newStatus]
   const newOrder = targetColumnTasks.length
 
-  // 乐观更新本地状态
   const oldStatus = task.status
   task.status = newStatus
   task.order = newOrder
 
-  // 移动到待办时，清除执行日志
   if (newStatus === 'pending' && oldStatus !== 'pending') {
     try {
       await taskExecutionStore.clearTaskLogs(taskId)
@@ -150,31 +159,30 @@ async function handleTaskDrop(taskId: string, newStatus: TaskStatus) {
     }
   }
 
-  // 拖到 in_progress 时触发 AI 执行
   if (newStatus === 'in_progress' && oldStatus === 'pending') {
     try {
-      // 先更新任务状态
       await taskStore.updateTask(taskId, {
         status: newStatus,
         order: newOrder
       })
 
-      // 更新计划状态为执行中
       if (currentPlanId.value) {
         await planStore.startPlanExecution(currentPlanId.value)
-        // 触发 AI 执行
-        await taskExecutionStore.enqueueTask(currentPlanId.value, taskId)
+        if (isCurrentPlanPaused.value) {
+          await taskExecutionStore.resumeTaskExecution(taskId)
+        } else {
+          await taskExecutionStore.enqueueTask(currentPlanId.value, taskId)
+        }
       }
     } catch (error) {
-      // 回滚
-      task.status = oldStatus
+      // ??
       console.error('Failed to start task execution:', error)
     }
     return
   }
 
   try {
-    // 更新后端
+    // ????
     await taskStore.updateTask(taskId, {
       status: newStatus,
       order: newOrder
@@ -186,7 +194,6 @@ async function handleTaskDrop(taskId: string, newStatus: TaskStatus) {
   }
 }
 
-// 处理任务重排序（同列内）
 async function handleTaskReorder(taskId: string, targetIndex: number) {
   const movedTask = tasks.value.find(t => t.id === taskId)
   if (!movedTask) return
@@ -197,18 +204,16 @@ async function handleTaskReorder(taskId: string, targetIndex: number) {
   const currentIndex = sameStatusTasks.findIndex(t => t.id === taskId)
   if (currentIndex === -1 || currentIndex === targetIndex) return
 
-  // 创建新的排序
   const newTaskList = sameStatusTasks.filter(t => t.id !== taskId)
   const insertIndex = Math.max(0, Math.min(targetIndex, newTaskList.length))
   newTaskList.splice(insertIndex, 0, movedTask)
 
-  // 构建更新项
+  // ?????
   const orderUpdates: TaskOrderItem[] = newTaskList.map((task, index) => ({
     id: task.id,
     order: index
   }))
 
-  // 乐观更新本地状态
   newTaskList.forEach((task, index) => {
     task.order = index
   })
@@ -217,13 +222,12 @@ async function handleTaskReorder(taskId: string, targetIndex: number) {
     // 更新后端
     await taskStore.reorderTasks(orderUpdates)
   } catch (error) {
-    // 回滚：重新加载任务
+    // ?????????
     loadTasks()
     console.error('Failed to reorder tasks:', error)
   }
 }
 
-// 选择任务
 function selectTask(task: Task) {
   taskStore.setCurrentTask(task.id)
   taskExecutionStore.setCurrentViewingTask(task.id)
@@ -231,13 +235,11 @@ function selectTask(task: Task) {
   emit('task-click', task)
 }
 
-// 编辑任务
 function handleTaskEdit(task: Task) {
   editingTask.value = task
   showEditModal.value = true
 }
 
-// 停止任务
 async function handleTaskStop(task: Task) {
   try {
     await taskExecutionStore.stopTaskExecution(task.id)
@@ -246,20 +248,25 @@ async function handleTaskStop(task: Task) {
   }
 }
 
-// 重试任务
+async function handleTaskResume(task: Task) {
+  try {
+    await taskExecutionStore.resumeTaskExecution(task.id)
+  } catch (error) {
+    console.error('Failed to resume task:', error)
+  }
+}
+
 async function handleTaskRetry(task: Task) {
   try {
     if (currentPlanId.value) {
       // 先清除持久化日志
       await taskExecutionStore.clearTaskLogs(task.id)
 
-      // 更新任务状态为 in_progress
       await taskStore.updateTask(task.id, {
         status: 'in_progress',
         errorMessage: undefined
       })
 
-      // 加入执行队列
       await taskExecutionStore.enqueueTask(currentPlanId.value, task.id)
     }
   } catch (error) {
@@ -267,7 +274,6 @@ async function handleTaskRetry(task: Task) {
   }
 }
 
-// 删除任务
 async function handleTaskDelete(task: Task) {
   const confirmed = await confirmDialog.danger(
     t('taskBoard.deleteTaskMessage', { name: task.title }),
@@ -283,7 +289,6 @@ async function handleTaskDelete(task: Task) {
   }
 }
 
-// 一键执行所有待办任务
 async function handleExecuteAll() {
   if (!currentPlanId.value) return
 
@@ -291,13 +296,10 @@ async function handleExecuteAll() {
   if (pendingTasks.length === 0) return
 
   try {
-    // 1. 批量将待办任务状态更新为 in_progress
     await taskStore.batchStartTasks(currentPlanId.value)
 
-    // 2. 更新计划状态为执行中
     await planStore.startPlanExecution(currentPlanId.value)
 
-    // 3. 按顺序将任务加入执行队列（第一个任务会立即执行）
     for (const task of pendingTasks) {
       await taskExecutionStore.enqueueTask(currentPlanId.value, task.id)
     }
@@ -306,34 +308,39 @@ async function handleExecuteAll() {
   }
 }
 
-// 开始执行进行中的任务（程序异常退出后恢复）
+// ?????????????????????
 async function handleStartExecution() {
   if (!currentPlanId.value) return
 
-  const inProgressTasks = tasksByStatus.value.in_progress
-  if (inProgressTasks.length === 0) return
-
   try {
-    // 按顺序将进行中的任务加入执行队列
-    for (const task of inProgressTasks) {
-      await taskExecutionStore.enqueueTask(currentPlanId.value, task.id)
-    }
+    await taskExecutionStore.resumePlanExecutionFlow(currentPlanId.value)
   } catch (error) {
     console.error('Failed to start execution:', error)
   }
 }
 
-// 编辑保存后的回调
+async function handleToggleGlobalExecution() {
+  if (!currentPlanId.value) return
+
+  try {
+    if (isCurrentPlanPaused.value) {
+      await taskExecutionStore.resumePlanExecutionFlow(currentPlanId.value)
+    } else {
+      await taskExecutionStore.pausePlanExecutionFlow(currentPlanId.value)
+    }
+  } catch (error) {
+    console.error('Failed to toggle global execution:', error)
+  }
+}
+
 function handleEditSaved() {
   showEditModal.value = false
   editingTask.value = null
 }
 
-// 打开创建任务对话框
 function openCreateTaskModal() {
   if (!currentPlanId.value) return
 
-  // 重置任务模板
   Object.assign(newTaskTemplate, {
     planId: currentPlanId.value,
     title: '',
@@ -352,7 +359,6 @@ function openCreateTaskModal() {
   showCreateModal.value = true
 }
 
-// 处理创建任务
 async function handleTaskCreated(taskData: Partial<Task>) {
   if (!currentPlanId.value) return
 
@@ -374,7 +380,6 @@ async function handleTaskCreated(taskData: Partial<Task>) {
   }
 }
 
-// 标记计划为就绪状态
 async function markPlanAsReady() {
   if (!currentPlanId.value) return
 
@@ -395,16 +400,14 @@ async function markPlanAsReady() {
         </h3>
       </div>
       <div class="header-right">
-        <!-- 手动模式+规划状态：显示标记就绪按钮 -->
         <button
           v-if="isManualMode && currentPlan?.status === 'planning' && tasks.length > 0"
           class="btn btn-secondary"
           @click="markPlanAsReady"
         >
-          标记就绪
+          ????
         </button>
 
-        <!-- 任务统计 -->
         <div class="task-stats">
           <span class="stat-item completed">{{ t('taskBoard.stats.completed', { count: taskStats.completed }) }}</span>
           <span class="stat-item in-progress">{{ t('taskBoard.stats.inProgress', { count: taskStats.inProgress }) }}</span>
@@ -433,20 +436,22 @@ async function markPlanAsReady() {
         :title="column.label"
         :color="column.color"
         :tasks="tasksByStatus[column.status] || []"
+        :global-paused="column.status === 'in_progress' ? isCurrentPlanPaused : false"
         @task-drop="handleTaskDrop"
         @task-click="selectTask"
         @task-reorder="handleTaskReorder"
         @task-edit="handleTaskEdit"
         @task-stop="handleTaskStop"
+        @task-resume="handleTaskResume"
         @task-retry="handleTaskRetry"
         @task-delete="handleTaskDelete"
         @execute-all="handleExecuteAll"
         @start-execution="handleStartExecution"
+        @toggle-global-execution="handleToggleGlobalExecution"
         @add-task="openCreateTaskModal"
       />
     </div>
 
-    <!-- 编辑任务对话框 -->
     <TaskEditModal
       v-if="editingTask"
       v-model:visible="showEditModal"
@@ -454,7 +459,6 @@ async function markPlanAsReady() {
       @saved="handleEditSaved"
     />
 
-    <!-- 创建任务对话框 -->
     <TaskEditModal
       v-model:visible="showCreateModal"
       :task="newTaskTemplate as Task"

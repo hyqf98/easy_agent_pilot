@@ -6,6 +6,7 @@ export type SettingsTab =
   | 'agents'
   | 'agentConfig'
   | 'integration'
+  | 'appUpdate'
   | 'theme'
   | 'data'
   | 'logs'

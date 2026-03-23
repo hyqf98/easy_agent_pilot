@@ -20,8 +20,6 @@ jobs:
             args: '--target x86_64-apple-darwin'
           - platform: 'ubuntu-22.04'
             args: ''
-          - platform: 'ubuntu-22.04-arm'
-            args: ''
           - platform: 'windows-latest'
             args: ''
 
@@ -33,7 +31,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04' || matrix.platform == 'ubuntu-22.04-arm'
+        if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
@@ -75,6 +73,64 @@ jobs:
       - name: install frontend dependencies
         run: pnpm install --frozen-lockfile --prefer-offline
 
+      - name: validate updater signing secret
+        shell: bash
+        run: |
+          secret='${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}'
+          secret="$(printf '%s' "$secret" | tr -d '\r\n\t ')"
+
+          if [ -z "$secret" ]; then
+            echo "::error::Missing repository secret TAURI_SIGNING_PRIVATE_KEY"
+            echo "::error::Go to Settings > Secrets and variables > Actions > Repository secrets"
+            exit 1
+          fi
+
+          if [[ "$secret" != dW50cnVzdGVkIGNvbW1lbnQ6* ]]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY does not look like a Tauri updater private key file content"
+            echo "::error::Paste the full content of .local/signing/tauri-updater-private.key into the repository secret"
+            echo "::error::Do not paste a local file path or the public key"
+            exit 1
+          fi
+
+          SECRET_TO_VALIDATE="$secret" python - <<'PY'
+          import base64
+          import os
+          import sys
+
+          secret = os.environ["SECRET_TO_VALIDATE"]
+          try:
+              decoded = base64.b64decode(secret, validate=True).decode("utf-8", errors="strict")
+          except Exception as exc:
+              print(f"::error::TAURI_SIGNING_PRIVATE_KEY is not valid base64: {exc}")
+              print("::error::Re-copy the exact private key file content, including trailing '=' padding if present")
+              sys.exit(1)
+
+          if not decoded.startswith("untrusted comment:"):
+              print("::error::Decoded updater key does not start with the expected Tauri key header")
+              print("::error::Make sure you pasted the private key, not the public key")
+              sys.exit(1)
+
+          if "encrypted secret key" in decoded and not os.environ.get("TAURI_SIGNING_PRIVATE_KEY_PASSWORD_SECRET"):
+              print("::error::Encrypted updater private key requires TAURI_SIGNING_PRIVATE_KEY_PASSWORD")
+              sys.exit(1)
+          PY
+
+          {
+            echo "TAURI_SIGNING_PRIVATE_KEY<<EOF"
+            echo "$secret"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+          if [ -n "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" ]; then
+            {
+              echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD<<EOF"
+              echo '${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}'
+              echo "EOF"
+            } >> "$GITHUB_ENV"
+          fi
+        env:
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD_SECRET: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
       - uses: tauri-apps/tauri-action@v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -84,17 +140,18 @@ jobs:
           releaseBody: |
             ## EasyAgentPilot ${{ github.ref_name }}
 
-            ### 下载说明
-            - **macOS**: 下载 `.dmg` 文件 (ARM Mac 选 aarch64，Intel Mac 选 x64)
-            - **Windows**: 下载 `.msi` 或 `.exe` (NSIS 安装程序)
-            - **Linux**: 下载 `.AppImage` (通用) 或 `.deb` (Debian/Ubuntu) 或 `.rpm` (Fedora/RHEL)
+            ### Downloads
+            - **macOS**: Use the `.dmg` installer. Choose `aarch64` for Apple Silicon and `x64` for Intel.
+            - **Windows**: Use the `-setup.exe` installer.
+            - **Linux**: Use `.deb` for Ubuntu/Debian, or `.AppImage` for Arch Linux and other portable distributions.
 
-            ### 支持的平台
+            ### Supported Platforms
             - macOS 10.13+
             - Windows 10+
-            - Ubuntu 20.04+, Debian 11+, Fedora 36+, Arch Linux 等
+            - Ubuntu 20.04+, Debian 11+, Fedora 36+, Arch Linux
 
-            详细更新日志请查看 [CHANGELOG.md](./CHANGELOG.md)
+            In-app auto update becomes visible after this draft release is published and `latest.json` is available.
           releaseDraft: true
           prerelease: false
+          includeUpdaterJson: true
           args: ${{ matrix.args }}

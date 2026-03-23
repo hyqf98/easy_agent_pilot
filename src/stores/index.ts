@@ -21,6 +21,7 @@ export {
 } from './message'
 export type { FileEditTrace, FileEditRange, FileEditPreview, FileEditChangeType } from '@/types/fileTrace'
 export * from './settings'
+export * from './appUpdate'
 export * from './theme'
 export * from './layout'
 export * from './ui'

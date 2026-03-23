@@ -374,15 +374,14 @@ pub fn list_messages(
     // 构建查询语句
     let (sql, params): (String, Vec<Box<dyn rusqlite::ToSql>>) = if let Some(before_time) = before {
         (
-            format!(
-                r#"
+            r#"
                 SELECT id, session_id, role, content, attachments, status, tokens, error_message, tool_calls, thinking, edit_traces, runtime_notices, compression_metadata, created_at
                 FROM messages
                 WHERE session_id = ?1 AND created_at < ?2
                 ORDER BY created_at DESC
                 LIMIT ?3
                 "#
-            ),
+            .to_string(),
             vec![
                 Box::new(session_id.clone()),
                 Box::new(before_time),
@@ -391,15 +390,14 @@ pub fn list_messages(
         )
     } else {
         (
-            format!(
-                r#"
+            r#"
                 SELECT id, session_id, role, content, attachments, status, tokens, error_message, tool_calls, thinking, edit_traces, runtime_notices, compression_metadata, created_at
                 FROM messages
                 WHERE session_id = ?1
                 ORDER BY created_at DESC
                 LIMIT ?2
                 "#
-            ),
+            .to_string(),
             vec![Box::new(session_id.clone()), Box::new(page_limit as i32)],
         )
     };
