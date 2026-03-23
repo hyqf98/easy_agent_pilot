@@ -11,7 +11,7 @@ import ExecutionTimeline from '@/components/message/ExecutionTimeline.vue'
 import { useOverlayDismiss } from '@/composables/useOverlayDismiss'
 import type { AITaskItem, DynamicFormSchema, PlanSplitLogRecord, TaskResplitConfig } from '@/types/plan'
 import type { TimelineEntry } from '@/types/timeline'
-import { buildToolCallFromLogs, extractDynamicFormSchemas } from '@/utils/toolCallLog'
+import { buildToolCallMapFromLogs, extractDynamicFormSchemas } from '@/utils/toolCallLog'
 import { buildUsageNotice } from '@/utils/runtimeNotice'
 
 const planStore = usePlanStore()
@@ -80,11 +80,17 @@ const footerHint = computed(() => {
   return '请根据上方 AI 动态表单逐步补充需求'
 })
 
+const sortedSplitLogs = computed(() => [...taskSplitStore.logs].sort((left, right) =>
+  compareTimestamp(left.createdAt, right.createdAt)
+))
+
+const toolCallMap = computed(() => buildToolCallMapFromLogs(sortedSplitLogs.value, {
+  fallbackStatus: isSessionRunning.value ? 'running' : 'success'
+}))
+
 const latestRuntimeLog = computed(() => {
-  if (taskSplitStore.logs.length === 0) return null
-  return [...taskSplitStore.logs].sort((left, right) =>
-    compareTimestamp(left.createdAt, right.createdAt)
-  )[taskSplitStore.logs.length - 1] ?? null
+  if (sortedSplitLogs.value.length === 0) return null
+  return sortedSplitLogs.value[sortedSplitLogs.value.length - 1] ?? null
 })
 
 const runtimeLogStatusTextResolvers: Partial<Record<PlanSplitLogRecord['type'], (log: PlanSplitLogRecord) => string>> = {
@@ -92,9 +98,7 @@ const runtimeLogStatusTextResolvers: Partial<Record<PlanSplitLogRecord['type'], 
   thinking_start: () => '正在进入思考阶段...',
   system: () => '正在加载运行扩展...',
   tool_use: (log) => {
-    const toolCall = buildToolCallFromLogs(log, taskSplitStore.logs, {
-      fallbackStatus: isSessionRunning.value ? 'running' : 'success'
-    })
+    const toolCall = toolCallMap.value.get(log.id)
     return toolCall ? `正在调用工具 ${toolCall.name}...` : '正在调用工具...'
   },
   tool_input_delta: () => '工具参数正在流式更新...',
@@ -136,7 +140,26 @@ function parseLogMetadata(log: PlanSplitLogRecord): Record<string, unknown> | nu
   if (!log.metadata) return null
   if (typeof log.metadata === 'string') {
     try {
-      return JSON.parse(log.metadata) as Record<string, unknown>
+      const parsed = JSON.parse(log.metadata) as Record<string, unknown>
+      const rawMetadata = typeof parsed.rawMetadata === 'string'
+        ? (() => {
+            try {
+              const nested = JSON.parse(parsed.rawMetadata) as unknown
+              return nested && typeof nested === 'object' && !Array.isArray(nested)
+                ? nested as Record<string, unknown>
+                : null
+            } catch {
+              return null
+            }
+          })()
+        : null
+
+      return rawMetadata
+        ? {
+            ...rawMetadata,
+            ...parsed
+          }
+        : parsed
     } catch {
       return null
     }
@@ -157,7 +180,7 @@ function buildSummaryValueMap(schema: DynamicFormSchema, content: string): Recor
 
   for (const rawLine of content.split('\n')) {
     const line = rawLine.trimEnd()
-    const fullWidthSeparatorIndex = line.indexOf('?')
+    const fullWidthSeparatorIndex = line.indexOf('：')
     const asciiSeparatorIndex = line.indexOf(':')
     const separatorIndex = fullWidthSeparatorIndex >= 0 ? fullWidthSeparatorIndex : asciiSeparatorIndex
     const candidateLabel = separatorIndex >= 0 ? line.slice(0, separatorIndex).trim() : ''
@@ -202,7 +225,7 @@ function parseFieldSummaryValue(
       return parseOptionValue(normalizedValue)
     case 'multiselect':
       return normalizedValue
-        .split('?')
+        .split(/[、,，]/)
         .map(item => item.trim())
         .filter(Boolean)
         .map(parseOptionValue)
@@ -212,7 +235,7 @@ function parseFieldSummaryValue(
       return Number.isFinite(numericValue) ? numericValue : normalizedValue
     }
     case 'checkbox':
-      return ['true', '1', 'yes', 'on', '?'].includes(normalizedValue.toLowerCase())
+      return ['true', '1', 'yes', 'on', 'checked', '是'].includes(normalizedValue.toLowerCase())
     default:
       return normalizedValue
   }
@@ -302,9 +325,7 @@ function extractFormRequestTurnFromLog(log: PlanSplitLogRecord): FormRequestTurn
     }
   }
 
-  const toolCall = buildToolCallFromLogs(log, taskSplitStore.logs, {
-    fallbackStatus: isSessionRunning.value ? 'running' : 'success'
-  })
+  const toolCall = toolCallMap.value.get(log.id)
   if (!toolCall) {
     return null
   }
@@ -320,11 +341,8 @@ function extractFormRequestTurnFromLog(log: PlanSplitLogRecord): FormRequestTurn
 
 const formRequestTurns = computed<FormRequestTurn[]>(() => {
   const turns: FormRequestTurn[] = []
-  const sortedLogs = [...taskSplitStore.logs].sort((left, right) =>
-    compareTimestamp(left.createdAt, right.createdAt)
-  )
 
-  for (const log of sortedLogs) {
+  for (const log of sortedSplitLogs.value) {
     const turn = extractFormRequestTurnFromLog(log)
     if (turn) {
       turns.push(turn)
@@ -363,11 +381,14 @@ const hasRuntimeSystemLog = computed(() =>
 )
 
 const usageNoticeEntry = computed<TimelineEntry | null>(() => {
-  const usageLogs = [...taskSplitStore.logs]
+  const usageLogs = sortedSplitLogs.value
     .filter(log => log.type === 'usage' || log.type === 'message_start')
-    .sort((left, right) => compareTimestamp(left.createdAt, right.createdAt))
 
-  const usageState: { model?: string, inputTokens?: number, outputTokens?: number } = {}
+  const usageState: { model?: string, inputTokens?: number, outputTokens?: number } = {
+    model: taskSplitStore.context?.modelId
+      || taskSplitStore.usageModelHint
+      || undefined
+  }
   for (const log of usageLogs) {
     const metadata = parseLogMetadata(log)
     const model = typeof metadata?.model === 'string' ? metadata.model : undefined
@@ -507,11 +528,7 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
     entries.push(usageNoticeEntry.value)
   }
 
-  const sortedLogs = [...taskSplitStore.logs].sort((left, right) =>
-    compareTimestamp(left.createdAt, right.createdAt)
-  )
-
-  for (const log of sortedLogs) {
+  for (const log of sortedSplitLogs.value) {
     if (!['content', 'thinking', 'thinking_start', 'tool_use', 'tool_input_delta', 'tool_result', 'usage', 'message_start', 'error', 'system'].includes(log.type)) {
       lastThinkingEntry = null
       lastAssistantContentEntry = null
@@ -596,9 +613,7 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
     }
 
     if (log.type === 'tool_use') {
-      const toolCall = buildToolCallFromLogs(log, taskSplitStore.logs, {
-        fallbackStatus: animateLiveEntries ? 'running' : 'success'
-      })
+      const toolCall = toolCallMap.value.get(log.id)
       if (!toolCall) continue
       const normalizedToolName = toolCall.name.toLowerCase()
       const isStructuredOutput = normalizedToolName === 'structuredoutput'
@@ -715,23 +730,17 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
 })
 
 const messageRenderState = computed(() => {
-  const timelineSignature = timelineEntries.value
-    .map(entry => [
-      entry.id,
-      entry.type,
-      entry.timestamp || '',
-      entry.content?.length ?? 0,
-      entry.toolCall?.status ?? '',
-      entry.toolCall?.result?.length ?? 0,
-      entry.toolCall ? Object.keys(entry.toolCall.arguments || {}).length : 0,
-      entry.formSchema?.formId ?? '',
-      entry.animate ? '1' : '0'
-    ].join(':'))
-    .join('|')
+  const latestEntry = timelineEntries.value[timelineEntries.value.length - 1]
   return [
     planStore.splitDialogVisible,
     timelineEntries.value.length,
-    timelineSignature,
+    latestEntry?.id ?? '',
+    latestEntry?.type ?? '',
+    latestEntry?.timestamp ?? '',
+    latestEntry?.content?.length ?? 0,
+    latestEntry?.toolCall?.status ?? '',
+    latestEntry?.toolCall?.result?.length ?? 0,
+    latestEntry?.formSchema?.formId ?? '',
     taskSplitStore.isProcessing,
     activeFormSchema.value?.formId ?? '',
     showPreview.value

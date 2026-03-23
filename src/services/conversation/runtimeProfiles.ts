@@ -94,7 +94,7 @@ function normalizeRuntimeKey(agent: Pick<AgentConfig, 'type' | 'provider' | 'nam
     return null
   }
 
-  return `${agent.type}-${provider}` as AgentRuntimeKey
+  return `${provider}-${agent.type}` as AgentRuntimeKey
 }
 
 function normalizeCliModelId(modelId?: string): string | undefined {

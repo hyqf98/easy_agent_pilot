@@ -42,11 +42,11 @@ const VIRTUAL_OVERSCAN_PX = 1200
 const BOTTOM_SCROLL_BUFFER = 160
 
 const isUserAtBottom = ref(true)
-// 距离底部的阈值（像素），小于此��视为在底部
+// 距离底部的阈值（像素），小于此值视为在底部
 const SCROLL_THRESHOLD = 100
 const LOAD_MORE_THRESHOLD = 100
 const previousMessageCount = ref(0)
-// 加载更多时保存滚动位�?
+// 加载更多时保存滚动位置
 const savedScrollHeight = ref(0)
 // 是否显示回到底部按钮
 const showScrollToBottom = ref(false)
@@ -65,25 +65,28 @@ const currentIsSending = computed(() => {
 
 const shouldVirtualize = computed(() => currentMessages.value.length > VIRTUALIZE_THRESHOLD)
 
-const currentMessageSignature = computed(() => currentMessages.value
-  .map(message => [
-    message.id,
-    message.status,
-    message.content.length,
-    message.toolCalls?.map(toolCall => [
-      toolCall.id,
-      toolCall.status,
-      Object.keys(toolCall.arguments || {}).length,
-      toolCall.result?.length ?? 0,
-      toolCall.errorMessage?.length ?? 0
-    ].join(':')).join(',') ?? '',
-    message.editTraces?.length ?? 0,
-    message.attachments?.length ?? 0,
-    message.thinking?.length ?? 0,
-    message.thinkingActive ? 1 : 0,
-    message.runtimeNotices?.map(notice => `${notice.id}:${notice.title}:${notice.content.length}`).join(',') ?? ''
-  ].join(':'))
-  .join('|'))
+const latestMessageActivity = computed(() => {
+  const messages = currentMessages.value
+  const latestMessage = messages[messages.length - 1]
+  const latestToolCalls = latestMessage?.toolCalls
+  const latestToolCall = latestToolCalls ? latestToolCalls[latestToolCalls.length - 1] : undefined
+
+  return [
+    messages.length,
+    latestMessage?.id ?? '',
+    latestMessage?.status ?? '',
+    latestMessage?.content.length ?? 0,
+    latestMessage?.thinking?.length ?? 0,
+    latestMessage?.thinkingActive ? 1 : 0,
+    latestMessage?.editTraces?.length ?? 0,
+    latestMessage?.attachments?.length ?? 0,
+    latestMessage?.runtimeNotices?.length ?? 0,
+    latestToolCall?.id ?? '',
+    latestToolCall?.status ?? '',
+    latestToolCall?.result?.length ?? 0,
+    latestToolCall?.errorMessage?.length ?? 0
+  ].join(':')
+})
 
 const currentPagination = computed(() => {
   const targetSessionId = props.sessionId || sessionStore.currentSessionId
@@ -162,7 +165,7 @@ const visibleMessages = computed(() => {
 const checkIsAtBottom = () => {
   if (!listRef.value) return true
   const { scrollTop, scrollHeight, clientHeight } = listRef.value
-  // 距离底部小于阈��则视为在底�?
+  // 距离底部小于阈值则视为在底部
   return scrollHeight - scrollTop - clientHeight < SCROLL_THRESHOLD
 }
 
@@ -254,11 +257,12 @@ watch(() => props.sessionId || sessionStore.currentSessionId, async (sessionId) 
   }
 }, { immediate: true })
 
-watch(currentMessageSignature, async () => {
+watch(latestMessageActivity, async () => {
   const messages = currentMessages.value
   const currentCount = messages.length
   const hasNewMessage = currentCount > previousMessageCount.value
-  const hasStreamingMessage = messages.some(message => message.status === 'streaming')
+  const latestMessage = messages[messages.length - 1]
+  const hasStreamingMessage = latestMessage?.status === 'streaming'
 
   if (isLoadingMore.value && savedScrollHeight.value > 0 && listRef.value) {
     await nextTick()
@@ -423,7 +427,7 @@ const handleOpenEditTrace = (messageId: string, traceId: string) => {
       />
     </div>
 
-    <!-- 空状�?-->
+    <!-- 空状态 -->
     <div
       v-if="currentMessages.length === 0"
       class="message-list__empty"

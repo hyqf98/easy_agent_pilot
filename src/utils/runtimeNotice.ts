@@ -41,6 +41,14 @@ interface RuntimeNoticeDescriptor {
   summarize: (lines: RuntimeNoticeLine[]) => string[]
 }
 
+interface CachedRuntimeNoticeEntry {
+  expiresAt: number
+  value: Promise<RuntimeNotice | null>
+}
+
+const ENVIRONMENT_NOTICE_CACHE_TTL_MS = 10_000
+const environmentNoticeCache = new Map<string, CachedRuntimeNoticeEntry>()
+
 function formatNameList(label: string, names: string[], maxCount: number = 5): string | null {
   if (names.length === 0) return null
 
@@ -74,6 +82,21 @@ function parseRuntimeNoticeLines(content: string): RuntimeNoticeLine[] {
       }
     })
     .filter((line): line is RuntimeNoticeLine => Boolean(line?.label && line.value))
+}
+
+function isRuntimeNoticeLineLabel(label: string): boolean {
+  return [
+    '模型',
+    '输入 Token',
+    '输出 Token',
+    '输入',
+    '输出',
+    'Skills',
+    'Plugins',
+    'MCP',
+    '当前任务',
+    '状态'
+  ].some(keyword => label.includes(keyword))
 }
 
 function formatCompactNumber(value: number): string {
@@ -150,6 +173,15 @@ export async function buildCliEnvironmentNotice(agent: AgentConfig): Promise<Run
     return null
   }
 
+  const cacheKey = `${cliType}:${cliPath}`
+  const now = Date.now()
+  const cachedEntry = environmentNoticeCache.get(cacheKey)
+  if (cachedEntry && cachedEntry.expiresAt > now) {
+    const notice = await cachedEntry.value
+    return notice ? { ...notice } : null
+  }
+
+  const loader = (async (): Promise<RuntimeNotice | null> => {
   try {
     const [scanResult, cliConfig] = await Promise.all([
       invoke<CliConfigScanResult>('scan_cli_config', { cliPath, cliType }),
@@ -180,6 +212,20 @@ export async function buildCliEnvironmentNotice(agent: AgentConfig): Promise<Run
     console.warn('[runtimeNotice] Failed to build CLI environment notice:', error)
     return null
   }
+  })()
+
+  environmentNoticeCache.set(cacheKey, {
+    expiresAt: now + ENVIRONMENT_NOTICE_CACHE_TTL_MS,
+    value: loader
+  })
+
+  try {
+    const notice = await loader
+    return notice ? { ...notice } : null
+  } catch (error) {
+    environmentNoticeCache.delete(cacheKey)
+    throw error
+  }
 }
 
 export function buildRuntimeNoticeFromSystemContent(content?: string | null): RuntimeNotice | null {
@@ -198,6 +244,13 @@ export function buildRuntimeNoticeFromSystemContent(content?: string | null): Ru
 
   if (!title || !body) {
     return null
+  }
+
+  if (!hasMarkdownHeader) {
+    const parsedLines = parseRuntimeNoticeLines(body)
+    if (parsedLines.length === 0 || !parsedLines.some(line => isRuntimeNoticeLineLabel(line.label))) {
+      return null
+    }
   }
 
   return {

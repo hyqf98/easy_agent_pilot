@@ -57,13 +57,6 @@ export const SETTINGS_TAB_DESCRIPTORS: SettingsTabDescriptor[] = [
     layout: 'default'
   },
   {
-    id: 'appUpdate',
-    labelKey: 'settings.nav.appUpdate',
-    icon: 'download',
-    component: markRaw(AppUpdateSettings),
-    layout: 'default'
-  },
-  {
     id: 'sessions',
     labelKey: 'settings.nav.sessions',
     icon: 'history',
@@ -97,6 +90,13 @@ export const SETTINGS_TAB_DESCRIPTORS: SettingsTabDescriptor[] = [
     icon: 'scroll-text',
     component: markRaw(LogSettings),
     layout: 'full'
+  },
+  {
+    id: 'appUpdate',
+    labelKey: 'settings.nav.appUpdate',
+    icon: 'download',
+    component: markRaw(AppUpdateSettings),
+    layout: 'default'
   }
 ]
 

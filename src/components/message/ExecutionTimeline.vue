@@ -128,7 +128,7 @@ const renderBlocks = computed<TimelineRenderBlock[]>(() => {
         :class="{ 'execution-timeline__tool-calls-shell--scrollable': shouldClampToolGroup(block.entries) }"
       >
         <div class="execution-timeline__tool-calls-head">
-          <span class="execution-timeline__tool-calls-title">宸ュ叿璋冪敤</span>
+          <span class="execution-timeline__tool-calls-title">工具调用</span>
           <span class="execution-timeline__tool-calls-count">{{ block.entries.length }}</span>
         </div>
         <div class="execution-timeline__tool-calls">

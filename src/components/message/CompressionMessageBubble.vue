@@ -1,19 +1,18 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { Message } from '@/stores/message'
+import { useMessageStore, type CompressionMetadata, type Message } from '@/stores/message'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 import { EaIcon } from '@/components/common'
 import { formatTokenCount } from '@/stores/token'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const props = defineProps<{ message: Message }>()
-
-// 是否展开摘要
-const isExpanded = ref(false)
+const messageStore = useMessageStore()
 
 // 压缩消息元数据
 const metadata = computed(() => props.message.compressionMetadata)
+const isExpanded = computed(() => Boolean(metadata.value?.panelExpanded))
 
 // 是否有工具调用摘要
 const hasToolCalls = computed(() =>
@@ -24,7 +23,7 @@ const hasToolCalls = computed(() =>
 const formattedTime = computed(() => {
   if (!metadata.value?.compressedAt) return ''
   const date = new Date(metadata.value.compressedAt)
-  return date.toLocaleString('zh-CN', {
+  return date.toLocaleString(locale.value === 'zh-CN' ? 'zh-CN' : 'en-US', {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -49,7 +48,18 @@ const strategyText = computed(() => {
 
 // 切换展开状态
 const toggleExpand = () => {
-  isExpanded.value = !isExpanded.value
+  const nextMetadata: CompressionMetadata = {
+    compressedAt: metadata.value?.compressedAt || props.message.createdAt,
+    originalMessageCount: metadata.value?.originalMessageCount || 0,
+    originalTokenCount: metadata.value?.originalTokenCount || 0,
+    strategy: metadata.value?.strategy || 'simple',
+    toolCallsSummary: metadata.value?.toolCallsSummary,
+    panelExpanded: !isExpanded.value
+  }
+
+  messageStore.updateMessageBuffered(props.message.id, {
+    compressionMetadata: nextMetadata
+  }, { immediate: true })
 }
 </script>
 
@@ -144,7 +154,7 @@ const toggleExpand = () => {
             />
           </span>
           <span class="compression-bubble__tool-name">{{ tool.name }}</span>
-          <span class="compression-bubble__tool-count">{{ tool.count }}x</span>
+          <span class="compression-bubble__tool-count">{{ t('compression.toolCount', { count: tool.count }) }}</span>
         </div>
       </div>
     </div>
@@ -164,7 +174,7 @@ const toggleExpand = () => {
   display: flex;
   flex-direction: column;
   width: 100%;
-  max-width: 80%;
+  max-width: min(46rem, 68%);
   margin: 0 auto;
   background-color: var(--color-bg-tertiary);
   border: 1px solid var(--color-border);
@@ -304,6 +314,12 @@ const toggleExpand = () => {
   background-color: var(--color-bg-tertiary);
   padding: 2px 6px;
   border-radius: var(--radius-sm);
+}
+
+@media (max-width: 768px) {
+  .compression-bubble {
+    max-width: 100%;
+  }
 }
 
 .compression-bubble__no-tools {

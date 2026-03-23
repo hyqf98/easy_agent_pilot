@@ -43,6 +43,7 @@ export interface CompressionMetadata {
   originalTokenCount: number
   strategy: CompressionStrategy
   toolCallsSummary?: ToolCallSummary[]
+  panelExpanded?: boolean
 }
 
 export interface Message {
@@ -108,6 +109,10 @@ interface PaginatedRustMessages {
 function resolveRawMessageCreatedAt(message?: RustMessage): string | null {
   if (!message) return null
   return message.created_at ?? message.createdAt ?? null
+}
+
+function compareMessageCreatedAt(left: Pick<Message, 'createdAt'>, right: Pick<Message, 'createdAt'>): number {
+  return new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
 }
 
 function dedupeMessagesById(items: Message[]): Message[] {
@@ -203,6 +208,31 @@ function finalizeToolCallsForStatus(
   })
 }
 
+function buildLatestAssistantTraceMap(
+  messages: Message[]
+): Map<string, { traceId: string, messageId: string, timestamp: string }> {
+  const traceMap = new Map<string, { traceId: string, messageId: string, timestamp: string }>()
+
+  for (const message of messages) {
+    if (message.role !== 'assistant' || !message.editTraces?.length) {
+      continue
+    }
+
+    for (const trace of message.editTraces) {
+      const existing = traceMap.get(trace.filePath)
+      if (!existing || existing.timestamp <= trace.timestamp) {
+        traceMap.set(trace.filePath, {
+          traceId: trace.id,
+          messageId: message.id,
+          timestamp: trace.timestamp
+        })
+      }
+    }
+  }
+
+  return traceMap
+}
+
 function transformMessage(rustMsg: RustMessage): Message {
   const rawToolCalls = rustMsg.toolCalls ?? rustMsg.tool_calls
   // 转换 tool calls
@@ -275,6 +305,8 @@ export const useMessageStore = defineStore('message', () => {
   const messages = ref<Message[]>([])
   const isLoading = ref(false)
   const pagination = ref<Map<string, PaginationState>>(new Map())
+  const sessionMessages = ref<Map<string, Message[]>>(new Map())
+  const latestAssistantTraceBySession = ref<Map<string, Map<string, { traceId: string, messageId: string, timestamp: string }>>>(new Map())
   const pendingMessageUpdates = new Map<string, Partial<Message>>()
   const pendingMessageTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const inFlightMessageFlushes = new Map<string, Promise<void>>()
@@ -282,57 +314,8 @@ export const useMessageStore = defineStore('message', () => {
   // 默认分页大小
   const PAGE_SIZE = 20
 
-  // Getters
-  const messagesBySessionMap = computed(() => {
-    const grouped = new Map<string, Message[]>()
-
-    for (const message of messages.value) {
-      const sessionMessages = grouped.get(message.sessionId)
-      if (sessionMessages) {
-        sessionMessages.push(message)
-      } else {
-        grouped.set(message.sessionId, [message])
-      }
-    }
-
-    for (const sessionMessages of grouped.values()) {
-      sessionMessages.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
-    }
-
-    return grouped
-  })
-
-  const latestAssistantTraceBySession = computed(() => {
-    const grouped = new Map<string, Map<string, { traceId: string, messageId: string, timestamp: string }>>()
-
-    for (const [sessionId, sessionMessages] of messagesBySessionMap.value.entries()) {
-      const traceMap = new Map<string, { traceId: string, messageId: string, timestamp: string }>()
-
-      for (const message of sessionMessages) {
-        if (message.role !== 'assistant' || !message.editTraces?.length) {
-          continue
-        }
-
-        for (const trace of message.editTraces) {
-          const existing = traceMap.get(trace.filePath)
-          if (!existing || existing.timestamp <= trace.timestamp) {
-            traceMap.set(trace.filePath, {
-              traceId: trace.id,
-              messageId: message.id,
-              timestamp: trace.timestamp
-            })
-          }
-        }
-      }
-
-      grouped.set(sessionId, traceMap)
-    }
-
-    return grouped
-  })
-
   const messagesBySession = computed(() => {
-    return (sessionId: string) => messagesBySessionMap.value.get(sessionId) ?? EMPTY_MESSAGES
+    return (sessionId: string) => sessionMessages.value.get(sessionId) ?? EMPTY_MESSAGES
   })
 
   const getLatestAssistantTraceIdsByFile = (sessionId: string) => {
@@ -380,6 +363,22 @@ export const useMessageStore = defineStore('message', () => {
     return input
   }
 
+  function setSessionMessages(sessionId: string, nextMessages: Message[]): void {
+    const normalizedMessages = dedupeMessagesById(nextMessages).sort(compareMessageCreatedAt)
+    sessionMessages.value.set(sessionId, normalizedMessages)
+    latestAssistantTraceBySession.value.set(sessionId, buildLatestAssistantTraceMap(normalizedMessages))
+  }
+
+  function clearSessionDerivedState(sessionId: string): void {
+    sessionMessages.value.delete(sessionId)
+    latestAssistantTraceBySession.value.delete(sessionId)
+  }
+
+  function updateGlobalMessagesForSession(sessionId: string, nextSessionMessages: Message[]): void {
+    const otherSessionMessages = messages.value.filter(message => message.sessionId !== sessionId)
+    messages.value = [...otherSessionMessages, ...nextSessionMessages]
+  }
+
   function applyMessageUpdatesLocally(id: string, updates: Partial<Message>): void {
     const index = messages.value.findIndex(message => message.id === id)
     if (index === -1) {
@@ -393,11 +392,26 @@ export const useMessageStore = defineStore('message', () => {
       nextStatus
     )
 
-    messages.value[index] = {
+    const nextMessage = {
       ...currentMessage,
       ...updates,
       toolCalls: nextToolCalls
     }
+    messages.value[index] = nextMessage
+
+    const currentSessionMessages = sessionMessages.value.get(currentMessage.sessionId)
+    if (!currentSessionMessages) {
+      return
+    }
+
+    const sessionIndex = currentSessionMessages.findIndex(message => message.id === id)
+    if (sessionIndex < 0) {
+      return
+    }
+
+    const nextSessionMessages = [...currentSessionMessages]
+    nextSessionMessages[sessionIndex] = nextMessage
+    setSessionMessages(currentMessage.sessionId, nextSessionMessages)
   }
 
   function mergeBufferedMessageUpdate(
@@ -524,11 +538,8 @@ export const useMessageStore = defineStore('message', () => {
       })
 
       const nextSessionMessages = result.messages.map(transformMessage)
-      const otherSessionMessages = messages.value.filter(message => message.sessionId !== sessionId)
-      messages.value = dedupeMessagesById([
-        ...otherSessionMessages,
-        ...nextSessionMessages
-      ])
+      updateGlobalMessagesForSession(sessionId, nextSessionMessages)
+      setSessionMessages(sessionId, nextSessionMessages)
 
       // 更新分页状态
       const oldestMessage = result.messages[0]
@@ -540,7 +551,8 @@ export const useMessageStore = defineStore('message', () => {
       })
     } catch (error) {
       console.error('Failed to load messages:', error)
-      messages.value = []
+      updateGlobalMessagesForSession(sessionId, [])
+      clearSessionDerivedState(sessionId)
       notificationStore.databaseError(
         '加载消息列表失败',
         getErrorMessage(error),
@@ -581,13 +593,13 @@ export const useMessageStore = defineStore('message', () => {
 
       // 将新加载的消息添加到当前会话列表开头，同时保留其他会话消息
       const newMessages = result.messages.map(transformMessage)
-      const otherSessionMessages = messages.value.filter(m => m.sessionId !== sessionId)
-      const currentSessionMessages = messages.value.filter(m => m.sessionId === sessionId)
-      messages.value = dedupeMessagesById([
-        ...otherSessionMessages,
+      const currentSessionMessages = sessionMessages.value.get(sessionId) ?? EMPTY_MESSAGES
+      const nextSessionMessages = dedupeMessagesById([
         ...newMessages,
         ...currentSessionMessages
-      ])
+      ]).sort(compareMessageCreatedAt)
+      updateGlobalMessagesForSession(sessionId, nextSessionMessages)
+      setSessionMessages(sessionId, nextSessionMessages)
 
       // 更新分页状态
       const oldestMessage = result.messages[0]
@@ -639,6 +651,8 @@ export const useMessageStore = defineStore('message', () => {
       const rustMsg = await invoke<RustMessage>('create_message', { input })
       const newMessage = transformMessage(rustMsg)
       messages.value.push(newMessage)
+      const currentSessionMessages = sessionMessages.value.get(newMessage.sessionId) ?? EMPTY_MESSAGES
+      setSessionMessages(newMessage.sessionId, [...currentSessionMessages, newMessage])
       return newMessage
     } catch (error) {
       console.error('Failed to add message:', error)
@@ -675,7 +689,15 @@ export const useMessageStore = defineStore('message', () => {
       await invoke('delete_message', { id })
       const index = messages.value.findIndex(m => m.id === id)
       if (index !== -1) {
+        const deletedMessage = messages.value[index]
         messages.value.splice(index, 1)
+        const currentSessionMessages = sessionMessages.value.get(deletedMessage.sessionId) ?? EMPTY_MESSAGES
+        const nextSessionMessages = currentSessionMessages.filter(message => message.id !== id)
+        if (nextSessionMessages.length === 0) {
+          clearSessionDerivedState(deletedMessage.sessionId)
+        } else {
+          setSessionMessages(deletedMessage.sessionId, nextSessionMessages)
+        }
       }
     } catch (error) {
       console.error('Failed to delete message:', error)
@@ -693,7 +715,8 @@ export const useMessageStore = defineStore('message', () => {
 
     try {
       await invoke('clear_session_messages', { sessionId })
-      messages.value = messages.value.filter(m => m.sessionId !== sessionId)
+      updateGlobalMessagesForSession(sessionId, [])
+      clearSessionDerivedState(sessionId)
       pagination.value.delete(sessionId)
 
       const sessionStore = useSessionStore()
@@ -720,7 +743,10 @@ export const useMessageStore = defineStore('message', () => {
 
     const sessionIdSet = new Set(sessionIds)
     messages.value = messages.value.filter(message => !sessionIdSet.has(message.sessionId))
-    sessionIds.forEach(sessionId => pagination.value.delete(sessionId))
+    sessionIds.forEach(sessionId => {
+      pagination.value.delete(sessionId)
+      clearSessionDerivedState(sessionId)
+    })
   }
 
   return {

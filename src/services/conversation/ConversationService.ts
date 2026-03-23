@@ -1,4 +1,3 @@
-import { invoke } from '@tauri-apps/api/core'
 import { useMessageStore, type Message, type MessageAttachment, type ToolCall } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import { useSessionExecutionStore } from '@/stores/sessionExecution'
@@ -15,6 +14,7 @@ import { buildConversationMessages } from './buildConversationMessages'
 import { buildProjectMemorySystemPrompt } from '@/services/memory'
 import type { FileEditTrace } from '@/types/fileTrace'
 import { FileTraceCollector } from './fileTraceCollector'
+import { resolveUsageModelHint } from './usageModelHint'
 import {
   buildCliEnvironmentNotice,
   buildRuntimeNoticeFromSystemContent,
@@ -23,11 +23,6 @@ import {
 } from '@/utils/runtimeNotice'
 import { loadAgentMcpServers } from '@/utils/mcpServerConfig'
 import { mergeToolInputArguments } from '@/utils/toolInput'
-
-interface CliConfigModelProfile {
-  main_model?: string | null
-  codex_model?: string | null
-}
 
 interface StreamTimingMetrics {
   startedAt: number
@@ -159,7 +154,7 @@ export class ConversationService {
         status: 'streaming'
       })
 
-      const usageModelHint = await this.resolveUsageModelHint(agent)
+      const usageModelHint = await resolveUsageModelHint(agent)
       const executionAgent = (!agent.modelId?.trim() && usageModelHint)
         ? { ...agent, modelId: usageModelHint }
         : agent
@@ -362,6 +357,9 @@ export class ConversationService {
     const usageState: { model?: string, inputTokens?: number, outputTokens?: number } = {
       model: context.agent.modelId?.trim() || undefined
     }
+    let runtimeNoticesState = messageStore.messagesBySession(sessionId)
+      .find(message => message.id === aiMessage.id)
+      ?.runtimeNotices
     const fileTraceCollector = new FileTraceCollector({
       sessionId,
       messageId: aiMessage.id,
@@ -373,6 +371,8 @@ export class ConversationService {
       startedAt: globalThis.performance?.now() ?? Date.now()
     }
     let hasError = false
+    let pendingUiUpdate: Partial<Message> | null = null
+    let scheduledUiFlushHandle: number | ReturnType<typeof setTimeout> | null = null
 
     const registerTraceTask = (task: Promise<void>) => {
       pendingTraceTasks.add(task)
@@ -392,12 +392,65 @@ export class ConversationService {
       }
     }
 
+    const clearScheduledUiFlush = () => {
+      if (scheduledUiFlushHandle === null) {
+        return
+      }
+
+      if (typeof scheduledUiFlushHandle === 'number' && typeof globalThis.cancelAnimationFrame === 'function') {
+        globalThis.cancelAnimationFrame(scheduledUiFlushHandle)
+      } else {
+        clearTimeout(scheduledUiFlushHandle as ReturnType<typeof setTimeout>)
+      }
+
+      scheduledUiFlushHandle = null
+    }
+
+    const flushPendingUiUpdate = (options?: { immediate?: boolean }) => {
+      clearScheduledUiFlush()
+      if (!pendingUiUpdate) {
+        return
+      }
+
+      markMetric('firstRenderAt')
+      const updates = pendingUiUpdate
+      pendingUiUpdate = null
+      messageStore.updateMessageBuffered(aiMessage.id, updates, options)
+    }
+
+    const scheduleUiFlush = () => {
+      if (scheduledUiFlushHandle !== null) {
+        return
+      }
+
+      if (typeof globalThis.requestAnimationFrame === 'function') {
+        scheduledUiFlushHandle = globalThis.requestAnimationFrame(() => {
+          scheduledUiFlushHandle = null
+          flushPendingUiUpdate()
+        })
+        return
+      }
+
+      scheduledUiFlushHandle = setTimeout(() => {
+        scheduledUiFlushHandle = null
+        flushPendingUiUpdate()
+      }, 16)
+    }
+
     const bufferMessageUpdate = (
       updates: Partial<Message>,
       options?: { immediate?: boolean }
     ) => {
-      markMetric('firstRenderAt')
-      messageStore.updateMessageBuffered(aiMessage.id, updates, options)
+      pendingUiUpdate = pendingUiUpdate
+        ? { ...pendingUiUpdate, ...updates }
+        : { ...updates }
+
+      if (options?.immediate) {
+        flushPendingUiUpdate(options)
+        return
+      }
+
+      scheduleUiFlush()
     }
 
     const recordTimingSummary = () => {
@@ -543,10 +596,9 @@ export class ConversationService {
               return
             }
 
-            const currentMessage = messageStore.messagesBySession(sessionId)
-              .find(message => message.id === aiMessage.id)
+            runtimeNoticesState = upsertRuntimeNotice(runtimeNoticesState, usageNotice)
             bufferMessageUpdate({
-              runtimeNotices: upsertRuntimeNotice(currentMessage?.runtimeNotices, usageNotice)
+              runtimeNotices: runtimeNoticesState
             })
           },
           onSystem: (content) => {
@@ -555,10 +607,9 @@ export class ConversationService {
               return
             }
 
-            const currentMessage = messageStore.messagesBySession(sessionId)
-              .find(message => message.id === aiMessage.id)
+            runtimeNoticesState = upsertRuntimeNotice(runtimeNoticesState, runtimeNotice)
             bufferMessageUpdate({
-              runtimeNotices: upsertRuntimeNotice(currentMessage?.runtimeNotices, runtimeNotice)
+              runtimeNotices: runtimeNoticesState
             })
           },
           onError: (error) => {
@@ -600,6 +651,7 @@ export class ConversationService {
         })
       })
 
+      flushPendingUiUpdate()
       await Promise.allSettled(Array.from(pendingTraceTasks))
       await Promise.allSettled(Array.from(pendingPersistenceTasks))
       await messageStore.flushBufferedMessageUpdate(aiMessage.id, { notifyOnFailure: true })
@@ -640,35 +692,8 @@ export class ConversationService {
       markMetric('persistedAt')
       recordTimingSummary()
       this.finalizeSend(sessionId)
-    }
-  }
-
-  private async resolveUsageModelHint(agent: AgentConfig): Promise<string | undefined> {
-    const explicitModel = agent.modelId?.trim()
-    if (explicitModel && explicitModel !== 'default') {
-      return explicitModel
-    }
-
-    if (agent.type !== 'cli') {
-      return undefined
-    }
-
-    const cliType = agent.provider === 'claude' || agent.provider === 'codex'
-      ? agent.provider
-      : null
-    if (!cliType) {
-      return undefined
-    }
-
-    try {
-      const profile = await invoke<CliConfigModelProfile>('read_current_cli_config', { cliType })
-      if (cliType === 'codex') {
-        return profile.codex_model?.trim() || undefined
-      }
-      return profile.main_model?.trim() || undefined
-    } catch (error) {
-      console.warn('[ConversationService] Failed to resolve usage model hint:', error)
-      return undefined
+    } finally {
+      clearScheduledUiFlush()
     }
   }
 

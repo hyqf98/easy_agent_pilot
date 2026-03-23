@@ -7,6 +7,7 @@ import { useMessageStore } from '@/stores/message'
 import { conversationService } from '@/services/conversation'
 import { EaIcon } from '@/components/common'
 import { FILE_MENTION_PATTERN, getMentionDisplayText } from '@/utils/fileMention'
+import { parseStructuredContent } from '@/utils/structuredContent'
 import StructuredContentRenderer from './StructuredContentRenderer.vue'
 import ToolCallDisplay from './ToolCallDisplay.vue'
 import ThinkingDisplay from './ThinkingDisplay.vue'
@@ -204,11 +205,10 @@ const getTraceParentPath = (relativePath: string) => {
 }
 
 const getToolCallRenderKey = (toolCall: NonNullable<Message['toolCalls']>[number]) => {
-  const argumentsSignature = JSON.stringify(toolCall.arguments ?? {})
   return [
     toolCall.id,
     toolCall.status,
-    argumentsSignature,
+    Object.keys(toolCall.arguments ?? {}).length,
     toolCall.result?.length ?? 0,
     toolCall.errorMessage?.length ?? 0
   ].join(':')
@@ -227,6 +227,14 @@ const getTraceChangeIcon = (changeType: 'create' | 'modify' | 'delete') => {
 
 const toolCallCount = computed(() => props.message.toolCalls?.length ?? 0)
 const shouldClampToolCalls = computed(() => toolCallCount.value > 10)
+const isAssistantFormOnly = computed(() => {
+  if (!isAssistant.value) {
+    return false
+  }
+
+  const blocks = parseStructuredContent(props.message.content)
+  return blocks.length > 0 && blocks.every(block => block.type === 'form')
+})
 </script>
 
 <template>
@@ -239,7 +247,14 @@ const shouldClampToolCalls = computed(() => toolCallCount.value > 10)
   <!-- 普通消息 -->
   <div
     v-else
-    :class="['message-bubble', { 'message-bubble--user': isUser, 'message-bubble--assistant': isAssistant }]"
+    :class="[
+      'message-bubble',
+      {
+        'message-bubble--user': isUser,
+        'message-bubble--assistant': isAssistant,
+        'message-bubble--form-only': isAssistantFormOnly
+      }
+    ]"
   >
     <!-- AI 头像 -->
     <div
@@ -263,7 +278,10 @@ const shouldClampToolCalls = computed(() => toolCallCount.value > 10)
         </div>
       </Transition>
 
-      <div class="message-bubble__content">
+      <div
+        class="message-bubble__content"
+        :class="{ 'message-bubble__content--form-only': isAssistantFormOnly }"
+      >
         <StructuredContentRenderer
           v-if="!isUser"
           :content="message.content"
@@ -493,9 +511,9 @@ const shouldClampToolCalls = computed(() => toolCallCount.value > 10)
 
 <style scoped>
 .message-bubble {
-  --message-fixed-width: 27rem;
+  --message-fixed-width: 28rem;
   --message-min-width: var(--message-fixed-width);
-  --message-max-width: 35rem;
+  --message-max-width: 36rem;
   --message-max-height: 30rem;
   --message-compact-max-width: var(--message-fixed-width);
   --message-compact-max-height: 20rem;
@@ -516,6 +534,14 @@ const shouldClampToolCalls = computed(() => toolCallCount.value > 10)
 .message-bubble--assistant {
   justify-content: flex-start;
   align-items: flex-start;
+}
+
+.message-bubble--assistant.message-bubble--form-only {
+  --message-fixed-width: clamp(17rem, 30vw, 24rem);
+  --message-min-width: 0;
+  --message-max-width: clamp(18rem, 36vw, 31rem);
+  --message-compact-max-width: clamp(17rem, 34vw, 28rem);
+  --thinking-display-width: clamp(16rem, 34vw, 26rem);
 }
 
 /* AI 头像样式 */
@@ -553,6 +579,12 @@ const shouldClampToolCalls = computed(() => toolCallCount.value > 10)
 .message-bubble--assistant .message-bubble__body {
   flex: 0 1 auto;
   align-items: flex-start;
+}
+
+.message-bubble--assistant.message-bubble--form-only .message-bubble__body {
+  width: min(100%, var(--message-max-width));
+  max-width: min(100%, var(--message-max-width));
+  min-width: 0;
 }
 
 .message-bubble--user .message-bubble__body {
@@ -594,6 +626,19 @@ const shouldClampToolCalls = computed(() => toolCallCount.value > 10)
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg) var(--radius-lg) var(--radius-lg) var(--radius-sm);
   color: var(--color-text-primary);
+}
+
+.message-bubble--assistant .message-bubble__content--form-only {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  max-height: none;
+  padding: 0;
+  overflow: visible;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 /* 用户消息样式 */
@@ -1251,6 +1296,14 @@ const shouldClampToolCalls = computed(() => toolCallCount.value > 10)
     --message-compact-max-height: 16rem;
     --message-trace-max-width: min(calc(100vw - 104px), 24rem);
     gap: var(--spacing-2);
+  }
+
+  .message-bubble--assistant.message-bubble--form-only {
+    --message-fixed-width: calc(100vw - 104px);
+    --message-min-width: 0;
+    --message-max-width: calc(100vw - 104px);
+    --message-compact-max-width: calc(100vw - 104px);
+    --thinking-display-width: calc(100vw - 104px);
   }
 
   .message-bubble__trace-tile {

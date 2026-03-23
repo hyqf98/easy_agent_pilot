@@ -1,4 +1,5 @@
 import type { Message, MessageRole } from '@/stores/message'
+import i18n from '@/i18n'
 
 interface BuildConversationMessagesOptions {
   fallbackUserContent?: string
@@ -40,7 +41,7 @@ function buildCompressionSummaryMessage(messages: Message[], sessionId: string):
   return createSyntheticMessage(
     'system',
     [
-      '以下是此前对话压缩后的摘要，请把它视为已经确认的历史上下文，避免重复询问或丢失约束。',
+      i18n.global.t('compression.historyContextHint') as string,
       ...uniqueSummaries
     ].join('\n\n'),
     sessionId,

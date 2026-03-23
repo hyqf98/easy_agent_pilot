@@ -174,7 +174,7 @@ function handleAddTask() {
           </svg>
           <span>{{ t('taskBoard.actions.executeAll') }}</span>
         </button>
-        <!-- 杩涜涓垪锛氬紑濮嬫墽琛屾寜閽?-->
+        <!-- 进行中列：开始执行按钮 -->
         <button
           v-if="status === 'in_progress' && tasks.length > 0 && props.globalPaused"
           class="btn-header btn-start"

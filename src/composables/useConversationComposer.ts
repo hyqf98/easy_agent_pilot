@@ -537,7 +537,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     const agentId = resolveSessionAgentId(currentSession.value, agentStore.agents) || currentAgent.value?.id
 
     if (!agentId) {
-      notificationStore.smartError('????', new Error('?????????'))
+      notificationStore.smartError('压缩失败', new Error('未找到可用智能体'))
       showCompressionDialog.value = false
       return
     }
@@ -641,7 +641,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       }
     }
 
-    // ????? textarea ? DOM ????????
+    // 先同步 textarea 的 DOM 值，避免光标位置错乱
     if (textarea) {
       textarea.value = newText
     }
@@ -982,13 +982,13 @@ export function useConversationComposer(options: UseConversationComposerOptions)
   const validateCurrentAgentAvailability = () => {
     const executionAgent = getExecutionAgentConfig()
     if (!executionAgent) {
-      notificationStore.smartError('????', new Error('?????????'))
+      notificationStore.smartError('发送失败', new Error('未找到可用智能体'))
       return false
     }
 
     const availability = conversationService.isAgentAvailable(executionAgent)
     if (!availability.available) {
-      notificationStore.smartError('????', new Error(availability.reason || '??????'))
+      notificationStore.smartError('发送失败', new Error(availability.reason || '当前智能体不可用'))
       return false
     }
 
@@ -1012,13 +1012,13 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
     const executionAgent = getExecutionAgentConfig()
     if (!executionAgent) {
-      notificationStore.smartError('????', new Error('?????????'))
+      notificationStore.smartError('发送失败', new Error('未找到可用智能体'))
       return false
     }
 
     const availability = conversationService.isAgentAvailable(executionAgent)
     if (!availability.available) {
-      notificationStore.smartError('????', new Error(availability.reason || '??????'))
+      notificationStore.smartError('发送失败', new Error(availability.reason || '当前智能体不可用'))
       return false
     }
 
@@ -1037,7 +1037,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       return true
     } catch (error) {
       console.error('Failed to send message:', error)
-      notificationStore.smartError('????', error instanceof Error ? error : new Error(String(error)))
+      notificationStore.smartError('发送失败', error instanceof Error ? error : new Error(String(error)))
       sessionExecutionStore.endSending(sessionId)
       return false
     }

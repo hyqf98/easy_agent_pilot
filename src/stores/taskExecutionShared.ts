@@ -92,12 +92,28 @@ export function parseExecutionLogMetadata(metadata: string | null): ExecutionLog
   }
 }
 
+function normalizeLegacyExecutionLogContent(content: string): string {
+  if (content === '???????') {
+    return '任务已停止'
+  }
+
+  if (content.startsWith('???????:')) {
+    return content.replace(/^(\?){7}:/, '用户已提交输入:')
+  }
+
+  if (content.startsWith('??????:')) {
+    return content.replace(/^(\?){6}:/, '开始执行任务:')
+  }
+
+  return content
+}
+
 export function mapRustExecutionLog(log: RustExecutionLog): ExecutionLogEntry {
   return {
     id: log.id,
     taskId: log.task_id,
     type: log.type as ExecutionLogType,
-    content: log.content,
+    content: normalizeLegacyExecutionLogContent(log.content),
     timestamp: log.created_at,
     metadata: parseExecutionLogMetadata(log.metadata)
   }

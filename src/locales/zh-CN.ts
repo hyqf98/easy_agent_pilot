@@ -56,6 +56,7 @@ const zhCN = {
     refresh: '刷新',
     retry: '重试',
     error: '错误',
+    none: '无',
     loading: '加载中...',
     justNow: '刚刚',
     minutesAgo: '{n} 分钟前',
@@ -95,7 +96,20 @@ const zhCN = {
     originalTokens: '原始 Token 数',
     compressedAt: '压缩时间',
     toolCallsSummary: '工具调用',
+    toolCount: '{count} 次',
     noToolCalls: '暂无工具调用',
+    lastUserRequest: '最新用户诉求',
+    lastAssistantResponse: '最新 AI 结果',
+    fileChanges: '文件变更',
+    pendingWork: '待继续',
+    none: '无',
+    releasedNotice: '此会话已压缩，以释放上下文空间。',
+    autoCompressed: '会话已自动压缩（释放 {tokens} Token 空间）',
+    historyContextHint: '以下为已压缩历史摘要，视为已确认上下文：',
+    noMessages: '没有消息可以压缩',
+    sendingInProgress: '正在发送消息，请稍后再试',
+    agentNotFound: '未找到可用智能体',
+    summaryGenerationFailed: '生成摘要失败',
     expand: '展开',
     collapse: '收起'
   },
@@ -194,6 +208,8 @@ const zhCN = {
     retry: '重试',
     loadingMore: '加载更多历史消息...',
     scrollUpLoadMore: '向上滚动加载更多消息',
+    composerHint: '支持图片、@文件、/命令',
+    dropImages: '拖拽图片到这里上传',
     clearMessages: '清空消息',
     clearMessagesConfirm: '确定清空当前会话的全部消息吗？此操作无法撤销。',
     clearMessagesSuccess: '消息已清空',
@@ -1133,7 +1149,8 @@ const zhCN = {
       startExecution: '开始',
       pauseExecutionFlow: '全局停止',
       resumeExecutionFlow: '继续',
-      addTask: '添加任务'
+      addTask: '添加任务',
+      markSplitReady: '标记已拆分'
     },
     tooltips: {
       executeAll: '一键执行所有待办任务',
@@ -1143,6 +1160,49 @@ const zhCN = {
       addTask: '添加新任务到待办列表'
     },
     emptyColumn: '暂无任务'
+  },
+  taskDetail: {
+    title: '任务详情',
+    unspecified: '未指定',
+    useDefaultModel: '使用默认模型',
+    executionConfigFromPlan: '来源于计划默认配置',
+    executionConfig: '执行配置',
+    executionAgent: '执行智能体',
+    executionModel: '执行模型',
+    stopExecution: '停止执行',
+    retryTask: '重试任务',
+    executionInfo: '执行信息',
+    retryCount: '重试次数',
+    errorMessage: '错误信息',
+    sessionId: '会话 ID',
+    progressFile: '进度文件',
+    viewProgress: '查看进度',
+    timeInfo: '时间信息',
+    createdAt: '创建时间',
+    updatedAt: '更新时间',
+    empty: '选择一个任务查看详情',
+    statuses: {
+      pending: '待办',
+      in_progress: '进行中',
+      completed: '已完成',
+      blocked: '已阻塞',
+      failed: '失败',
+      cancelled: '已取消'
+    }
+  },
+  taskExecution: {
+    unnamedTask: '未命名任务',
+    stop: '停止',
+    resume: '恢复',
+    clearLogs: '清空日志',
+    tokenUsage: 'Token 使用',
+    tokenResetCount: '重置 {count} 次',
+    inputTokens: '输入 {count}',
+    outputTokens: '输出 {count}',
+    defaultQuestion: '请补充任务信息',
+    skipAndContinue: '跳过并继续',
+    noLogs: '暂无执行日志',
+    aiRunning: 'AI 执行中...'
   },
 
   // 任务拆分

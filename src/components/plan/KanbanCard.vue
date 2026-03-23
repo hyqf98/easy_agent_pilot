@@ -26,7 +26,7 @@ const isExecuting = computed(() => {
   return taskExecutionStore.isTaskExecuting(props.task.id)
 })
 
-// 鏄惁姝ｅ湪杩愯锛堜笉鍖呮嫭鎺掗槦涓級
+// 是否正在运行（不包含排队中）
 const isRunning = computed(() => {
   return taskExecutionStore.isTaskRunning(props.task.id)
 })
@@ -35,12 +35,12 @@ const isStopped = computed(() => {
   return taskExecutionStore.isTaskStopped(props.task.id)
 })
 
-// 鏄惁绛夊緟鐢ㄦ埛杈撳叆
+// 是否等待用户输入
 const isWaitingInput = computed(() => {
   return props.task.status === 'blocked' && props.task.blockReason === 'waiting_input'
 })
 
-// 鎺掗槦浣嶇疆
+// 排队位置
 const queuePosition = computed(() => {
   return taskExecutionStore.getQueuePosition(props.task.id)
 })
@@ -60,7 +60,7 @@ const executionStatusText = computed(() => {
   return ''
 })
 
-// 鏄惁鏄剧ず鍋滄鎸夐挳
+// 是否显示停止按钮
 const showStopButton = computed(() => {
   return !isStopped.value && (isExecuting.value || props.task.status === 'in_progress')
 })
@@ -84,25 +84,24 @@ const showEditButton = computed(() => {
   return true
 })
 
-// 浼樺厛绾ф爣绛?
-// 浼樺厛绾ч鑹?
+// 优先级颜色
 const priorityColors: Record<TaskPriority, string> = {
   low: 'gray',
   medium: 'yellow',
   high: 'red'
 }
 
-// 鑾峰彇浼樺厛绾ф爣绛?
+// 获取优先级标签
 function getPriorityLabel(priority: TaskPriority): string {
   return t(`task.priority.${priority}`)
 }
 
-// 鑾峰彇浼樺厛绾ч鑹?
+// 获取优先级颜色
 function getPriorityColor(priority: TaskPriority): string {
   return priorityColors[priority] || 'gray'
 }
 
-// 鐐瑰嚮鍗＄墖
+// 点击卡片
 function handleClick() {
   emit('click', props.task)
 }
@@ -165,12 +164,12 @@ function handleDelete(event: Event) {
       {{ task.description }}
     </p>
 
-    <!-- 绛夊緟杈撳叆鐘舵€佹彁绀?-->
+    <!-- 等待输入状态提示 -->
     <div
       v-if="isWaitingInput"
       class="waiting-input-badge"
     >
-      <span class="badge-icon">?</span>
+      <span class="badge-icon">填</span>
       <span class="badge-text">{{ t('task.execution.waitingInput') }}</span>
     </div>
 
@@ -183,7 +182,7 @@ function handleDelete(event: Event) {
       <span class="status-text">{{ executionStatusText }}</span>
     </div>
 
-    <!-- 閲嶈瘯淇℃伅 -->
+    <!-- 重试信息 -->
     <div
       v-if="task.retryCount > 0 || task.status === 'failed'"
       class="retry-info"
@@ -199,7 +198,7 @@ function handleDelete(event: Event) {
         class="error-hint"
         :title="task.errorMessage"
       >
-        鈿狅笍 {{ t('task.errorHint') }}
+        ⚠ {{ t('task.errorHint') }}
       </span>
     </div>
 
@@ -220,7 +219,7 @@ function handleDelete(event: Event) {
       </div>
 
       <div class="card-actions">
-        <!-- 鍋滄鎸夐挳 -->
+        <!-- 停止按钮 -->
         <button
           v-if="showStopButton"
           class="btn-action btn-stop"
@@ -263,7 +262,7 @@ function handleDelete(event: Event) {
           </svg>
         </button>
 
-        <!-- 閲嶈瘯鎸夐挳 -->
+        <!-- 重试按钮 -->
         <button
           v-if="showRetryButton"
           class="btn-action btn-retry"
@@ -334,7 +333,7 @@ function handleDelete(event: Event) {
   background-color: var(--color-surface, #fff);
   border-radius: var(--radius-md, 8px);
   border: 1px solid var(--color-border-light, #f1f5f9);
-  /* 绉婚櫎 cursor: pointer锛岃鐖跺厓绱?.drag-item 鐨?cursor: grab 鐢熸晥 */
+  /* 移除 cursor: pointer，让父元素 .drag-item 的 cursor: grab 生效 */
   transition: all var(--transition-fast, 150ms) var(--easing-default);
   user-select: none;
 }
@@ -372,7 +371,7 @@ function handleDelete(event: Event) {
   overflow: hidden;
 }
 
-/* 杩涘害鏉″姩鐢诲眰 */
+/* 进度条动画层 */
 .kanban-card.is-running::before {
   content: '';
   position: absolute;
@@ -542,7 +541,7 @@ function handleDelete(event: Event) {
 }
 
 .deps::before {
-  content: '馃敆';
+  content: '🔗';
   font-size: 0.625rem;
 }
 

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useAgentStore } from '@/stores/agent'
 import { usePlanStore } from '@/stores/plan'
 import { useTaskStore } from '@/stores/task'
@@ -11,6 +12,7 @@ import TaskEditModal from './TaskEditModal.vue'
 const agentStore = useAgentStore()
 const planStore = usePlanStore()
 const taskStore = useTaskStore()
+const { t, locale } = useI18n()
 
 // 当前任务
 const currentTask = computed(() => taskStore.currentTask)
@@ -25,7 +27,7 @@ const showStopButton = computed(() => {
 
 // 是否显示重试按钮
 const showRetryButton = computed(() => {
-  return currentTask.value?.status === 'blocked'
+  return currentTask.value?.status === 'failed'
 })
 
 // 打开编辑弹窗
@@ -56,7 +58,7 @@ async function retryTask() {
 // 格式化日期
 function formatDate(dateStr: string): string {
   const date = new Date(dateStr)
-  return date.toLocaleString('zh-CN', {
+  return date.toLocaleString(locale.value === 'zh-CN' ? 'zh-CN' : 'en-US', {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -81,8 +83,8 @@ const currentPlan = computed(() => {
 const executionConfig = computed(() => {
   if (!currentTask.value) {
     return {
-      agentLabel: '未指定',
-      modelLabel: '使用默认模型',
+      agentLabel: t('taskDetail.unspecified'),
+      modelLabel: t('taskDetail.useDefaultModel'),
       sourceLabel: ''
     }
   }
@@ -100,18 +102,14 @@ const executionConfig = computed(() => {
     : null
 
   return {
-    agentLabel: agent?.name || selection.agentId || '未指定',
-    modelLabel: selection.modelId || '使用默认模型',
-    sourceLabel: selection.source === 'plan' ? '来源于计划默认配置' : ''
+    agentLabel: agent?.name || selection.agentId || t('taskDetail.unspecified'),
+    modelLabel: selection.modelId || t('taskDetail.useDefaultModel'),
+    sourceLabel: selection.source === 'plan' ? t('taskDetail.executionConfigFromPlan') : ''
   }
 })
 
-// 状态标签映射
-const statusLabels: Record<string, string> = {
-  pending: '待办',
-  in_progress: '进行中',
-  completed: '已完成',
-  blocked: '已阻塞'
+function getStatusLabel(status: string): string {
+  return t(`taskDetail.statuses.${status}`) || status
 }
 
 // 点击依赖任务跳转
@@ -127,13 +125,13 @@ function goToDependency(task: Task) {
       <div class="detail-header">
         <div class="header-left">
           <h3 class="title">
-            任务详情
+            {{ t('taskDetail.title') }}
           </h3>
           <button
             class="btn-edit"
             @click="openEditModal"
           >
-            编辑
+            {{ t('common.edit') }}
           </button>
         </div>
         <AgentRoleBadge
@@ -160,14 +158,14 @@ function goToDependency(task: Task) {
 
         <div class="section">
           <h5 class="section-title">
-            执行配置
+            {{ t('taskDetail.executionConfig') }}
           </h5>
           <div class="info-item">
-            <span class="info-label">执行智能体</span>
+            <span class="info-label">{{ t('taskDetail.executionAgent') }}</span>
             <span class="info-value">{{ executionConfig.agentLabel }}</span>
           </div>
           <div class="info-item">
-            <span class="info-label">执行模型</span>
+            <span class="info-label">{{ t('taskDetail.executionModel') }}</span>
             <span class="info-value">{{ executionConfig.modelLabel }}</span>
           </div>
           <p
@@ -204,7 +202,7 @@ function goToDependency(task: Task) {
                   height="12"
                 />
               </svg>
-              停止执行
+              {{ t('taskDetail.stopExecution') }}
             </button>
             <button
               v-if="showRetryButton"
@@ -222,7 +220,7 @@ function goToDependency(task: Task) {
                 <path d="M1 4v6h6" />
                 <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
               </svg>
-              重试任务
+              {{ t('taskDetail.retryTask') }}
             </button>
           </div>
         </div>
@@ -233,20 +231,20 @@ function goToDependency(task: Task) {
           class="section"
         >
           <h5 class="section-title">
-            执行信息
+            {{ t('taskDetail.executionInfo') }}
           </h5>
           <div
             v-if="currentTask.retryCount > 0"
             class="info-item"
           >
-            <span class="info-label">重试次数</span>
+            <span class="info-label">{{ t('taskDetail.retryCount') }}</span>
             <span class="info-value">{{ currentTask.retryCount }} / {{ currentTask.maxRetries }}</span>
           </div>
           <div
             v-if="currentTask.errorMessage"
             class="error-message"
           >
-            <span class="error-label">错误信息</span>
+            <span class="error-label">{{ t('taskDetail.errorMessage') }}</span>
             <p class="error-text">
               {{ currentTask.errorMessage }}
             </p>
@@ -259,7 +257,7 @@ function goToDependency(task: Task) {
           class="section"
         >
           <h5 class="section-title">
-            实现步骤
+            {{ t('taskSplit.implementationSteps') }}
           </h5>
           <ol class="steps-list">
             <li
@@ -277,7 +275,7 @@ function goToDependency(task: Task) {
           class="section"
         >
           <h5 class="section-title">
-            测试步骤
+            {{ t('taskSplit.testSteps') }}
           </h5>
           <ol class="steps-list">
             <li
@@ -295,7 +293,7 @@ function goToDependency(task: Task) {
           class="section"
         >
           <h5 class="section-title">
-            验收标准
+            {{ t('taskSplit.acceptanceCriteria') }}
           </h5>
           <ul class="criteria-list">
             <li
@@ -313,7 +311,7 @@ function goToDependency(task: Task) {
           class="section"
         >
           <h5 class="section-title">
-            依赖任务
+            {{ t('task.dependencies') }}
           </h5>
           <div class="dependency-list">
             <div
@@ -325,7 +323,7 @@ function goToDependency(task: Task) {
             >
               <span class="dep-status-dot" />
               <span class="dep-title">{{ dep.title }}</span>
-              <span class="dep-status-label">{{ statusLabels[dep.status] || dep.status }}</span>
+              <span class="dep-status-label">{{ getStatusLabel(dep.status) }}</span>
             </div>
           </div>
         </div>
@@ -336,35 +334,35 @@ function goToDependency(task: Task) {
           class="section"
         >
           <h5 class="section-title">
-            执行信息
+            {{ t('taskDetail.executionInfo') }}
           </h5>
           <div class="info-item">
-            <span class="info-label">会话 ID</span>
+            <span class="info-label">{{ t('taskDetail.sessionId') }}</span>
             <span class="info-value">{{ currentTask.sessionId }}</span>
           </div>
           <div
             v-if="currentTask.progressFile"
             class="info-item"
           >
-            <span class="info-label">进度文件</span>
+            <span class="info-label">{{ t('taskDetail.progressFile') }}</span>
             <a
               href="#"
               class="info-link"
-            >查看进度</a>
+            >{{ t('taskDetail.viewProgress') }}</a>
           </div>
         </div>
 
         <!-- 时间信息 -->
         <div class="section">
           <h5 class="section-title">
-            时间信息
+            {{ t('taskDetail.timeInfo') }}
           </h5>
           <div class="info-item">
-            <span class="info-label">创建时间</span>
+            <span class="info-label">{{ t('taskDetail.createdAt') }}</span>
             <span class="info-value">{{ formatDate(currentTask.createdAt) }}</span>
           </div>
           <div class="info-item">
-            <span class="info-label">更新时间</span>
+            <span class="info-label">{{ t('taskDetail.updatedAt') }}</span>
             <span class="info-value">{{ formatDate(currentTask.updatedAt) }}</span>
           </div>
         </div>
@@ -376,7 +374,7 @@ function goToDependency(task: Task) {
       v-else
       class="empty-state"
     >
-      <p>选择一个任务查看详情</p>
+      <p>{{ t('taskDetail.empty') }}</p>
     </div>
 
     <!-- 编辑弹窗 -->

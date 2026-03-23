@@ -24,7 +24,7 @@ const activeTab = ref<'mcp' | 'skills' | 'plugins'>('mcp')
 
 const showPluginsTab = computed(() => skillConfigStore.supportsPlugins)
 
-// 鍐呭鍖哄煙寮曠敤锛岀敤浜庨噸缃粴鍔ㄤ綅缃?
+// 内容区域引用，用于重置滚动位置
 const contentRef = ref<HTMLElement | null>(null)
 const showSyncModal = ref(false)
 const syncType = ref<SyncConfigType>('mcp')
@@ -74,12 +74,12 @@ watch(showSkillModal, (value) => {
 const showDeleteConfirm = ref(false)
 const deletingConfig = ref<{ type: 'mcp' | 'skills' | 'plugins'; config: UnifiedMcpConfig | UnifiedSkillConfig | UnifiedPluginConfig } | null>(null)
 
-// 鍔犺浇鏅鸿兘浣撳垪琛?
+// 加载智能体列表
 onMounted(async () => {
   await agentStore.loadAgents()
 })
 
-// 閫夋嫨鏅鸿兘浣?
+// 选择智能体
 async function handleSelectAgent(agent: any) {
   showSkillBuilder.value = false
   showSkillModal.value = false
@@ -87,7 +87,7 @@ async function handleSelectAgent(agent: any) {
   await skillConfigStore.selectAgent(agent)
 }
 
-// MCP 鎿嶄綔
+// MCP 操作
 async function handleSaveMcp(config: Partial<UnifiedMcpConfig>, originalId?: string) {
   if (originalId) {
     await skillConfigStore.updateMcpConfig(originalId, config)
@@ -263,13 +263,13 @@ function handleSyncCompleted(payload: { targetAgentId: string; result: CliSyncRe
 
 <template>
   <div class="skill-config-page">
-    <!-- 鏅鸿兘浣撻€夋嫨鍣?-->
+    <!-- 智能体选择器 -->
     <AgentSelector
       :model-value="skillConfigStore.selectedAgent"
       @update:model-value="handleSelectAgent"
     />
 
-    <!-- Skill 璇︽儏瑙嗗浘 -->
+    <!-- Skill 详情视图 -->
     <SkillDetailView
       v-if="skillConfigStore.selectedSkill && activeTab === 'skills'"
       :skill="skillConfigStore.selectedSkill"
@@ -286,7 +286,7 @@ function handleSyncCompleted(payload: { targetAgentId: string; result: CliSyncRe
       @save="handleCreateVisualSkill"
     />
 
-    <!-- Plugin 璇︽儏瑙嗗浘 -->
+    <!-- Plugin 详情视图 -->
     <PluginDetailView
       v-else-if="skillConfigStore.selectedPlugin && activeTab === 'plugins' && showPluginsTab"
       :plugin="skillConfigStore.selectedPlugin"

@@ -70,7 +70,7 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
             <input
               :value="props.form.name"
               type="text"
-              placeholder="???????????"
+              placeholder="请输入计划名称"
               autofocus
               @input="updateField('name', ($event.target as HTMLInputElement).value)"
             >
@@ -113,7 +113,7 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
                     :checked="props.form.splitMode === 'manual'"
                     @change="updateField('splitMode', 'manual')"
                   >
-                  <span class="mode-icon">?</span>
+                  <span class="mode-icon">手</span>
                   <div class="mode-content">
                     <span class="mode-label">手动模式</span>
                     <span class="mode-desc">自己创建任务</span>
@@ -125,14 +125,14 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
             <template v-if="props.form.splitMode === 'ai'">
               <div class="form-row">
                 <div class="form-field">
-                  <label>?????</label>
+                  <label>拆分智能体</label>
                   <select
                     :value="props.form.splitAgentId ?? ''"
                     class="project-select"
                     @change="updateField('splitAgentId', (($event.target as HTMLSelectElement).value || null))"
                   >
                     <option value="">
-                      ??????
+                      请选择智能体
                     </option>
                     <option
                       v-for="option in props.agentOptions"
@@ -152,7 +152,7 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
                     @change="updateField('splitModelId', ($event.target as HTMLSelectElement).value)"
                   >
                     <option value="">
-                      ?????
+                      请选择模型
                     </option>
                     <option
                       v-for="option in props.modelOptions"
@@ -171,7 +171,7 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
 
               <div class="form-row">
                 <div class="form-field">
-                  <label>???????</label>
+                  <label>拆分颗粒度</label>
                   <input
                     :value="props.form.granularity"
                     type="number"
@@ -180,10 +180,10 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
                     placeholder="建议 5-50"
                     @input="updateField('granularity', Number(($event.target as HTMLInputElement).value))"
                   >
-                  <span class="field-hint">???????????</span>
+                  <span class="field-hint">建议拆分出的任务数量，数值越大拆分越细</span>
                 </div>
                 <div class="form-field">
-                  <label>??????</label>
+                  <label>最大重试次数</label>
                   <input
                     :value="props.form.maxRetryCount"
                     type="number"
@@ -192,7 +192,7 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
                     placeholder="建议 1-3"
                     @input="updateField('maxRetryCount', Number(($event.target as HTMLInputElement).value))"
                   >
-                  <span class="field-hint">????????????</span>
+                  <span class="field-hint">单个任务执行失败后的最大重试次数</span>
                 </div>
               </div>
             </template>
@@ -251,7 +251,7 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
                 v-if="props.form.scheduledDateTime"
                 class="schedule-preview"
               >
-                ???? {{ new Date(props.form.scheduledDateTime).toLocaleString('zh-CN') }} ??????
+                计划将于 {{ new Date(props.form.scheduledDateTime).toLocaleString('zh-CN') }} 执行
               </span>
             </div>
           </div>

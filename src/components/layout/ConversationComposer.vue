@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { useI18n } from 'vue-i18n'
 import { EaIcon } from '@/components/common'
 import CompressionConfirmDialog from '@/components/common/CompressionConfirmDialog.vue'
 import { useConversationComposer } from '@/composables/useConversationComposer'
@@ -33,6 +34,7 @@ const emit = defineEmits<{
   focus: []
 }>()
 
+const { t } = useI18n()
 const themeStore = useThemeStore()
 const rootRef = ref<HTMLElement | null>(null)
 const isDragOver = ref(false)
@@ -162,6 +164,7 @@ defineExpose({
   <div
     ref="rootRef"
     class="conversation-composer"
+    :data-drag-text="t('message.dropImages')"
     :class="{
       'conversation-composer--main': isMainPanel,
       'conversation-composer--mini': isMiniPanel,
@@ -226,7 +229,7 @@ defineExpose({
             name="archive"
             :size="12"
           />
-          <span>{{ isCompressing ? '???' : '??' }}</span>
+          <span>{{ isCompressing ? t('compression.processing') : t('token.compress') }}</span>
         </button>
 
         <div
@@ -318,7 +321,7 @@ defineExpose({
             name="image-up"
             :size="12"
           />
-          <span>{{ isUploadingImages ? '???...' : '??' }}</span>
+          <span>{{ isUploadingImages ? t('message.uploadingImages') : t('message.selectImages') }}</span>
         </button>
       </div>
     </div>
@@ -374,7 +377,7 @@ defineExpose({
             </Transition>
           </div>
 
-          <!-- 模型选择�?- 移到智能体旁�?-->
+          <!-- 模型选择器，移到智能体旁边 -->
           <div
             v-if="currentAgent"
             ref="modelDropdownRef"
@@ -427,7 +430,7 @@ defineExpose({
               name="image-up"
               :size="12"
             />
-            <span>{{ isUploadingImages ? '???...' : '??' }}</span>
+            <span>{{ isUploadingImages ? t('message.uploadingImages') : t('message.selectImages') }}</span>
           </button>
 
           <div
@@ -438,7 +441,7 @@ defineExpose({
               name="clock-3"
               :size="12"
             />
-            <span>??? {{ queuedMessages.length }}</span>
+            <span>{{ t('message.queueCount', { count: queuedMessages.length }) }}</span>
           </div>
         </div>
       </div>
@@ -492,11 +495,11 @@ defineExpose({
           </div>
           <div class="conversation-composer__queue-body">
             <div class="conversation-composer__queue-top">
-              <span>{{ draft.status === 'failed' ? '??' : '???' }}</span>
-              <span v-if="draft.attachments.length > 0">{{ draft.attachments.length }} ?</span>
+              <span>{{ draft.status === 'failed' ? t('message.pendingFailed') : t('message.pendingLabel') }}</span>
+              <span v-if="draft.attachments.length > 0">{{ t('message.queueImages', { count: draft.attachments.length }) }}</span>
             </div>
             <div class="conversation-composer__queue-preview">
-              {{ buildQueuedMessagePreview(draft) || '???' }}
+              {{ buildQueuedMessagePreview(draft) || t('message.pendingEmpty') }}
             </div>
             <div
               v-if="draft.status === 'failed' && draft.errorMessage"
@@ -561,13 +564,13 @@ defineExpose({
             v-else
             class="conversation-composer__placeholder"
           >
-            {{ inputPlaceholder || '?????? Enter ??' }}
+            {{ inputPlaceholder || t('message.inputPlaceholder', { shortcut: t('message.shortcutEnter') }) }}
           </span>
           <span
             v-if="isMainPanel && !inputText"
             class="conversation-composer__hint"
           >
-            ? Enter ???Shift+Enter ??
+            {{ t('message.composerHint') }}
           </span>
         </div>
 
@@ -660,7 +663,7 @@ defineExpose({
 }
 
 .conversation-composer--drag-over::after {
-  content: '???????????????';
+  content: attr(data-drag-text);
   position: absolute;
   inset: 10px;
   display: flex;

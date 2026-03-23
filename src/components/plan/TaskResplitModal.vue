@@ -22,7 +22,7 @@ const emit = defineEmits<{
 const agentStore = useAgentStore()
 const agentConfigStore = useAgentConfigStore()
 
-// 表单状��?
+// 表单状态
 const customPrompt = ref('')
 const granularity = ref(3)
 const selectedAgentId = ref<string | undefined>(undefined)
@@ -73,7 +73,7 @@ function handleConfirm() {
 watch(() => props.visible, (newVisible) => {
   if (newVisible) {
     resetForm()
-    // 加载选中 agent 的模型列�?
+    // 加载选中 agent 的模型列表
     if (selectedAgentId.value) {
       const provider = inferAgentProvider(agentStore.agents.find(agent => agent.id === selectedAgentId.value))
       void agentConfigStore.ensureModelsConfigs(selectedAgentId.value, provider)
@@ -109,8 +109,8 @@ watch(selectedAgentId, async (newAgentId) => {
       <div class="resplit-modal">
         <div class="modal-header">
           <h4>
-            <span class="modal-icon">?</span>
-            ??????
+            <span class="modal-icon">↺</span>
+            继续拆分
           </h4>
           <button
             class="btn-close"
@@ -135,7 +135,7 @@ watch(selectedAgentId, async (newAgentId) => {
             class="task-preview"
           >
             <div class="preview-header">
-              <span class="preview-label">???</span>
+              <span class="preview-label">原任务</span>
               <span class="task-title">{{ task.title }}</span>
             </div>
             <p
@@ -148,7 +148,7 @@ watch(selectedAgentId, async (newAgentId) => {
               v-if="task.implementationSteps?.length"
               class="task-steps"
             >
-              <span class="steps-label">?????</span>
+              <span class="steps-label">实现步骤</span>
               <ul>
                 <li
                   v-for="(step, i) in task.implementationSteps"
@@ -162,7 +162,7 @@ watch(selectedAgentId, async (newAgentId) => {
               v-if="task.testSteps?.length"
               class="task-steps"
             >
-              <span class="steps-label">?????</span>
+              <span class="steps-label">测试步骤</span>
               <ul>
                 <li
                   v-for="(step, i) in task.testSteps"
@@ -176,16 +176,16 @@ watch(selectedAgentId, async (newAgentId) => {
 
           <div class="config-form">
             <div class="form-row">
-              <label>??????????</label>
+              <label>补充拆分要求</label>
               <textarea
                 v-model="customPrompt"
-                placeholder="????????????..."
+                placeholder="补充新的拆分要求或限制条件..."
                 rows="3"
               />
             </div>
 
             <div class="form-row">
-              <label>????????????</label>
+              <label>拆分颗粒度</label>
               <div class="number-input-wrap">
                 <input
                   v-model.number="granularity"
@@ -193,16 +193,16 @@ watch(selectedAgentId, async (newAgentId) => {
                   min="2"
                   max="20"
                 >
-                <span class="input-hint">???</span>
+                <span class="input-hint">2-20</span>
               </div>
             </div>
 
             <div class="form-row">
-              <label>???????</label>
+              <label>拆分智能体</label>
               <div class="select-wrap">
                 <select v-model="selectedAgentId">
                   <option :value="undefined">
-                    ????
+                    跟随当前
                   </option>
                   <option
                     v-for="agent in availableAgents"
@@ -230,18 +230,18 @@ watch(selectedAgentId, async (newAgentId) => {
               v-if="selectedAgentId && availableModels.length > 0"
               class="form-row"
             >
-              <label>??????</label>
+              <label>拆分模型</label>
               <div class="select-wrap">
                 <select v-model="selectedModelId">
                   <option :value="undefined">
-                    ????
+                    跟随当前
                   </option>
                   <option
                     v-for="model in availableModels"
                     :key="model.id"
                     :value="model.modelId"
                   >
-                    {{ model.isDefault ? `${model.displayName}????` : model.displayName }}
+                    {{ model.isDefault ? `${model.displayName}（默认）` : model.displayName }}
                   </option>
                 </select>
                 <svg
@@ -265,13 +265,13 @@ watch(selectedAgentId, async (newAgentId) => {
             class="btn btn-secondary"
             @click="close"
           >
-            ??
+            取消
           </button>
           <button
             class="btn btn-primary"
             @click="handleConfirm"
           >
-            ????
+            开始拆分
           </button>
         </div>
       </div>

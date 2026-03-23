@@ -112,6 +112,7 @@ export default {
     refresh: 'Refresh',
     stop: 'Stop',
     error: 'Error',
+    none: 'None',
     justNow: 'Just now',
     minutesAgo: '{n} min ago',
     hoursAgo: '{n}h ago',
@@ -170,7 +171,20 @@ export default {
     originalTokens: 'Original Tokens',
     compressedAt: 'Compressed At',
     toolCallsSummary: 'Tool Calls',
+    toolCount: '{count} times',
     noToolCalls: 'No tool calls',
+    lastUserRequest: 'Latest user request',
+    lastAssistantResponse: 'Latest AI response',
+    fileChanges: 'File Changes',
+    pendingWork: 'Pending Work',
+    none: 'None',
+    releasedNotice: 'This session was compressed to free context space.',
+    autoCompressed: 'Session auto-compressed and freed space from {tokens} tokens',
+    historyContextHint: 'Below is compressed history summary. Treat it as confirmed context:',
+    noMessages: 'No messages available to compress',
+    sendingInProgress: 'A message is still being sent. Try again later.',
+    agentNotFound: 'No available agent found',
+    summaryGenerationFailed: 'Failed to generate summary',
     expand: 'Expand',
     collapse: 'Collapse'
   },
@@ -282,6 +296,8 @@ export default {
     retry: 'Retry',
     loadingMore: 'Loading history...',
     scrollUpLoadMore: 'Scroll up to load more messages',
+    composerHint: 'Supports images, @files, /commands',
+    dropImages: 'Drop images here to upload',
     clearMessages: 'Clear Messages',
     clearMessagesConfirm: 'Are you sure you want to clear all messages in this session? This action cannot be undone.',
     clearMessagesSuccess: 'Messages cleared',
@@ -1409,11 +1425,11 @@ export default {
 
   // Language names
   languages: {
-    zhCN: '????',
+    zhCN: 'Simplified Chinese',
     enUS: 'English'
   },
 
-  // 鏂囦欢寮曠敤
+  // File mention
   fileMention: {
     searchFiles: 'Search files...',
     noFiles: 'No files found',
@@ -1591,7 +1607,8 @@ export default {
       startExecution: 'Resume',
       pauseExecutionFlow: 'Global stop',
       resumeExecutionFlow: 'Continue',
-      addTask: 'Add Task'
+      addTask: 'Add Task',
+      markSplitReady: 'Mark Split Ready'
     },
     tooltips: {
       executeAll: 'Run all pending tasks',
@@ -1601,6 +1618,49 @@ export default {
       addTask: 'Add a new task to pending list'
     },
     emptyColumn: 'No tasks'
+  },
+  taskDetail: {
+    title: 'Task Details',
+    unspecified: 'Unspecified',
+    useDefaultModel: 'Use default model',
+    executionConfigFromPlan: 'Inherited from plan default config',
+    executionConfig: 'Execution Config',
+    executionAgent: 'Execution Agent',
+    executionModel: 'Execution Model',
+    stopExecution: 'Stop Execution',
+    retryTask: 'Retry Task',
+    executionInfo: 'Execution Info',
+    retryCount: 'Retry Count',
+    errorMessage: 'Error Message',
+    sessionId: 'Session ID',
+    progressFile: 'Progress File',
+    viewProgress: 'View Progress',
+    timeInfo: 'Time Info',
+    createdAt: 'Created At',
+    updatedAt: 'Updated At',
+    empty: 'Select a task to view details',
+    statuses: {
+      pending: 'Pending',
+      in_progress: 'In Progress',
+      completed: 'Completed',
+      blocked: 'Blocked',
+      failed: 'Failed',
+      cancelled: 'Cancelled'
+    }
+  },
+  taskExecution: {
+    unnamedTask: 'Unnamed Task',
+    stop: 'Stop',
+    resume: 'Resume',
+    clearLogs: 'Clear Logs',
+    tokenUsage: 'Token Usage',
+    tokenResetCount: 'Reset {count} times',
+    inputTokens: 'Input {count}',
+    outputTokens: 'Output {count}',
+    defaultQuestion: 'Please provide task details',
+    skipAndContinue: 'Skip and Continue',
+    noLogs: 'No execution logs',
+    aiRunning: 'AI is running...'
   },
 
   // Task Split

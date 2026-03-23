@@ -79,11 +79,6 @@ function isMissingRecordError(error: unknown): boolean {
   return /query returned no rows/i.test(getErrorMessage(error))
 }
 
-/**
- *
- * 功能�?
- */
-
 export const useTaskExecutionStore = defineStore('taskExecution', () => {
   // ==================== State ====================
 
@@ -340,11 +335,11 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
 
     if (options.persistLog !== false) {
       const lastLog = state.logs[state.logs.length - 1]
-      if (lastLog?.type !== 'system' || lastLog.content !== '???????') {
+      if (lastLog?.type !== 'system' || lastLog.content !== '任务已停止') {
         await addExecutionLog({
           taskId,
           type: 'system',
-          content: '???????'
+          content: '任务已停止'
         })
       }
     }
@@ -478,7 +473,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
       type: 'system',
       content: isResume
         ? `继续执行任务: ${task.title}`
-        : `??????: ${task.title}${task.retryCount > 0 ? ` (??? ${task.retryCount} ?)` : ''}`
+        : `开始执行任务: ${task.title}${task.retryCount > 0 ? `（第 ${task.retryCount + 1} 次）` : ''}`
     })
     await syncPlanRuntimeState(planId)
 
@@ -500,7 +495,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
         || agentStore.agents[0]
 
       if (!baseAgent) {
-        throw new Error('?????????')
+        throw new Error('未找到可用智能体')
       }
 
       const agent = {
@@ -509,7 +504,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
       }
 
       if (!agentExecutor.isSupported(agent)) {
-        throw new Error(`?????????: ${agent.type}`)
+        throw new Error(`当前不支持该智能体类型: ${agent.type}`)
       }
 
       const recentResults = await listRecentPlanResults(planId, 5)
@@ -522,7 +517,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
         return [] as McpServerConfig[]
       })
 
-      // 构建对话上下�?
+      // 构建对话上下文
       const context: ConversationContext = {
         sessionId: `task-${taskId}`,
         agent,
@@ -594,7 +589,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
           await addExecutionLog({
             taskId,
             type: 'system',
-            content: `??????: ${errorMessage}???? ${currentRetryCount + 1} ???...`
+            content: `任务执行失败: ${errorMessage}，准备第 ${currentRetryCount + 1} 次重试...`
           })
 
           // 更新重试次数
@@ -614,7 +609,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
           state.completedAt = new Date().toISOString()
           skipQueueAdvance = true
 
-          // 使用 setTimeout 延迟重试，避免立即重�?
+          // 使用 setTimeout 延迟重试，避免立即重入
           setTimeout(() => {
             void executeTask(planId, taskId)
           }, 1000)
@@ -863,14 +858,14 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
     await addExecutionLog({
       taskId,
       type: 'system',
-      content: `???????: ${JSON.stringify(values)}`
+      content: `用户已提交输入: ${JSON.stringify(values)}`
     })
 
     await enqueueTask(task.planId, taskId)
   }
 
   /**
-   * 跳过阻塞的任�?
+   * 跳过阻塞的任务
    */
   async function skipBlockedTask(taskId: string): Promise<void> {
     const taskStore = useTaskStore()
@@ -1110,7 +1105,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
 
       const state = initExecutionState(taskId)
 
-      // 如果已有日志且数量大于等于后端返回的日志数量，不覆盖（可能内存中更新�?
+      // 如果已有日志且数量大于等于后端返回的日志数量，不覆盖（可能内存中已更新）
       if (shouldKeepInMemoryLogs(existingState, rustLogs.length)) {
         return
       }

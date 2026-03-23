@@ -180,7 +180,7 @@ onUnmounted(() => {
         name="info"
         :size="16"
       />
-      <span>{{ t('settings.agentList.detectedTools') }}??????????????????????? Agent?</span>
+      <span>{{ t('settings.agentList.detectedTools') }}，可直接添加为 Agent。</span>
     </div>
 
     <CliInstallerSection

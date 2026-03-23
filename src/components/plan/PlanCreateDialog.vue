@@ -24,7 +24,7 @@ function updateField<K extends keyof PlanCreateFormState>(key: K, value: PlanCre
 
 const minDateTime = new Date().toISOString().slice(0, 16)
 
-// ??? AI ??
+// 是否为 AI 模式
 const isAiMode = () => props.form.splitMode === 'ai'
 </script>
 
@@ -62,7 +62,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
             <input
               :value="props.form.name"
               type="text"
-              placeholder="???????????"
+              placeholder="请输入计划名称"
               autofocus
               @input="updateField('name', ($event.target as HTMLInputElement).value)"
             >
@@ -77,7 +77,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
             />
           </div>
 
-          <!-- ???? -->
+          <!-- 拆分模式 -->
           <div class="form-field">
             <label>任务拆分模式</label>
             <div class="mode-options">
@@ -105,7 +105,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
                   :checked="props.form.splitMode === 'manual'"
                   @change="updateField('splitMode', 'manual')"
                 >
-                <span class="mode-icon">?</span>
+                <span class="mode-icon">手</span>
                 <div class="mode-content">
                   <span class="mode-label">手动模式</span>
                   <span class="mode-desc">自己创建任务</span>
@@ -118,7 +118,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
           <template v-if="isAiMode()">
             <div class="form-row">
               <div class="form-field">
-                <label>????? <span class="required">*</span></label>
+                <label>拆分智能体 <span class="required">*</span></label>
                 <select
                   :value="props.form.splitAgentId ?? ''"
                   class="project-select"
@@ -157,7 +157,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
             </div>
             <div class="form-row">
               <div class="form-field">
-                <label>???????</label>
+                <label>拆分颗粒度</label>
                 <input
                   :value="props.form.granularity"
                   type="number"
@@ -166,10 +166,10 @@ const isAiMode = () => props.form.splitMode === 'ai'
                   placeholder="建议 5-50"
                   @input="updateField('granularity', Number(($event.target as HTMLInputElement).value))"
                 >
-                <span class="field-hint">???????????</span>
+                <span class="field-hint">建议拆分出的任务数量，数值越大拆分越细</span>
               </div>
               <div class="form-field">
-                <label>??????</label>
+                <label>最大重试次数</label>
                 <input
                   :value="props.form.maxRetryCount"
                   type="number"
@@ -178,7 +178,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
                   placeholder="建议 1-3"
                   @input="updateField('maxRetryCount', Number(($event.target as HTMLInputElement).value))"
                 >
-                <span class="field-hint">????????????</span>
+                <span class="field-hint">单个任务执行失败后的最大重试次数</span>
               </div>
             </div>
             <div class="hint-box">
@@ -197,7 +197,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
                 />
                 <path d="M12 16v-4M12 8h.01" />
               </svg>
-              <span>????????????????????? AI ????</span>
+              <span>配置完成后将由 AI 自动拆分任务，并生成可继续执行的任务清单</span>
             </div>
           </template>
 
@@ -250,7 +250,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
                 v-if="props.form.scheduledDateTime"
                 class="schedule-preview"
               >
-                ???? {{ new Date(props.form.scheduledDateTime).toLocaleString('zh-CN') }} ??????
+                计划将于 {{ new Date(props.form.scheduledDateTime).toLocaleString('zh-CN') }} 执行
               </span>
             </div>
           </div>
@@ -285,7 +285,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
               :disabled="!props.canStartSplit"
               @click="emit('startSplit')"
             >
-              ??????????
+              确认并开始拆分
             </button>
           </template>
         </div>
@@ -557,7 +557,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
   border-color: var(--color-border-dark, #cbd5e1);
 }
 
-/* 模式选择器样�?*/
+/* 模式选择器样式 */
 .mode-options {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

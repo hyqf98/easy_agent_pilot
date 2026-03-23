@@ -4,11 +4,11 @@ import { invoke } from '@tauri-apps/api/core'
 import { useNotificationStore } from './notification'
 import { useAgentConfigStore } from './agentConfig'
 import { getErrorMessage } from '@/utils/api'
-// 智能体类�? cli �?sdk
+// 智能体类型：cli 或 sdk
 export type AgentType = 'cli' | 'sdk'
-// 提供�? claude �?codex
+// 提供方：claude 或 codex
 export type AgentProvider = 'claude' | 'codex'
-// 智能体状�?
+// 智能体状态
 export type AgentStatus = 'online' | 'offline' | 'error' | 'testing'
 
 /**
@@ -16,9 +16,9 @@ export type AgentStatus = 'online' | 'offline' | 'error' | 'testing'
 export interface AgentConfig {
   id: string
   name: string
-  /** 智能体类�? cli �?sdk */
+  /** 智能体类型：cli 或 sdk */
   type: AgentType
-  /** 提供�? claude �?codex */
+  /** 提供方：claude 或 codex */
   provider?: AgentProvider
   cliPath?: string
   /** API 密钥 (SDK 类型专用) */
@@ -27,11 +27,11 @@ export interface AgentConfig {
   baseUrl?: string
   /** 模型 ID */
   modelId?: string
-  /** 是否启用自定义模�?*/
+  /** 是否启用自定义模型 */
   customModelEnabled?: boolean
-  /** 兼容旧字�? 模式 */
+  /** 兼容旧字段：模式 */
   mode?: string
-  /** 兼容旧字�? 模型 */
+  /** 兼容旧字段：模型 */
   model?: string
   status?: AgentStatus
   testMessage?: string
@@ -62,7 +62,7 @@ export function inferAgentProvider(
   return undefined
 }
 
-// 后端返回的原始数据结构（snake_case�?
+// 后端返回的原始数据结构（snake_case）
 interface RawAgentData {
   id: string
   name: string
@@ -160,7 +160,7 @@ export const useAgentStore = defineStore('agent', () => {
       console.error('Failed to load agents:', error)
       agents.value = []
       notificationStore.networkError(
-        '???????',
+        '加载智能体失败',
         getErrorMessage(error),
         loadAgents
       )
@@ -202,7 +202,7 @@ export const useAgentStore = defineStore('agent', () => {
     } catch (error) {
       console.error('Failed to create agent:', error)
       notificationStore.databaseError(
-        '???????',
+        '创建智能体失败',
         getErrorMessage(error),
         async () => { await createAgent(agent) }
       )
@@ -237,7 +237,7 @@ export const useAgentStore = defineStore('agent', () => {
     } catch (error) {
       console.error('Failed to update agent:', error)
       notificationStore.databaseError(
-        '???????',
+        '更新智能体失败',
         getErrorMessage(error),
         () => updateAgent(id, updates)
       )
@@ -260,7 +260,7 @@ export const useAgentStore = defineStore('agent', () => {
     } catch (error) {
       console.error('Failed to delete agent:', error)
       notificationStore.databaseError(
-        '???????',
+        '删除智能体失败',
         getErrorMessage(error),
         () => deleteAgent(id)
       )
@@ -290,7 +290,7 @@ export const useAgentStore = defineStore('agent', () => {
       // 调用 Tauri 命令测试连接
       const result = await invoke<TestConnectionResult>('test_agent_connection', { id })
 
-      // 更新前端状��?
+      // 更新前端状态
       if (index !== -1) {
         const rawAgent = await invoke<RawAgentData>('update_agent', {
           id,
@@ -303,7 +303,7 @@ export const useAgentStore = defineStore('agent', () => {
 
       return result
     } catch (error) {
-      // 更新状��为 error
+      // 更新状态为 error
       if (index !== -1) {
         agents.value[index] = { ...agents.value[index], status: 'error' }
       }
@@ -349,7 +349,7 @@ export const useAgentStore = defineStore('agent', () => {
     return cliScanPromise
   }
 
-  // 快��添加检测到�?CLI 工具
+  // 快速添加检测到的 CLI 工具
   async function addDetectedTool(tool: CliTool) {
     const provider = tool.name.toLowerCase().includes('claude') ? 'claude' as AgentProvider
                   : tool.name.toLowerCase().includes('codex') ? 'codex' as AgentProvider

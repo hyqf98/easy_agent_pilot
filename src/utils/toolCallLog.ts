@@ -17,6 +17,20 @@ interface ToolCallMetadata {
   isError?: boolean
 }
 
+interface ToolCallLogOptions {
+  toolUseType?: string
+  toolInputDeltaType?: string
+  toolResultType?: string
+  fallbackStatus?: ToolCall['status']
+}
+
+interface NormalizedToolCallLogOptions {
+  toolUseType: string
+  toolInputDeltaType: string
+  toolResultType: string
+  fallbackStatus: ToolCall['status']
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
@@ -51,6 +65,15 @@ function toToolCallArguments(raw: string | undefined, fallbackContent: string): 
     return { value: parsed }
   } catch {
     return { value: source }
+  }
+}
+
+function normalizeToolCallLogOptions(options: ToolCallLogOptions = {}): NormalizedToolCallLogOptions {
+  return {
+    toolUseType: options.toolUseType ?? 'tool_use',
+    toolInputDeltaType: options.toolInputDeltaType ?? 'tool_input_delta',
+    toolResultType: options.toolResultType ?? 'tool_result',
+    fallbackStatus: options.fallbackStatus ?? 'running'
   }
 }
 
@@ -98,17 +121,14 @@ export function extractDynamicFormSchemas(payload: unknown): DynamicFormSchema[]
 export function buildToolCallFromLogs<T extends ToolCallLogLike>(
   log: T,
   logs: T[],
-  options: {
-    toolUseType?: string
-    toolInputDeltaType?: string
-    toolResultType?: string
-    fallbackStatus?: ToolCall['status']
-  } = {}
+  options: ToolCallLogOptions = {}
 ): ToolCall | null {
-  const toolUseType = options.toolUseType ?? 'tool_use'
-  const toolInputDeltaType = options.toolInputDeltaType ?? 'tool_input_delta'
-  const toolResultType = options.toolResultType ?? 'tool_result'
-  const fallbackStatus = options.fallbackStatus ?? 'running'
+  const {
+    toolUseType,
+    toolInputDeltaType,
+    toolResultType,
+    fallbackStatus
+  } = normalizeToolCallLogOptions(options)
 
   if (log.type !== toolUseType) {
     return null
@@ -150,4 +170,73 @@ export function buildToolCallFromLogs<T extends ToolCallLogLike>(
     result: resultLog?.content,
     errorMessage: isError ? resultLog?.content : undefined
   }
+}
+
+export function buildToolCallMapFromLogs<T extends ToolCallLogLike>(
+  logs: T[],
+  options: ToolCallLogOptions = {}
+): Map<string, ToolCall> {
+  const {
+    toolUseType,
+    toolInputDeltaType,
+    toolResultType,
+    fallbackStatus
+  } = normalizeToolCallLogOptions(options)
+
+  const resultLogByToolCallId = new Map<string, T>()
+  const inputDeltaLogByToolCallId = new Map<string, string[]>()
+
+  for (const log of logs) {
+    const metadata = toToolCallMetadata(log.metadata)
+    const toolCallId = metadata.toolCallId
+    if (!toolCallId) {
+      continue
+    }
+
+    if (log.type === toolResultType) {
+      resultLogByToolCallId.set(toolCallId, log)
+      continue
+    }
+
+    if (log.type === toolInputDeltaType) {
+      const currentInputs = inputDeltaLogByToolCallId.get(toolCallId) ?? []
+      currentInputs.push(metadata.toolInput || log.content)
+      inputDeltaLogByToolCallId.set(toolCallId, currentInputs)
+    }
+  }
+
+  const toolCallMap = new Map<string, ToolCall>()
+
+  for (const log of logs) {
+    if (log.type !== toolUseType) {
+      continue
+    }
+
+    const metadata = toToolCallMetadata(log.metadata)
+    if (!metadata.toolName) {
+      continue
+    }
+
+    const toolCallId = metadata.toolCallId || log.id
+    const resultLog = resultLogByToolCallId.get(toolCallId)
+    const resultMetadata = toToolCallMetadata(resultLog?.metadata)
+    const isError = Boolean(resultMetadata.isError)
+    const mergedToolInput = [
+      metadata.toolInput,
+      ...(inputDeltaLogByToolCallId.get(toolCallId) ?? [])
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join('')
+
+    toolCallMap.set(log.id, {
+      id: toolCallId,
+      name: metadata.toolName,
+      arguments: toToolCallArguments(mergedToolInput || metadata.toolInput, log.content),
+      status: resultLog ? (isError ? 'error' : 'success') : fallbackStatus,
+      result: resultLog?.content,
+      errorMessage: isError ? resultLog?.content : undefined
+    })
+  }
+
+  return toolCallMap
 }

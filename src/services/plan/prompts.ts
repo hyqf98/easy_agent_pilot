@@ -17,26 +17,16 @@ export interface TaskResplitPromptContext {
 }
 
 export function buildPlanSplitSystemPrompt(): string {
-  return `你是项目规划助手，通过渐进式对话收集需求，最终拆分为可执行任务。
+  return `你是项目规划助手，目标是把需求拆成可执行任务。
 
-核心规则：
-1. 信息不足时输出 form_request 收集信息，可一次输出多个表单 forms
-2. 每个表单可以包含多个字段，字段类型必须适合收集需求信息
-3. 表单字段类型只能使用 text、textarea、select、multiselect、number、checkbox、radio、date、slider
-4. select / radio / multiselect 的 options 必须输出为 [{ "label": "...", "value": "..." }]
-4.1 所有 select / radio / multiselect 字段都必须允许用户填写“其他”，即使已有固定 options 也要保留开放输入能力
-4.2 如果你对字段有明确建议，输出 suggestion，并用 suggestionReason 简要说明建议理由
-4.3 对 select / radio / multiselect 字段，尽量输出 optionReasons，key 必须是 option.value，value 是该选项适用场景或取舍理由
-4.4 select / radio 的 suggestion 必须是单个 option.value；multiselect 的 suggestion 必须是 option.value 数组；如果建议用户填写“其他”，suggestion 可以直接给出开放输入内容
-5. 如需条件显示，仅使用简单 condition: { field, value } 等值判断，保证前端会话面板可以动态渲染并收集数据
-6. 信息充分后输出 task_split（status=DONE）
-7. 任务需可执行、有明确边界、包含实现/测试步骤和验收标准
-8. 用 dependsOn 指定任务依赖关系
-9. 最终回答内容必须是单个 JSON 对象，不要夹带解释文字
-
-禁止事项：
-- 禁止输出 markdown 代码块或额外解释
-- 禁止输出无法解析的非 JSON 内容`.trim()
+规则：
+1. 只输出单个 JSON 对象，不要 markdown 或解释。
+2. 信息不足输出 form_request；信息足够输出 task_split。
+3. form_request 优先输出 forms 数组；字段 type 只能是 text、textarea、select、multiselect、number、checkbox、radio、date、slider。
+4. select / radio / multiselect 的 options 必须是 [{ "label": "...", "value": "..." }]，并保留 allowOther；可补充 suggestion、suggestionReason、optionReasons。
+5. 条件显示仅使用 condition: { field, value }。
+6. task_split 必须包含 status:"DONE"、tasks、dependsOn；每个任务都要有 title、description、priority、implementationSteps、testSteps、acceptanceCriteria。
+7. 任务要边界清晰，可直接执行。`.trim()
 }
 
 export function buildPlanSplitKickoffPrompt(context: PlanSplitPromptContext): string {
@@ -44,7 +34,7 @@ export function buildPlanSplitKickoffPrompt(context: PlanSplitPromptContext): st
 计划描述: ${context.planDescription?.trim() || '（无）'}
 最少任务数: ${context.minTaskCount}
 
-请开始拆分：若信息不足则输出 form_request 收集信息；若信息已足够则直接输出 task_split。`.trim()
+开始拆分：信息不足就输出 form_request，信息足够就直接输出 task_split。`.trim()
 }
 
 export function buildTaskResplitKickoffPrompt(context: TaskResplitPromptContext): string {
@@ -64,7 +54,7 @@ export function buildTaskResplitKickoffPrompt(context: TaskResplitPromptContext)
     ? `\n\n用户额外要求:\n${context.userPrompt}`
     : ''
 
-  return `将以下任务拆分为 ${context.minTaskCount}+ 个子任务：
+  return `将以下任务继续拆分为至少 ${context.minTaskCount} 个子任务：
 
 计划: ${context.planName}
 任务: ${context.taskTitle}
@@ -87,9 +77,9 @@ export function buildFormResponsePrompt(formId: string, values: Record<string, u
     .map(([key, val]) => `${key}: ${typeof val === 'object' ? JSON.stringify(val) : val}`)
     .join(', ')
 
-  return `表单 ${formId} 用户回答: ${valueStr}
+  return `表单 ${formId} 回答: ${valueStr}
 
-继续：需要更多信息则输出 form_request；信息足够则输出 task_split（status=DONE）。`.trim()
+继续：需要更多信息就输出 form_request；足够则输出 task_split（status=DONE）。`.trim()
 }
 
 export function buildOutputCorrectionPrompt(minTaskCount: number): string {

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch, nextTick, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useTaskExecutionStore } from '@/stores/taskExecution'
 import { useTaskStore } from '@/stores/task'
 import { usePlanStore } from '@/stores/plan'
@@ -10,7 +11,7 @@ import StructuredContentRenderer from '@/components/message/StructuredContentRen
 import DynamicForm from '@/components/plan/DynamicForm.vue'
 import type { TimelineEntry } from '@/types/timeline'
 import type { TaskExecutionResultRecord } from '@/types/taskExecution'
-import { buildToolCallFromLogs } from '@/utils/toolCallLog'
+import { buildToolCallMapFromLogs } from '@/utils/toolCallLog'
 import { containsFormSchema } from '@/utils/structuredContent'
 import { buildStructuredResultContentFromRecord } from '@/utils/taskExecutionResult'
 import { getTaskExecutionStatusMeta, resolveTaskExecutionStatus } from '@/utils/taskExecutionStatus'
@@ -29,6 +30,7 @@ const taskStore = useTaskStore()
 const planStore = usePlanStore()
 const agentStore = useAgentStore()
 const agentConfigStore = useAgentConfigStore()
+const { t } = useI18n()
 
 // 日志容器引用
 const logContainerRef = ref<HTMLElement | null>(null)
@@ -96,6 +98,17 @@ const logs = computed(() => {
   return executionState.value?.logs ?? []
 })
 
+const logActivity = computed(() => {
+  const latestLog = logs.value[logs.value.length - 1]
+  return [
+    logs.value.length,
+    latestLog?.id ?? '',
+    latestLog?.type ?? '',
+    latestLog?.content.length ?? 0,
+    latestLog?.timestamp ?? ''
+  ].join(':')
+})
+
 // 是否等待用户输入
 const isWaitingInput = computed(() => {
   return task.value?.status === 'blocked' && task.value?.blockReason === 'waiting_input'
@@ -122,7 +135,7 @@ const statusText = computed(() => {
   return getTaskExecutionStatusMeta(effectiveStatus.value).label
 })
 
-// 状��颜�?
+// 状态颜色
 const statusColor = computed(() => {
   return getTaskExecutionStatusMeta(effectiveStatus.value).color
 })
@@ -168,9 +181,9 @@ function scrollToBottom() {
   }
 }
 
-watch(logs, () => {
+watch(logActivity, () => {
   scrollToBottom()
-}, { deep: true })
+})
 
 function handleScroll() {
   if (!logContainerRef.value) return
@@ -179,6 +192,9 @@ function handleScroll() {
 }
 
 const timelineEntries = computed<TimelineEntry[]>(() => {
+  const toolCallMap = buildToolCallMapFromLogs(logs.value, {
+    fallbackStatus: isRunning.value ? 'running' : 'success'
+  })
   let lastThinkingEntry: TimelineEntry | null = null
   let lastContentEntry: TimelineEntry | null = null
 
@@ -254,9 +270,7 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
     lastContentEntry = null
 
     if (log.type === 'tool_use') {
-      const toolCall = buildToolCallFromLogs(log, logs.value, {
-        fallbackStatus: isRunning.value ? 'running' : 'success'
-      })
+      const toolCall = toolCallMap.get(log.id)
       if (toolCall) {
         entries.push({
           id: `tool-${log.id}`,
@@ -299,7 +313,9 @@ watch(
 watch(
   () => `${task.value?.status || ''}:${task.value?.updatedAt || ''}`,
   async () => {
+    await taskExecutionStore.loadTaskLogs(props.taskId)
     await loadResultRecord(props.taskId)
+    scrollToBottom()
   }
 )
 </script>
@@ -309,7 +325,7 @@ watch(
     <div class="log-header">
       <div class="header-left">
         <h4 class="log-title">
-          {{ task?.title || '??????' }}
+          {{ task?.title || t('taskExecution.unnamedTask') }}
         </h4>
         <span
           class="status-badge"
@@ -339,7 +355,7 @@ watch(
               height="12"
             />
           </svg>
-          ֹͣ
+          {{ t('taskExecution.stop') }}
         </button>
         <button
           v-else-if="effectiveStatus === 'stopped'"
@@ -356,14 +372,14 @@ watch(
           >
             <polygon points="5 3 19 12 5 21 5 3" />
           </svg>
-          ??
+          {{ t('taskExecution.resume') }}
         </button>
         <button
           v-if="logs.length > 0"
           class="btn-clear"
           @click="handleClearLogs"
         >
-          ????
+          {{ t('taskExecution.clearLogs') }}
         </button>
       </div>
     </div>
@@ -374,7 +390,7 @@ watch(
     >
       <div class="token-usage-panel__meta">
         <div class="token-usage-panel__title">
-          <span>Token ??</span>
+          <span>{{ t('taskExecution.tokenUsage') }}</span>
           <span
             v-if="tokenUsageWindow.model"
             class="token-usage-panel__model"
@@ -384,7 +400,7 @@ watch(
         </div>
         <div class="token-usage-panel__stats">
           <span>{{ formatTokenCount(tokenUsageTotal) }} / {{ formatTokenCount(tokenContextLimit) }}</span>
-          <span v-if="tokenUsageWindow.resetCount > 0">?? {{ tokenUsageWindow.resetCount }} ?</span>
+          <span v-if="tokenUsageWindow.resetCount > 0">{{ t('taskExecution.tokenResetCount', { count: tokenUsageWindow.resetCount }) }}</span>
         </div>
       </div>
       <div
@@ -397,8 +413,8 @@ watch(
         />
       </div>
       <div class="token-usage-panel__breakdown">
-        <span>?? {{ formatTokenCount(tokenUsageWindow.inputTokens) }}</span>
-        <span>?? {{ formatTokenCount(tokenUsageWindow.outputTokens) }}</span>
+        <span>{{ t('taskExecution.inputTokens', { count: formatTokenCount(tokenUsageWindow.inputTokens) }) }}</span>
+        <span>{{ t('taskExecution.outputTokens', { count: formatTokenCount(tokenUsageWindow.outputTokens) }) }}</span>
         <span>{{ Math.round(tokenUsagePercentage) }}%</span>
       </div>
     </div>
@@ -408,7 +424,7 @@ watch(
       class="input-form-section"
     >
       <h5 class="section-title">
-        {{ task.inputRequest.question || '??????' }}
+        {{ task.inputRequest.question || t('taskExecution.defaultQuestion') }}
       </h5>
       <DynamicForm
         :schema="task.inputRequest.formSchema"
@@ -418,7 +434,7 @@ watch(
         class="btn-skip"
         @click="handleSkip"
       >
-        ?????
+        {{ t('taskExecution.skipAndContinue') }}
       </button>
     </div>
 
@@ -439,8 +455,8 @@ watch(
         v-if="logs.length === 0"
         class="empty-state"
       >
-        <span v-if="isRunning">????...</span>
-        <span v-else>??????</span>
+        <span v-if="isRunning">{{ t('task.execution.running') }}</span>
+        <span v-else>{{ t('taskExecution.noLogs') }}</span>
       </div>
 
       <div
@@ -450,13 +466,13 @@ watch(
         <ExecutionTimeline :entries="timelineEntries" />
       </div>
 
-      <!-- 运行指示�?-->
+      <!-- 运行指示器 -->
       <div
         v-if="isRunning"
         class="running-indicator"
       >
         <span class="indicator-dot" />
-        <span class="indicator-text">AI ?????...</span>
+        <span class="indicator-text">{{ t('taskExecution.aiRunning') }}</span>
       </div>
     </div>
   </div>

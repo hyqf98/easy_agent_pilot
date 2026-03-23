@@ -115,8 +115,8 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   }
 
   /**
-   * - SDK 类型：始终支�?
-   * - CLI 类型：根据能力信息判�?
+   * - SDK 类型：始终支持
+   * - CLI 类型：根据能力信息判断
    */
   const supportsPlugins = computed(() => {
     if (!selectedAgent.value || selectedAgent.value.type !== 'cli') {
@@ -126,11 +126,11 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   })
 
   // ============================================================================
-  // Actions - 智能体��择与配置加�?
+  // Actions - 智能体选择与配置加载
   // ============================================================================
 
   /**
-   * 选择智能体并加载其配�?
+   * 选择智能体并加载其配置
    */
   async function selectAgent(agent: AgentConfig | null) {
     if (!agent) {
@@ -407,7 +407,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
       const cliType = selectedAgent.value.provider
 
       if (!cliPath || !cliType) {
-        throw new Error('当前智能体缺�?CLI 类型，无法创�?Skills')
+        throw new Error('当前智能体缺少 CLI 类型，无法创建 Skills')
       }
 
       const result = await invoke<CreatedCliSkillResult>('create_cli_skill_scaffold', {
@@ -470,7 +470,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
     } catch (error) {
       console.error('Failed to scan CLI items for sync:', error)
       notificationStore.networkError(
-        '???????',
+        '扫描配置失败',
         getErrorMessage(error),
         async () => { await scanCliItemsForSync(cliPath, type, cliType) }
       )
@@ -673,7 +673,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
         throw error
       }
     } else {
-      // SDK 类型：从数据库删�?
+      // SDK 类型：从数据库删除
       try {
         await invoke('delete_agent_mcp_config', { id })
         const index = mcpConfigs.value.findIndex(c => c.id === id)
@@ -960,7 +960,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   // Actions - 详情视图相关
   // ============================================================================
 
-  // 详情视图状��?
+  // 详情视图状态
   const selectedSkill = ref<UnifiedSkillConfig | null>(null)
   const selectedPlugin = ref<UnifiedPluginConfig | null>(null)
 
@@ -981,7 +981,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   }
 
   /**
-   * 清除详情视图状��?
+   * 清除详情视图状态
    */
   function clearDetailState() {
     selectedSkill.value = null
@@ -1016,7 +1016,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
         throw error
       }
     } else {
-      // SDK 类型：从数据库删�?
+      // SDK 类型：从数据库删除
       await deleteSkillsConfig(skill.id)
       if (selectedSkill.value?.id === skill.id) {
         selectedSkill.value = null
@@ -1052,7 +1052,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
         throw error
       }
     } else {
-      // SDK 类型：从数据库删�?
+      // SDK 类型：从数据库删除
       await deletePluginsConfig(plugin.id)
       if (selectedPlugin.value?.id === plugin.id) {
         selectedPlugin.value = null
@@ -1074,7 +1074,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
     testingMcpConfig,
     cliCapabilities,
 
-    // 详情视图状��?
+    // 详情视图状态
     selectedSkill,
     selectedPlugin,
 

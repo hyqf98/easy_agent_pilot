@@ -38,12 +38,12 @@ export interface PermissionConfig {
 }
 
 /**
- * 对话上下�?
+ * 对话上下文
  */
 export interface ConversationContext {
   /** 会话 ID */
   sessionId: string
-  /** 智能体配�?*/
+  /** 智能体配置 */
   agent: AgentConfig
   /** 消息历史 */
   messages: Message[]
@@ -97,12 +97,12 @@ export interface AgentStrategy {
   readonly name: string
 
   /**
-   * @param agent 智能体配�?
+   * @param agent 智能体配置
    */
   supports(agent: AgentConfig): boolean
 
   /**
-   * @param context 对话上下�?
+   * @param context 对话上下文
    * @param onEvent 事件回调
    */
   execute(context: ConversationContext, onEvent: (event: StreamEvent) => void): Promise<void>
@@ -129,7 +129,7 @@ export interface CliExecutionRequest {
   }>
   /** 工作目录 */
   workingDirectory?: string
-  /** 允许的工具列�?*/
+  /** 允许的工具列表 */
   allowedTools?: string[]
   mcpServers?: McpServerConfig[]
 }
@@ -195,7 +195,7 @@ export interface MessageInput {
 }
 
 /**
- * 后端流式事件（CLI/SDK 共用�?
+ * 后端流式事件（CLI/SDK 共用）
  */
 export interface BackendStreamEvent {
   /** 事件类型 */

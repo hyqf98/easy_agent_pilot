@@ -52,10 +52,10 @@ const isCurrentPlanPaused = computed(() =>
   ?? hasInterruptedTasksAwaitingResume.value
 )
 
-// ???????
+// 是否为手动模式
 const isManualMode = computed(() => currentPlan.value?.splitMode === 'manual')
 
-// ?????
+// 新建任务模板
 const newTaskTemplate = reactive<Partial<Task>>({
   planId: '',
   title: '',
@@ -175,14 +175,14 @@ async function handleTaskDrop(taskId: string, newStatus: TaskStatus) {
         }
       }
     } catch (error) {
-      // ??
+      // 回滚
       console.error('Failed to start task execution:', error)
     }
     return
   }
 
   try {
-    // ????
+    // 持久化更新
     await taskStore.updateTask(taskId, {
       status: newStatus,
       order: newOrder
@@ -208,7 +208,7 @@ async function handleTaskReorder(taskId: string, targetIndex: number) {
   const insertIndex = Math.max(0, Math.min(targetIndex, newTaskList.length))
   newTaskList.splice(insertIndex, 0, movedTask)
 
-  // ?????
+  // 重新计算排序
   const orderUpdates: TaskOrderItem[] = newTaskList.map((task, index) => ({
     id: task.id,
     order: index
@@ -222,7 +222,7 @@ async function handleTaskReorder(taskId: string, targetIndex: number) {
     // 更新后端
     await taskStore.reorderTasks(orderUpdates)
   } catch (error) {
-    // ?????????
+    // 失败时回退到后端最新顺序
     loadTasks()
     console.error('Failed to reorder tasks:', error)
   }
@@ -308,7 +308,7 @@ async function handleExecuteAll() {
   }
 }
 
-// ?????????????????????
+// 从“执行中且暂停”状态恢复整条执行流
 async function handleStartExecution() {
   if (!currentPlanId.value) return
 
@@ -405,7 +405,7 @@ async function markPlanAsReady() {
           class="btn btn-secondary"
           @click="markPlanAsReady"
         >
-          ????
+          {{ t('taskBoard.actions.markSplitReady') }}
         </button>
 
         <div class="task-stats">

@@ -7,6 +7,14 @@ import type {
   RawAgentMcpConfig
 } from '@/stores/skillConfigShared'
 
+interface CachedMcpServerEntry {
+  expiresAt: number
+  value: Promise<McpServerConfig[]>
+}
+
+const MCP_SERVER_CACHE_TTL_MS = 10_000
+const mcpServerCache = new Map<string, CachedMcpServerEntry>()
+
 function normalizeMcpToolPrefix(name: string): string {
   return name
     .trim()
@@ -81,6 +89,17 @@ function mapSdkMcpServer(config: RawAgentMcpConfig): McpServerConfig | null {
 }
 
 export async function loadAgentMcpServers(agent: AgentConfig): Promise<McpServerConfig[]> {
+  const cacheKey = agent.type === 'cli'
+    ? `cli:${agent.provider || ''}:${agent.cliPath || ''}`
+    : `sdk:${agent.id}`
+  const now = Date.now()
+  const cachedEntry = mcpServerCache.get(cacheKey)
+
+  if (cachedEntry && cachedEntry.expiresAt > now) {
+    return (await cachedEntry.value).map(server => ({ ...server }))
+  }
+
+  const loader = (async () => {
   if (agent.type === 'cli') {
     if (!agent.cliPath) {
       return []
@@ -104,6 +123,19 @@ export async function loadAgentMcpServers(agent: AgentConfig): Promise<McpServer
   return configs
     .map(mapSdkMcpServer)
     .filter((server): server is McpServerConfig => Boolean(server))
+  })()
+
+  mcpServerCache.set(cacheKey, {
+    expiresAt: now + MCP_SERVER_CACHE_TTL_MS,
+    value: loader
+  })
+
+  try {
+    return (await loader).map(server => ({ ...server }))
+  } catch (error) {
+    mcpServerCache.delete(cacheKey)
+    throw error
+  }
 }
 
 export function appendClaudeMcpAllowedTools(

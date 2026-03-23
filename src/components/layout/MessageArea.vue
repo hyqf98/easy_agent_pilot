@@ -36,7 +36,7 @@ const sessionExecutionStore = useSessionExecutionStore()
 const tokenStore = useTokenStore()
 const notificationStore = useNotificationStore()
 
-// 压缩相关状��?
+// 压缩相关状态
 const showCompressionDialog = ref(false)
 const isCompressing = ref(false)
 
@@ -68,7 +68,7 @@ const handleRetry = async (message: Message) => {
     await composerRef.value?.resendMessage(targetMessage.content, targetMessage.attachments ?? [])
   }
 
-  // 如果是用户消息的重试，将内容填回输入�?
+  // 如果是用户消息的重试，将内容填回输入框
   if (message.role === 'user') {
     await resend(message)
     return
@@ -272,7 +272,7 @@ const handleConfirmCompress = async (strategy: CompressionStrategy) => {
   const agentId = resolveSessionAgentId(session, agentStore.agents)
 
   if (!agentId) {
-    notificationStore.smartError('????', new Error('?????????'))
+    notificationStore.smartError('压缩失败', new Error('未找到可用智能体'))
     showCompressionDialog.value = false
     return
   }
@@ -487,7 +487,7 @@ onUnmounted(() => {
           class="message-area__conversation"
           :class="{ 'message-area__conversation--trace-active': showDesktopTracePane }"
         >
-          <!-- Token 进度�?- 固定在会话面板顶�?-->
+          <!-- Token 进度条，固定在会话面板顶部 -->
           <div class="message-area__token-bar">
             <TokenProgressBar
               :session-id="sessionStore.currentSessionId"
@@ -549,7 +549,7 @@ onUnmounted(() => {
       </button>
     </template>
 
-    <!-- 空状�?-->
+    <!-- 空状态 -->
     <div
       v-else
       class="message-area__empty"
@@ -567,7 +567,7 @@ onUnmounted(() => {
       </p>
     </div>
 
-    <!-- 压缩确认对话�?-->
+    <!-- 压缩确认对话框 -->
     <CompressionConfirmDialog
       v-model:visible="showCompressionDialog"
       :token-usage="currentTokenUsage"
@@ -635,7 +635,7 @@ onUnmounted(() => {
   position: relative;
 }
 
-/* Token 进度�?- 悬浮在会话面板顶�?*/
+/* Token 进度条，悬浮在会话面板顶部 */
 .message-area__token-bar {
   position: absolute;
   top: 8px;
@@ -693,7 +693,7 @@ onUnmounted(() => {
   flex-direction: column;
 }
 
-/* 空状�?*/
+/* 空状态 */
 .message-area__empty {
   flex: 1;
   min-height: 0;
@@ -711,7 +711,7 @@ onUnmounted(() => {
   border-top: 1px solid rgba(148, 163, 184, 0.08);
 }
 
-/* 底部状��栏：Todo + 进度�?同一�?*/
+/* 底部状态栏：Todo + 进度条同一行 */
 .bottom-status-bar {
   display: flex;
   align-items: center;
@@ -818,8 +818,8 @@ onUnmounted(() => {
 .message-input__editor {
   position: relative;
   flex: 1;
-  min-height: calc(1.5em * 4); /* 4 �?*/
-  max-height: calc(1.5em * 6); /* 6 �?*/
+  min-height: calc(1.5em * 4); /* 4 行 */
+  max-height: calc(1.5em * 6); /* 6 行 */
 }
 
 .message-input__file-input {
@@ -1112,7 +1112,7 @@ onUnmounted(() => {
   opacity: 0.6;
 }
 
-/* 小芯片��择�?*/
+/* 小芯片选择器 */
 .input-chip {
   position: relative;
   flex-shrink: 0;
@@ -1267,7 +1267,7 @@ onUnmounted(() => {
   text-align: center;
 }
 
-/* 下拉框动�?*/
+/* 下拉框动画 */
 .dropdown-enter-active,
 .dropdown-leave-active {
   transition: all var(--transition-fast) var(--easing-default);

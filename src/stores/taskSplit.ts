@@ -11,6 +11,7 @@ import {
   buildPlanSplitSystemPrompt,
   buildTaskResplitKickoffPrompt
 } from '@/services/plan'
+import { resolveUsageModelHint } from '@/services/conversation/usageModelHint'
 import type { ExecutionRequest, MessageInput } from '@/services/conversation/strategies/types'
 import { buildAgentExecutionRequest } from '@/services/conversation/runtimeProfiles'
 import type { RuntimeNotice } from '@/utils/runtimeNotice'
@@ -75,6 +76,21 @@ function parseJson<T>(raw?: string | null, fallback?: T): T {
   } catch (error) {
     logger.warn('[TaskSplit] JSON parse failed:', error)
     return fallback as T
+  }
+}
+
+function parseStreamPayloadMetadata(raw?: string | null): Record<string, unknown> | null {
+  if (!raw) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {
+    return null
   }
 }
 
@@ -144,6 +160,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
   const context = ref<TaskSplitContext | null>(null)
   const streamUnlisten = ref<UnlistenFn | null>(null)
   const runtimeNotices = ref<RuntimeNotice[]>([])
+  const usageModelHint = ref<string | null>(null)
   const runtimeMetrics = ref<PlanSplitRuntimeMetrics | null>(null)
 
   const subSplitMode = ref(false)
@@ -175,6 +192,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     session.value = null
     context.value = null
     runtimeNotices.value = []
+    usageModelHint.value = null
     runtimeMetrics.value = null
     subSplitMode.value = false
     subSplitTargetIndex.value = null
@@ -269,6 +287,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       ;(globalThis as { __EASY_AGENT_LAST_PLAN_SPLIT_METRICS?: PlanSplitRuntimeMetrics | null }).__EASY_AGENT_LAST_PLAN_SPLIT_METRICS = runtimeMetrics.value
 
       const content = payload.content ?? payload.error ?? payload.toolResult ?? payload.toolInput ?? ''
+      const parsedMetadata = parseStreamPayloadMetadata(payload.metadata)
       logs.value.push({
         id: `${payload.sessionId || 'plan'}-${payload.type}-${payload.createdAt || Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         planId: payload.planId,
@@ -276,6 +295,9 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
         type: payload.type as PlanSplitLogRecord['type'],
         content,
         metadata: JSON.stringify({
+          model: typeof parsedMetadata?.model === 'string' ? parsedMetadata.model : undefined,
+          inputTokens: typeof parsedMetadata?.inputTokens === 'number' ? parsedMetadata.inputTokens : undefined,
+          outputTokens: typeof parsedMetadata?.outputTokens === 'number' ? parsedMetadata.outputTokens : undefined,
           ...(payload.metadata ? { rawMetadata: payload.metadata } : {}),
           toolName: payload.toolName,
           toolCallId: payload.toolCallId,
@@ -359,12 +381,17 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
 
     context.value = nextContext
     runtimeNotices.value = []
+    usageModelHint.value = null
     const selectedAgent = useAgentStore().agents.find(agent => agent.id === nextContext.agentId)
     if (selectedAgent) {
-      const environmentNotice = await buildCliEnvironmentNotice(selectedAgent).catch(() => null)
+      const [environmentNotice, modelHint] = await Promise.all([
+        buildCliEnvironmentNotice(selectedAgent).catch(() => null),
+        resolveUsageModelHint(selectedAgent).catch(() => undefined)
+      ])
       if (environmentNotice) {
         runtimeNotices.value = [environmentNotice]
       }
+      usageModelHint.value = modelHint ?? null
     }
     await subscribeToPlan(nextContext.planId)
     await loadSession(nextContext.planId)
@@ -591,6 +618,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     session,
     context,
     runtimeNotices,
+    usageModelHint,
     runtimeMetrics,
     subSplitMode,
     subSplitTargetIndex,

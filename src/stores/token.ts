@@ -39,7 +39,7 @@ export type CompressionStrategy = 'simple' | 'smart' | 'summary'
 
 export interface CompressionOptions {
   strategy: CompressionStrategy
-  keepRecentCount: number  // 娣囨繄鏆拷閺堚偓锟?N 閺夆剝绉烽幁?
+  keepRecentCount: number  // 压缩时保留最近 N 条消息
 }
 
 interface SessionTokenCache {

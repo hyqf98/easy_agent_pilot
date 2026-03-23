@@ -345,13 +345,38 @@ watch(visibleFieldNames, nextVisibleFieldNames => {
   --form-option-selected-bg: linear-gradient(135deg, rgba(219, 234, 254, 0.9), rgba(207, 250, 254, 0.76));
   --form-option-selected-text: #1d4ed8;
   --form-check-bg: linear-gradient(180deg, #ffffff, #f8fbff);
+  --form-header-padding-x: 0.78rem;
+  --form-header-padding-top: 0.56rem;
+  --form-header-padding-bottom: 0.52rem;
+  --form-body-padding-x: 0.78rem;
+  --form-body-padding-top: 0.62rem;
+  --form-body-padding-bottom: 0.72rem;
+  --form-footer-padding-y: 0.5rem;
+  --form-footer-padding-x: 0.78rem;
+  --form-title-size: 0.78rem;
+  --form-question-size: 0.72rem;
+  --form-description-size: 0.66rem;
+  --form-state-size: 0.62rem;
+  --form-label-size: 0.68rem;
+  --form-control-size: 0.74rem;
+  --form-meta-size: 0.66rem;
+  --form-button-size: 0.72rem;
+  --form-button-min-width: 4.8rem;
+  --form-control-padding-y: 0.36rem;
+  --form-control-padding-x: 0.56rem;
+  --form-control-radius: 0.64rem;
+  --form-chip-size: 0.76rem;
+  --form-chip-padding-y: 0.24rem;
+  --form-chip-padding-x: 0.48rem;
   background: var(--form-card-bg);
   border-radius: 0.95rem;
   border: 1px solid var(--form-border);
   overflow: hidden;
   width: 100%;
   max-width: none;
+  min-width: 0;
   box-shadow: var(--form-card-shadow);
+  container-type: inline-size;
 }
 
 .dynamic-form--submitted {
@@ -373,7 +398,10 @@ watch(visibleFieldNames, nextVisibleFieldNames => {
 }
 
 .form-header {
-  padding: 0.56rem 0.78rem 0.52rem;
+  padding:
+    var(--form-header-padding-top)
+    var(--form-header-padding-x)
+    var(--form-header-padding-bottom);
   border-bottom: 1px solid color-mix(in srgb, var(--form-accent) 14%, #dbe3ee);
   background: var(--form-header-bg);
 }
@@ -388,15 +416,16 @@ watch(visibleFieldNames, nextVisibleFieldNames => {
 
 .form-title {
   margin: 0 0 0.2rem;
-  font-size: 0.78rem;
+  font-size: var(--form-title-size);
   font-weight: 600;
   color: var(--form-title-color);
   letter-spacing: 0.01em;
+  line-height: 1.35;
 }
 
 .form-question {
   margin: 0 0 0.34rem;
-  font-size: 0.72rem;
+  font-size: var(--form-question-size);
   line-height: 1.55;
   color: var(--form-question-color);
   font-weight: 500;
@@ -410,23 +439,28 @@ watch(visibleFieldNames, nextVisibleFieldNames => {
   border-radius: 999px;
   background: var(--form-state-bg);
   color: var(--form-state-text);
-  font-size: 0.62rem;
+  font-size: var(--form-state-size);
   font-weight: 600;
   letter-spacing: 0.04em;
 }
 
 .form-description {
   margin: 0;
-  font-size: 0.66rem;
+  font-size: var(--form-description-size);
   color: var(--form-muted);
+  line-height: 1.45;
 }
 
 .form-body {
-  padding: 0.62rem 0.78rem 0.72rem;
+  padding:
+    var(--form-body-padding-top)
+    var(--form-body-padding-x)
+    var(--form-body-padding-bottom);
   max-height: 42vh;
   overflow-y: auto;
   display: grid;
   gap: 0.25rem;
+  min-width: 0;
 }
 
 .dynamic-form--submitted .form-body {
@@ -440,8 +474,9 @@ watch(visibleFieldNames, nextVisibleFieldNames => {
 .form-footer {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 0.45rem;
-  padding: 0.5rem 0.78rem;
+  padding: var(--form-footer-padding-y) var(--form-footer-padding-x);
   border-top: 1px solid color-mix(in srgb, var(--form-accent) 10%, #dbe3ee);
   background: var(--form-footer-bg);
 }
@@ -453,7 +488,8 @@ watch(visibleFieldNames, nextVisibleFieldNames => {
 .btn {
   padding: 0.3rem 0.66rem;
   border-radius: 0.7rem;
-  font-size: 0.72rem;
+  min-width: var(--form-button-min-width);
+  font-size: var(--form-button-size);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.16s ease;
@@ -483,14 +519,16 @@ watch(visibleFieldNames, nextVisibleFieldNames => {
 
 .dynamic-form :deep(.form-field) {
   margin-bottom: 0.42rem;
+  min-width: 0;
 }
 
 .dynamic-form :deep(.field-label) {
   margin-bottom: 0.22rem;
-  font-size: 0.68rem;
+  font-size: var(--form-label-size);
   font-weight: 600;
   letter-spacing: 0.01em;
   color: var(--color-text-primary, #334155);
+  line-height: 1.4;
 }
 
 .dynamic-form :deep(.required-mark) {
@@ -504,11 +542,12 @@ watch(visibleFieldNames, nextVisibleFieldNames => {
   border: 1px solid color-mix(in srgb, var(--form-accent) 20%, #ccd7e5);
   background-color: var(--form-input-bg);
   color: var(--color-text-primary, #0f172a);
-  border-radius: 0.64rem;
-  padding: 0.36rem 0.56rem;
-  font-size: 0.74rem;
+  border-radius: var(--form-control-radius);
+  padding: var(--form-control-padding-y) var(--form-control-padding-x);
+  font-size: var(--form-control-size);
   line-height: 1.35;
   transition: border-color 0.16s ease, box-shadow 0.16s ease, background-color 0.16s ease;
+  min-width: 0;
 }
 
 .dynamic-form :deep(.input::placeholder),
@@ -558,17 +597,21 @@ watch(visibleFieldNames, nextVisibleFieldNames => {
   display: flex;
   flex-wrap: wrap;
   gap: 0.26rem;
+  min-width: 0;
 }
 
 .dynamic-form :deep(.option-label) {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  padding: 0.24rem 0.48rem;
+  min-width: 0;
+  max-width: 100%;
+  padding: var(--form-chip-padding-y) var(--form-chip-padding-x);
   border: 1px solid color-mix(in srgb, var(--form-accent) 24%, #cdd7e5);
   border-radius: 999px;
   background: var(--form-option-bg);
   color: var(--color-text-secondary, #475569);
+  font-size: var(--form-chip-size);
   transition: all 0.14s ease;
 }
 
@@ -610,10 +653,13 @@ watch(visibleFieldNames, nextVisibleFieldNames => {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.26rem 0.48rem;
+  min-width: 0;
+  max-width: 100%;
+  padding: var(--form-chip-padding-y) var(--form-chip-padding-x);
   border-radius: 0.7rem;
   border: 1px solid color-mix(in srgb, var(--form-accent) 18%, #d5deea);
   background: var(--form-check-bg);
+  font-size: var(--form-chip-size);
   transition: all 0.14s ease;
 }
 
@@ -631,8 +677,174 @@ watch(visibleFieldNames, nextVisibleFieldNames => {
 
 .dynamic-form :deep(.error-message) {
   margin-top: 0.2rem;
-  font-size: 0.66rem;
+  font-size: var(--form-meta-size);
   color: #dc2626;
+}
+
+.dynamic-form :deep(.field-recommendation) {
+  min-width: 0;
+  padding: calc(var(--form-chip-padding-y) + 0.08rem) calc(var(--form-chip-padding-x) + 0.04rem);
+}
+
+.dynamic-form :deep(.field-recommendation__eyebrow),
+.dynamic-form :deep(.option-badge) {
+  font-size: calc(var(--form-meta-size) - 0.08rem);
+}
+
+.dynamic-form :deep(.field-recommendation__value),
+.dynamic-form :deep(.label-text),
+.dynamic-form :deep(.option-text),
+.dynamic-form :deep(.select-trigger__label),
+.dynamic-form :deep(.select-option__label) {
+  min-width: 0;
+  font-size: var(--form-control-size);
+  overflow-wrap: anywhere;
+}
+
+.dynamic-form :deep(.field-recommendation__reason),
+.dynamic-form :deep(.option-reason),
+.dynamic-form :deep(.active-reason),
+.dynamic-form :deep(.select-option__reason),
+.dynamic-form :deep(.slider-labels),
+.dynamic-form :deep(.slider-value) {
+  font-size: var(--form-meta-size);
+}
+
+.dynamic-form :deep(.radio-group),
+.dynamic-form :deep(.option-content),
+.dynamic-form :deep(.radio-label__content),
+.dynamic-form :deep(.select-option__header),
+.dynamic-form :deep(.option-header),
+.dynamic-form :deep(.radio-label__header) {
+  min-width: 0;
+}
+
+.dynamic-form :deep(.radio-label),
+.dynamic-form :deep(.option-label),
+.dynamic-form :deep(.select-option) {
+  width: 100%;
+}
+
+.dynamic-form :deep(.other-input),
+.dynamic-form :deep(.select-trigger),
+.dynamic-form :deep(.select-option),
+.dynamic-form :deep(.other-input-add),
+.dynamic-form :deep(.other-input-remove) {
+  font-size: var(--form-control-size);
+}
+
+@container (max-width: 42rem) {
+  .dynamic-form {
+    --form-header-padding-x: 0.92rem;
+    --form-header-padding-top: 0.74rem;
+    --form-header-padding-bottom: 0.68rem;
+    --form-body-padding-x: 0.92rem;
+    --form-body-padding-top: 0.8rem;
+    --form-body-padding-bottom: 0.88rem;
+    --form-footer-padding-y: 0.68rem;
+    --form-footer-padding-x: 0.92rem;
+    --form-title-size: 0.86rem;
+    --form-question-size: 0.78rem;
+    --form-description-size: 0.72rem;
+    --form-state-size: 0.64rem;
+    --form-label-size: 0.76rem;
+    --form-control-size: 0.8rem;
+    --form-meta-size: 0.7rem;
+    --form-button-size: 0.76rem;
+    --form-button-min-width: 5rem;
+    --form-control-padding-y: 0.5rem;
+    --form-control-padding-x: 0.72rem;
+    --form-control-radius: 0.76rem;
+    --form-chip-size: 0.78rem;
+    --form-chip-padding-y: 0.34rem;
+    --form-chip-padding-x: 0.56rem;
+  }
+}
+
+@container (max-width: 34rem) {
+  .dynamic-form {
+    --form-header-padding-x: 0.78rem;
+    --form-header-padding-top: 0.64rem;
+    --form-header-padding-bottom: 0.6rem;
+    --form-body-padding-x: 0.78rem;
+    --form-body-padding-top: 0.72rem;
+    --form-body-padding-bottom: 0.8rem;
+    --form-footer-padding-y: 0.62rem;
+    --form-footer-padding-x: 0.78rem;
+    --form-title-size: 0.8rem;
+    --form-question-size: 0.74rem;
+    --form-description-size: 0.68rem;
+    --form-state-size: 0.6rem;
+    --form-label-size: 0.7rem;
+    --form-control-size: 0.75rem;
+    --form-meta-size: 0.64rem;
+    --form-button-size: 0.72rem;
+    --form-button-min-width: 4.4rem;
+    --form-control-padding-y: 0.44rem;
+    --form-control-padding-x: 0.62rem;
+    --form-control-radius: 0.68rem;
+    --form-chip-size: 0.72rem;
+    --form-chip-padding-y: 0.28rem;
+    --form-chip-padding-x: 0.46rem;
+  }
+
+  .dynamic-form :deep(.select-trigger) {
+    gap: 0.5rem;
+    min-height: 1.95rem;
+  }
+
+  .dynamic-form :deep(.radio-label),
+  .dynamic-form :deep(.option-label),
+  .dynamic-form :deep(.checkbox-label) {
+    gap: 0.32rem;
+  }
+}
+
+@container (max-width: 28rem) {
+  .dynamic-form {
+    --form-header-padding-x: 0.66rem;
+    --form-header-padding-top: 0.56rem;
+    --form-header-padding-bottom: 0.54rem;
+    --form-body-padding-x: 0.66rem;
+    --form-body-padding-top: 0.64rem;
+    --form-body-padding-bottom: 0.72rem;
+    --form-footer-padding-y: 0.56rem;
+    --form-footer-padding-x: 0.66rem;
+    --form-title-size: 0.76rem;
+    --form-question-size: 0.7rem;
+    --form-description-size: 0.64rem;
+    --form-state-size: 0.58rem;
+    --form-label-size: 0.66rem;
+    --form-control-size: 0.72rem;
+    --form-meta-size: 0.62rem;
+    --form-button-size: 0.7rem;
+    --form-button-min-width: 100%;
+    --form-control-padding-y: 0.38rem;
+    --form-control-padding-x: 0.54rem;
+    --form-control-radius: 0.6rem;
+    --form-chip-size: 0.68rem;
+    --form-chip-padding-y: 0.22rem;
+    --form-chip-padding-x: 0.38rem;
+  }
+
+  .form-footer > .btn {
+    flex: 1 1 100%;
+  }
+
+  .dynamic-form :deep(.select-trigger__chevron-wrap) {
+    width: 1.1rem;
+    height: 1.1rem;
+  }
+
+  .dynamic-form :deep(.other-input-row) {
+    gap: 0.24rem;
+  }
+
+  .dynamic-form :deep(.other-input-add),
+  .dynamic-form :deep(.other-input-remove) {
+    width: 1.6rem;
+    height: 1.6rem;
+  }
 }
 
 :global([data-theme='dark']) .dynamic-form,
