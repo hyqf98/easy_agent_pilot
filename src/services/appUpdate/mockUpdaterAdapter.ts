@@ -46,7 +46,7 @@ class MockUpdateHandle implements AppUpdateHandle {
 export function createMockUpdaterAdapter(
   scenario: MockUpdaterScenario = {}
 ): AppUpdaterAdapter {
-  const currentVersion = scenario.currentVersion ?? '1.0.0'
+  const currentVersion = scenario.currentVersion ?? '1.1.0'
   const progressEvents = scenario.progressEvents ?? [
     { event: 'Started', contentLength: 100 },
     { event: 'Progress', chunkLength: 25 },
@@ -71,7 +71,7 @@ export function createMockUpdaterAdapter(
       return new MockUpdateHandle(
         {
           currentVersion,
-          version: scenario.availableUpdate.version ?? '1.1.0',
+          version: scenario.availableUpdate.version ?? '1.2.0',
           publishedAt: scenario.availableUpdate.publishedAt ?? '2026-03-22T00:00:00Z',
           notes: scenario.availableUpdate.notes ?? 'Mock release notes',
           rawJson: scenario.availableUpdate.rawJson ?? {}

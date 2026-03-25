@@ -606,7 +606,7 @@ pub fn test_installed_mcp_connection(
             "capabilities": {},
             "clientInfo": {
                 "name": "easy-agent",
-                "version": "1.0.0"
+                "version": "1.1.0"
             }
         });
 
