@@ -99,13 +99,13 @@ describe('useAppUpdateStore', () => {
     const settingsStore = useSettingsStore()
 
     await appUpdateStore.__setAdapterFactoryForTesting(() => createMockUpdaterAdapter({
-      currentVersion: '1.0.0',
+      currentVersion: '1.1.0',
       availableUpdate: null
     }))
 
     await appUpdateStore.checkForUpdates()
 
-    expect(appUpdateStore.currentVersion).toBe('1.0.0')
+    expect(appUpdateStore.currentVersion).toBe('1.1.0')
     expect(appUpdateStore.status).toBe('up-to-date')
     expect(appUpdateStore.availableUpdate).toBeNull()
     expect(settingsStore.settings.appUpdateLastCheckedAt).toBeTruthy()
@@ -116,9 +116,9 @@ describe('useAppUpdateStore', () => {
     const appUpdateStore = useAppUpdateStore()
 
     await appUpdateStore.__setAdapterFactoryForTesting(() => createMockUpdaterAdapter({
-      currentVersion: '1.0.0',
+      currentVersion: '1.1.0',
       availableUpdate: {
-        version: '1.1.0',
+        version: '1.2.0',
         publishedAt: '2026-03-22T12:00:00Z',
         notes: 'Regression update'
       }
@@ -127,7 +127,7 @@ describe('useAppUpdateStore', () => {
     await appUpdateStore.checkForUpdates()
 
     expect(appUpdateStore.status).toBe('available')
-    expect(appUpdateStore.availableUpdate?.version).toBe('1.1.0')
+    expect(appUpdateStore.availableUpdate?.version).toBe('1.2.0')
     expect(appUpdateStore.availableUpdate?.notes).toBe('Regression update')
   })
 
@@ -136,9 +136,9 @@ describe('useAppUpdateStore', () => {
     const appUpdateStore = useAppUpdateStore()
 
     await appUpdateStore.__setAdapterFactoryForTesting(() => createMockUpdaterAdapter({
-      currentVersion: '1.0.0',
+      currentVersion: '1.1.0',
       availableUpdate: {
-        version: '1.1.0'
+        version: '1.2.0'
       },
       relaunchAfterInstall: true
     }))
@@ -157,7 +157,7 @@ describe('useAppUpdateStore', () => {
     const appUpdateStore = useAppUpdateStore()
 
     await appUpdateStore.__setAdapterFactoryForTesting(() => createMockUpdaterAdapter({
-      currentVersion: '1.0.0',
+      currentVersion: '1.1.0',
       checkError: 'Mock network failure'
     }))
 
@@ -172,9 +172,9 @@ describe('useAppUpdateStore', () => {
     const appUpdateStore = useAppUpdateStore()
 
     await appUpdateStore.__setAdapterFactoryForTesting(() => createMockUpdaterAdapter({
-      currentVersion: '1.0.0',
+      currentVersion: '1.1.0',
       availableUpdate: {
-        version: '1.1.0'
+        version: '1.2.0'
       },
       installError: 'Mock install failure'
     }))

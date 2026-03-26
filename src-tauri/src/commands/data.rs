@@ -492,7 +492,7 @@ pub fn export_all_data() -> Result<ExportData, String> {
     let app_settings = export_app_settings(&conn)?;
 
     Ok(ExportData {
-        version: "1.0.0".to_string(),
+        version: "1.1.0".to_string(),
         exported_at: chrono::Utc::now().to_rfc3339(),
         projects,
         sessions,
@@ -917,7 +917,7 @@ pub fn export_selected_data(options: ExportOptions) -> Result<ExportData, String
     };
 
     Ok(ExportData {
-        version: "1.0.0".to_string(),
+        version: "1.1.0".to_string(),
         exported_at: chrono::Utc::now().to_rfc3339(),
         projects,
         sessions,

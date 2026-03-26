@@ -63,7 +63,7 @@ const statusClass = computed(() => {
 
     <div class="app-footer__right">
       <!-- 版本信息 -->
-      <span class="app-footer__version">v1.0.0</span>
+      <span class="app-footer__version">v1.1.0</span>
     </div>
   </footer>
 </template>
