@@ -372,6 +372,8 @@ pub fn run() {
             commands::memory::delete_raw_memory_record,
             commands::memory::batch_delete_raw_memory_records,
             commands::memory::capture_user_message,
+            commands::memory::search_memory_suggestions,
+            commands::memory::record_session_memory_references,
             commands::memory::list_memory_merge_runs,
             commands::memory::merge_raw_memories_into_library,
             // App State commands

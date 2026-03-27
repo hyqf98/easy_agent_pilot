@@ -1103,6 +1103,122 @@ pub fn init_database() -> Result<()> {
         println!("Project memory libraries table migration warning: {}", e);
     }
 
+    let memory_library_chunks_table_sql = r#"
+        CREATE TABLE IF NOT EXISTS memory_library_chunks (
+            id TEXT PRIMARY KEY,
+            library_id TEXT NOT NULL,
+            chunk_text TEXT NOT NULL,
+            chunk_order INTEGER NOT NULL DEFAULT 0,
+            chunk_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (library_id) REFERENCES memory_libraries(id) ON DELETE CASCADE
+        )
+    "#;
+    if let Err(e) = conn.execute(memory_library_chunks_table_sql, []) {
+        println!("Memory library chunks table migration warning: {}", e);
+    }
+
+    let session_memory_reference_history_table_sql = r#"
+        CREATE TABLE IF NOT EXISTS session_memory_reference_history (
+            session_id TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            message_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (session_id, source_type, source_id),
+            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+        )
+    "#;
+    if let Err(e) = conn.execute(session_memory_reference_history_table_sql, []) {
+        println!("Session memory reference history table migration warning: {}", e);
+    }
+
+    let raw_memory_records_fts_sql = r#"
+        CREATE VIRTUAL TABLE IF NOT EXISTS raw_memory_records_fts USING fts5(
+            content,
+            tokenize = 'trigram',
+            content = 'raw_memory_records',
+            content_rowid = 'rowid'
+        )
+    "#;
+    if let Err(e) = conn.execute(raw_memory_records_fts_sql, []) {
+        println!("Raw memory FTS table migration warning: {}", e);
+    }
+
+    let memory_library_chunks_fts_sql = r#"
+        CREATE VIRTUAL TABLE IF NOT EXISTS memory_library_chunks_fts USING fts5(
+            chunk_text,
+            tokenize = 'trigram',
+            content = 'memory_library_chunks',
+            content_rowid = 'rowid'
+        )
+    "#;
+    if let Err(e) = conn.execute(memory_library_chunks_fts_sql, []) {
+        println!("Memory library chunks FTS table migration warning: {}", e);
+    }
+
+    let memory_search_triggers = [
+        r#"
+        CREATE TRIGGER IF NOT EXISTS raw_memory_records_ai
+        AFTER INSERT ON raw_memory_records
+        BEGIN
+            INSERT INTO raw_memory_records_fts(rowid, content)
+            VALUES (new.rowid, new.content);
+        END;
+        "#,
+        r#"
+        CREATE TRIGGER IF NOT EXISTS raw_memory_records_ad
+        AFTER DELETE ON raw_memory_records
+        BEGIN
+            INSERT INTO raw_memory_records_fts(raw_memory_records_fts, rowid, content)
+            VALUES ('delete', old.rowid, old.content);
+        END;
+        "#,
+        r#"
+        CREATE TRIGGER IF NOT EXISTS raw_memory_records_au
+        AFTER UPDATE ON raw_memory_records
+        BEGIN
+            INSERT INTO raw_memory_records_fts(raw_memory_records_fts, rowid, content)
+            VALUES ('delete', old.rowid, old.content);
+            INSERT INTO raw_memory_records_fts(rowid, content)
+            VALUES (new.rowid, new.content);
+        END;
+        "#,
+        r#"
+        CREATE TRIGGER IF NOT EXISTS memory_library_chunks_ai
+        AFTER INSERT ON memory_library_chunks
+        BEGIN
+            INSERT INTO memory_library_chunks_fts(rowid, chunk_text)
+            VALUES (new.rowid, new.chunk_text);
+        END;
+        "#,
+        r#"
+        CREATE TRIGGER IF NOT EXISTS memory_library_chunks_ad
+        AFTER DELETE ON memory_library_chunks
+        BEGIN
+            INSERT INTO memory_library_chunks_fts(memory_library_chunks_fts, rowid, chunk_text)
+            VALUES ('delete', old.rowid, old.chunk_text);
+        END;
+        "#,
+        r#"
+        CREATE TRIGGER IF NOT EXISTS memory_library_chunks_au
+        AFTER UPDATE ON memory_library_chunks
+        BEGIN
+            INSERT INTO memory_library_chunks_fts(memory_library_chunks_fts, rowid, chunk_text)
+            VALUES ('delete', old.rowid, old.chunk_text);
+            INSERT INTO memory_library_chunks_fts(rowid, chunk_text)
+            VALUES (new.rowid, new.chunk_text);
+        END;
+        "#,
+    ];
+    for migration in memory_search_triggers {
+        if let Err(e) = conn.execute(migration, []) {
+            println!("Memory search trigger migration warning: {}", e);
+        }
+    }
+
     let memory_indexes = [
         "CREATE INDEX IF NOT EXISTS idx_memory_libraries_updated ON memory_libraries(updated_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_raw_memory_records_created ON raw_memory_records(created_at DESC)",
@@ -1112,6 +1228,10 @@ pub fn init_database() -> Result<()> {
         "CREATE INDEX IF NOT EXISTS idx_memory_merge_runs_library_created ON memory_merge_runs(library_id, created_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_project_memory_libraries_project ON project_memory_libraries(project_id, created_at ASC)",
         "CREATE INDEX IF NOT EXISTS idx_project_memory_libraries_library ON project_memory_libraries(library_id, created_at ASC)",
+        "CREATE INDEX IF NOT EXISTS idx_memory_library_chunks_library_order ON memory_library_chunks(library_id, chunk_order ASC)",
+        "CREATE INDEX IF NOT EXISTS idx_memory_library_chunks_hash ON memory_library_chunks(chunk_hash)",
+        "CREATE INDEX IF NOT EXISTS idx_session_memory_reference_history_session ON session_memory_reference_history(session_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_session_memory_reference_history_message ON session_memory_reference_history(message_id, created_at DESC)",
     ];
     for migration in memory_indexes {
         if let Err(e) = conn.execute(migration, []) {
@@ -1119,6 +1239,28 @@ pub fn init_database() -> Result<()> {
         }
     }
 
+    if let Err(e) = maybe_rebuild_fts_index(&conn, "raw_memory_records_fts", "raw_memory_records") {
+        println!("Raw memory FTS rebuild warning: {}", e);
+    }
+    if let Err(e) = maybe_rebuild_fts_index(&conn, "memory_library_chunks_fts", "memory_library_chunks") {
+        println!("Memory chunk FTS rebuild warning: {}", e);
+    }
+
     println!("Database initialized successfully");
+    Ok(())
+}
+
+fn maybe_rebuild_fts_index(conn: &Connection, fts_table: &str, source_table: &str) -> Result<()> {
+    let source_count_sql = format!("SELECT COUNT(*) FROM {}", source_table);
+    let fts_count_sql = format!("SELECT COUNT(*) FROM {}", fts_table);
+    let source_count: i64 = conn.query_row(&source_count_sql, [], |row| row.get(0))?;
+    let fts_count: i64 = conn.query_row(&fts_count_sql, [], |row| row.get(0))?;
+
+    if source_count == fts_count {
+        return Ok(());
+    }
+
+    let rebuild_sql = format!("INSERT INTO {}({}) VALUES('rebuild')", fts_table, fts_table);
+    conn.execute(&rebuild_sql, [])?;
     Ok(())
 }

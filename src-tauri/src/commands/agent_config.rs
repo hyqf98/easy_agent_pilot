@@ -115,14 +115,8 @@ const CODEX_BUILTIN_MODELS: &[BuiltinModelDef] = &[
         true,
         Some(400000),
     ),
-    ("gpt-5-codex", "GPT-5-Codex", 1, false, Some(400000)),
-    ("gpt-5.3-codex", "GPT-5.3 Codex", 2, false, Some(400000)),
-    ("gpt-5.2-codex", "GPT-5.2 Codex", 3, false, Some(400000)),
-    ("gpt-5.1-codex", "GPT-5.1 Codex", 4, false, Some(400000)),
-    ("gpt-5.4", "GPT-5.4", 5, false, Some(1050000)),
-    ("gpt-5.2", "GPT-5.2", 6, false, Some(400000)),
-    ("gpt-5.1", "GPT-5.1", 7, false, Some(400000)),
-    ("gpt-5", "GPT-5", 8, false, Some(400000)),
+    ("gpt-5.3-codex", "GPT-5.3 Codex", 1, false, Some(400000)),
+    ("gpt-5.4", "GPT-5.4", 2, false, Some(1050000)),
 ];
 
 const CLAUDE_BUILTIN_MODELS: &[BuiltinModelDef] = &[
@@ -191,7 +185,19 @@ fn builtin_models_for_provider(provider: &str) -> &'static [BuiltinModelDef] {
 }
 
 fn is_legacy_codex_builtin_model(model_id: &str) -> bool {
-    matches!(model_id, "gpt-4.5" | "o3" | "o3-mini" | "o4-mini")
+    matches!(
+        model_id,
+        "gpt-4.5"
+            | "o3"
+            | "o3-mini"
+            | "o4-mini"
+            | "gpt-5-codex"
+            | "gpt-5.2-codex"
+            | "gpt-5.1-codex"
+            | "gpt-5.2"
+            | "gpt-5.1"
+            | "gpt-5"
+    )
 }
 
 fn is_codex_agent(conn: &Connection, agent_id: &str) -> Result<bool, String> {

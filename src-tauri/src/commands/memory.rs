@@ -2,8 +2,12 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, params_from_iter, OptionalExtension, ToSql};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 use super::support::{now_rfc3339, open_db_connection_with_foreign_keys};
+
+const REFERENCED_MEMORY_BLOCK_HEADER: &str = "[用户主动引用的历史记忆]";
+const CURRENT_INPUT_BLOCK_HEADER: &str = "[用户当前输入]";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -135,6 +139,63 @@ pub struct MergeRawMemoriesIntoLibraryResult {
     pub merge_run: MemoryMergeRun,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MemorySuggestionSourceType {
+    LibraryChunk,
+    RawRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySuggestion {
+    pub source_type: MemorySuggestionSourceType,
+    pub source_id: String,
+    pub title: String,
+    pub snippet: String,
+    pub full_content: String,
+    pub score: f64,
+    pub matched_terms: Vec<String>,
+    pub library_id: Option<String>,
+    pub library_name: Option<String>,
+    pub session_id: Option<String>,
+    pub session_name: Option<String>,
+    pub project_id: Option<String>,
+    pub project_name: Option<String>,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchMemorySuggestionsInput {
+    pub session_id: String,
+    pub project_id: Option<String>,
+    pub draft_text: String,
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchMemorySuggestionsResult {
+    pub library_suggestions: Vec<MemorySuggestion>,
+    pub raw_suggestions: Vec<MemorySuggestion>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordSessionMemoryReferenceItem {
+    pub source_type: MemorySuggestionSourceType,
+    pub source_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordSessionMemoryReferencesInput {
+    pub session_id: String,
+    pub message_id: String,
+    pub references: Vec<RecordSessionMemoryReferenceItem>,
+}
+
 fn get_db_connection() -> Result<rusqlite::Connection> {
     open_db_connection_with_foreign_keys()
 }
@@ -170,6 +231,299 @@ fn normalize_timestamp(value: Option<String>, field: &str) -> Result<Option<Stri
     let parsed =
         DateTime::parse_from_rfc3339(&raw).map_err(|_| format!("{} 时间格式无效", field))?;
     Ok(Some(parsed.with_timezone(&Utc).to_rfc3339()))
+}
+
+fn normalize_search_text(value: &str) -> String {
+    value
+        .replace("\r\n", "\n")
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("[[memory-ref:"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
+fn extract_raw_memory_capture_content(value: &str) -> String {
+    let trimmed = value.trim();
+    if !trimmed.starts_with(REFERENCED_MEMORY_BLOCK_HEADER) {
+        return trimmed.to_string();
+    }
+
+    let Some(index) = trimmed.find(CURRENT_INPUT_BLOCK_HEADER) else {
+        return trimmed.to_string();
+    };
+
+    trimmed[index + CURRENT_INPUT_BLOCK_HEADER.len()..]
+        .trim()
+        .to_string()
+}
+
+fn build_search_candidates(value: &str) -> Vec<String> {
+    let normalized = normalize_search_text(value);
+    if normalized.chars().count() < 4 {
+        return Vec::new();
+    }
+
+    let mut unique = Vec::new();
+    let mut seen = HashSet::new();
+    for segment in normalized.split(|ch: char| matches!(ch, '\n' | '。' | '！' | '？' | '；' | ',' | '.' | '!' | '?' | ';')) {
+        let trimmed = segment.trim();
+        let char_count = trimmed.chars().count();
+        if char_count < 4 || char_count > 80 {
+            continue;
+        }
+        if seen.insert(trimmed.to_string()) {
+            unique.push(trimmed.to_string());
+        }
+    }
+
+    unique.sort_by(|left, right| right.chars().count().cmp(&left.chars().count()));
+    unique.truncate(3);
+    if seen.insert(normalized.clone()) {
+        unique.push(normalized);
+    }
+    unique
+}
+
+fn escape_fts_phrase(value: &str) -> String {
+    value.replace('"', "\"\"")
+}
+
+fn sanitize_fts_term(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric()
+                || ('\u{4e00}'..='\u{9fff}').contains(&ch)
+                || ch.is_whitespace()
+            {
+                ch
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn build_fts_match_query(candidates: &[String]) -> Option<String> {
+    let phrases = candidates
+        .iter()
+        .map(|candidate| sanitize_fts_term(candidate))
+        .filter(|candidate| candidate.chars().count() >= 3)
+        .map(|candidate| {
+            let terms = candidate
+                .split_whitespace()
+                .filter(|term| term.chars().count() >= 3)
+                .map(|term| format!("\"{}\"", escape_fts_phrase(term)))
+                .collect::<Vec<_>>();
+
+            if terms.len() <= 1 {
+                terms.into_iter().next().unwrap_or_default()
+            } else {
+                format!("({})", terms.join(" AND "))
+            }
+        })
+        .filter(|candidate| !candidate.is_empty())
+        .collect::<Vec<_>>();
+
+    if phrases.is_empty() {
+        None
+    } else {
+        Some(phrases.join(" OR "))
+    }
+}
+
+fn build_matched_terms(content: &str, candidates: &[String]) -> Vec<String> {
+    let normalized_content = content.to_lowercase();
+    let mut matched = Vec::new();
+
+    for candidate in candidates {
+        let normalized_candidate = candidate.trim().to_lowercase();
+        if normalized_candidate.chars().count() < 4 {
+            continue;
+        }
+        if normalized_content.contains(&normalized_candidate)
+            && !matched.iter().any(|entry: &String| entry == candidate)
+        {
+            matched.push(candidate.clone());
+        }
+    }
+
+    matched
+}
+
+fn build_snippet(content: &str, candidates: &[String]) -> String {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let normalized = trimmed.to_lowercase();
+    let mut best_index = None;
+    let mut best_len = 0usize;
+
+    for candidate in candidates {
+        let lookup = candidate.trim().to_lowercase();
+        if lookup.chars().count() < 4 {
+            continue;
+        }
+        if let Some(index) = normalized.find(&lookup) {
+            if lookup.len() > best_len {
+                best_index = Some(index);
+                best_len = lookup.len();
+            }
+        }
+    }
+
+    let char_window = 54usize;
+    let chars = trimmed.chars().collect::<Vec<_>>();
+    let start_char = best_index
+        .map(|byte_index| trimmed[..byte_index].chars().count().saturating_sub(18))
+        .unwrap_or(0);
+    let end_char = (start_char + char_window).min(chars.len());
+    let snippet = chars[start_char..end_char].iter().collect::<String>().trim().to_string();
+
+    if start_char > 0 && end_char < chars.len() {
+        format!("…{}…", snippet)
+    } else if start_char > 0 {
+        format!("…{}", snippet)
+    } else if end_char < chars.len() {
+        format!("{}…", snippet)
+    } else {
+        snippet
+    }
+}
+
+fn stable_hash_text(value: &str) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in value.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}
+
+fn chunk_memory_content(content: &str) -> Vec<String> {
+    let normalized = content.replace("\r\n", "\n");
+    let mut chunks = Vec::new();
+    let mut buffer = String::new();
+
+    for paragraph in normalized.split("\n\n") {
+        let trimmed = paragraph.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let next = if buffer.is_empty() {
+            trimmed.to_string()
+        } else {
+            format!("{buffer}\n\n{trimmed}")
+        };
+
+        if next.chars().count() <= 480 {
+            buffer = next;
+            continue;
+        }
+
+        if !buffer.is_empty() {
+            chunks.push(buffer.trim().to_string());
+            buffer.clear();
+        }
+
+        if trimmed.chars().count() <= 480 {
+            buffer = trimmed.to_string();
+            continue;
+        }
+
+        let sentences = trimmed
+            .split_inclusive(|ch: char| matches!(ch, '。' | '！' | '？' | '；' | '.' | '!' | '?' | ';' | '\n'))
+            .collect::<Vec<_>>();
+
+        if sentences.len() <= 1 {
+            chunks.push(trimmed.to_string());
+            continue;
+        }
+
+        let mut sentence_buffer = String::new();
+        for sentence in sentences {
+            let sentence = sentence.trim();
+            if sentence.is_empty() {
+                continue;
+            }
+
+            let next_sentence = if sentence_buffer.is_empty() {
+                sentence.to_string()
+            } else {
+                format!("{sentence_buffer} {sentence}")
+            };
+
+            if next_sentence.chars().count() <= 320 {
+                sentence_buffer = next_sentence;
+                continue;
+            }
+
+            if !sentence_buffer.is_empty() {
+                chunks.push(sentence_buffer.trim().to_string());
+            }
+            sentence_buffer = sentence.to_string();
+        }
+
+        if !sentence_buffer.trim().is_empty() {
+            chunks.push(sentence_buffer.trim().to_string());
+        }
+    }
+
+    if !buffer.trim().is_empty() {
+        chunks.push(buffer.trim().to_string());
+    }
+
+    chunks
+}
+
+fn sync_library_chunks(
+    tx: &rusqlite::Transaction<'_>,
+    library_id: &str,
+    content_md: &str,
+    now: &str,
+) -> Result<(), String> {
+    tx.execute(
+        "DELETE FROM memory_library_chunks WHERE library_id = ?1",
+        [library_id],
+    )
+    .map_err(|error| error.to_string())?;
+
+    let chunks = chunk_memory_content(content_md);
+    for (index, chunk_text) in chunks.iter().enumerate() {
+        tx.execute(
+            r#"
+            INSERT INTO memory_library_chunks (
+                id,
+                library_id,
+                chunk_text,
+                chunk_order,
+                chunk_hash,
+                created_at,
+                updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "#,
+            params![
+                generate_id(),
+                library_id,
+                chunk_text,
+                index as i32,
+                stable_hash_text(chunk_text),
+                now,
+                now
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+
+    Ok(())
 }
 
 fn append_raw_record_filters(
@@ -334,6 +688,30 @@ fn resolve_project_id_from_session(
     .map_err(|error| error.to_string())
 }
 
+fn list_project_memory_library_ids(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+) -> Result<Vec<String>, String> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT library_id
+            FROM project_memory_libraries
+            WHERE project_id = ?1
+            ORDER BY created_at ASC, library_id ASC
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+
+    let rows = stmt
+        .query_map([project_id], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| error.to_string())?;
+
+    Ok(rows)
+}
+
 fn count_existing_raw_records(
     conn: &rusqlite::Connection,
     record_ids: &[String],
@@ -354,6 +732,210 @@ fn count_existing_raw_records(
     conn.query_row(&sql, params_from_iter(params), |row| row.get::<_, i64>(0))
         .map(|count| count as usize)
         .map_err(|error| error.to_string())
+}
+
+fn search_library_suggestions(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    excluded_library_ids: &[String],
+    _match_query: &str,
+    candidates: &[String],
+    limit: i64,
+) -> Result<Vec<MemorySuggestion>, String> {
+    let mut sql = String::from(
+        r#"
+        SELECT
+            c.id,
+            c.chunk_text,
+            l.id,
+            l.name,
+            l.updated_at
+        FROM memory_library_chunks c
+        JOIN memory_libraries l ON l.id = c.library_id
+        LEFT JOIN session_memory_reference_history h
+            ON h.session_id = ?1
+           AND h.source_type = 'library_chunk'
+           AND h.source_id = c.id
+        WHERE h.source_id IS NULL
+        "#,
+    );
+
+    let search_terms = candidates
+        .iter()
+        .map(|candidate| candidate.trim())
+        .filter(|candidate| candidate.chars().count() >= 3)
+        .collect::<Vec<_>>();
+    if search_terms.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut bindings: Vec<Box<dyn ToSql>> = vec![Box::new(session_id.to_string())];
+    sql.push_str(" AND (");
+    for (index, term) in search_terms.iter().enumerate() {
+        if index > 0 {
+            sql.push_str(" OR ");
+        }
+        sql.push_str(&format!("LOWER(c.chunk_text) LIKE LOWER(?{})", bindings.len() + 1));
+        bindings.push(Box::new(format!("%{}%", term)));
+    }
+    sql.push(')');
+
+    for library_id in excluded_library_ids {
+        sql.push_str(&format!(" AND l.id != ?{}", bindings.len() + 1));
+        bindings.push(Box::new(library_id.clone()));
+    }
+
+    sql.push_str(
+        r#"
+        ORDER BY l.updated_at DESC, c.chunk_order ASC
+        "#,
+    );
+
+    let params: Vec<&dyn ToSql> = bindings.iter().map(|value| value.as_ref()).collect();
+    let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
+    let mut rows = stmt.query_map(params_from_iter(params), |row| {
+        let full_content = row.get::<_, String>(1)?;
+        let library_name = row.get::<_, String>(3)?;
+        let matched_terms = build_matched_terms(&full_content, candidates);
+        let score = matched_terms.iter().map(|term| term.chars().count() as f64).sum::<f64>();
+        Ok(MemorySuggestion {
+            source_type: MemorySuggestionSourceType::LibraryChunk,
+            source_id: row.get(0)?,
+            title: format!("记忆库《{}》", library_name),
+            snippet: build_snippet(&full_content, candidates),
+            full_content,
+            score,
+            matched_terms,
+            library_id: Some(row.get(2)?),
+            library_name: Some(library_name),
+            session_id: None,
+            session_name: None,
+            project_id: None,
+            project_name: None,
+            created_at: Some(row.get(4)?),
+        })
+    })
+    .map_err(|error| error.to_string())?
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .map_err(|error| error.to_string())?;
+
+    rows.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| right.created_at.cmp(&left.created_at))
+    });
+    rows.truncate(limit as usize);
+    Ok(rows)
+}
+
+fn search_raw_memory_suggestions(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    project_id: Option<&String>,
+    draft_text: &str,
+    candidates: &[String],
+    limit: i64,
+) -> Result<Vec<MemorySuggestion>, String> {
+    let search_terms = candidates
+        .iter()
+        .map(|candidate| candidate.trim())
+        .filter(|candidate| candidate.chars().count() >= 3)
+        .collect::<Vec<_>>();
+    if search_terms.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let normalized_draft = normalize_search_text(draft_text);
+    let mut sql = String::from(
+        r#"
+        SELECT
+            r.id,
+            r.content,
+            r.session_id,
+            s.name,
+            r.project_id,
+            p.name,
+            r.created_at
+        FROM raw_memory_records r
+        LEFT JOIN sessions s ON s.id = r.session_id
+        LEFT JOIN projects p ON p.id = r.project_id
+        LEFT JOIN session_memory_reference_history h
+            ON h.session_id = ?1
+           AND h.source_type = 'raw_record'
+           AND h.source_id = r.id
+        WHERE h.source_id IS NULL
+          AND TRIM(r.content) NOT LIKE '[用户主动引用的历史记忆]%'
+        "#,
+    );
+
+    let mut bindings: Vec<Box<dyn ToSql>> = vec![Box::new(session_id.to_string())];
+    sql.push_str(" AND (");
+    for (index, term) in search_terms.iter().enumerate() {
+        if index > 0 {
+            sql.push_str(" OR ");
+        }
+        sql.push_str(&format!("LOWER(r.content) LIKE LOWER(?{})", bindings.len() + 1));
+        bindings.push(Box::new(format!("%{}%", term)));
+    }
+    sql.push(')');
+    sql.push_str(" ORDER BY r.created_at DESC");
+
+    let params: Vec<&dyn ToSql> = bindings.iter().map(|value| value.as_ref()).collect();
+    let mut stmt = conn.prepare(&sql).map_err(|error| error.to_string())?;
+    let rows = stmt.query_map(params_from_iter(params), |row| {
+        let full_content = row.get::<_, String>(1)?;
+        if normalize_search_text(&full_content) == normalized_draft {
+            return Ok(None);
+        }
+        let matched_terms = build_matched_terms(&full_content, candidates);
+        let created_at = row.get::<_, String>(6)?;
+        let session_name = row.get::<_, Option<String>>(3)?;
+        let row_session_id = row.get::<_, Option<String>>(2)?;
+        let row_project_id = row.get::<_, Option<String>>(4)?;
+        let scope_rank = if row_session_id.as_deref() == Some(session_id) {
+            0.0
+        } else if row_project_id.as_ref() == project_id {
+            1.0
+        } else {
+            2.0
+        };
+        let match_score = matched_terms.iter().map(|term| term.chars().count() as f64).sum::<f64>();
+        Ok(Some(MemorySuggestion {
+            source_type: MemorySuggestionSourceType::RawRecord,
+            source_id: row.get(0)?,
+            title: match &session_name {
+                Some(name) => format!("原始记忆 · {}", name),
+                None => "原始记忆".to_string(),
+            },
+            snippet: build_snippet(&full_content, candidates),
+            full_content,
+            score: (10.0 - scope_rank) + match_score,
+            matched_terms,
+            library_id: None,
+            library_name: None,
+            session_id: row_session_id,
+            session_name,
+            project_id: row_project_id,
+            project_name: row.get(5)?,
+            created_at: Some(created_at),
+        }))
+    })
+    .map_err(|error| error.to_string())?
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .map_err(|error| error.to_string())?;
+    let mut rows = rows.into_iter().flatten().collect::<Vec<_>>();
+
+    rows.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| right.created_at.cmp(&left.created_at))
+    });
+    rows.truncate(limit as usize);
+    Ok(rows)
 }
 
 #[tauri::command]
@@ -386,12 +968,15 @@ pub fn get_memory_library(id: String) -> Result<MemoryLibrary, String> {
 
 #[tauri::command]
 pub fn create_memory_library(input: CreateMemoryLibraryInput) -> Result<MemoryLibrary, String> {
-    let conn = get_db_connection().map_err(|error| error.to_string())?;
+    let mut conn = get_db_connection().map_err(|error| error.to_string())?;
     let now = now_rfc3339();
     let id = generate_id();
     let name = normalize_required_string(input.name, "记忆库名称")?;
+    let description = normalize_optional_string(input.description);
+    let content_md = input.content_md.unwrap_or_default();
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
 
-    conn.execute(
+    tx.execute(
         r#"
         INSERT INTO memory_libraries (id, name, description, content_md, created_at, updated_at)
         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -399,13 +984,15 @@ pub fn create_memory_library(input: CreateMemoryLibraryInput) -> Result<MemoryLi
         params![
             &id,
             &name,
-            normalize_optional_string(input.description),
-            input.content_md.unwrap_or_default(),
+            description,
+            &content_md,
             &now,
             &now
         ],
     )
     .map_err(|error| error.to_string())?;
+    sync_library_chunks(&tx, &id, &content_md, &now)?;
+    tx.commit().map_err(|error| error.to_string())?;
 
     get_memory_library_by_id(&conn, &id)
 }
@@ -415,7 +1002,7 @@ pub fn update_memory_library(
     id: String,
     input: UpdateMemoryLibraryInput,
 ) -> Result<MemoryLibrary, String> {
-    let conn = get_db_connection().map_err(|error| error.to_string())?;
+    let mut conn = get_db_connection().map_err(|error| error.to_string())?;
     let existing = get_memory_library_by_id(&conn, &id)?;
     let now = now_rfc3339();
 
@@ -428,8 +1015,8 @@ pub fn update_memory_library(
         None => existing.description,
     };
     let content_md = input.content_md.unwrap_or(existing.content_md);
-
-    conn.execute(
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    tx.execute(
         r#"
         UPDATE memory_libraries
         SET name = ?1,
@@ -438,18 +1025,24 @@ pub fn update_memory_library(
             updated_at = ?4
         WHERE id = ?5
         "#,
-        params![name, description, content_md, &now, &id],
+        params![name, description, &content_md, &now, &id],
     )
     .map_err(|error| error.to_string())?;
+    sync_library_chunks(&tx, &id, &content_md, &now)?;
+    tx.commit().map_err(|error| error.to_string())?;
 
     get_memory_library_by_id(&conn, &id)
 }
 
 #[tauri::command]
 pub fn delete_memory_library(id: String) -> Result<(), String> {
-    let conn = get_db_connection().map_err(|error| error.to_string())?;
-    conn.execute("DELETE FROM memory_libraries WHERE id = ?1", [&id])
+    let mut conn = get_db_connection().map_err(|error| error.to_string())?;
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    tx.execute("DELETE FROM memory_library_chunks WHERE library_id = ?1", [&id])
         .map_err(|error| error.to_string())?;
+    tx.execute("DELETE FROM memory_libraries WHERE id = ?1", [&id])
+        .map_err(|error| error.to_string())?;
+    tx.commit().map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -704,7 +1297,10 @@ pub fn capture_user_message(input: CaptureUserMessageInput) -> Result<RawMemoryR
     let now = now_rfc3339();
     let id = generate_id();
     let project_id = resolve_project_id_from_session(&conn, &input.session_id)?;
-    let content = normalize_required_string(input.content, "原始记忆内容")?;
+    let content = normalize_required_string(
+        extract_raw_memory_capture_content(&input.content),
+        "原始记忆内容",
+    )?;
 
     conn.execute(
         r#"
@@ -732,6 +1328,114 @@ pub fn capture_user_message(input: CaptureUserMessageInput) -> Result<RawMemoryR
     .map_err(|error| error.to_string())?;
 
     get_raw_memory_record_by_id(&conn, &id)
+}
+
+/// 基于当前草稿实时检索可引用的记忆候选。
+///
+/// 用途：为主会话输入框提供轻量的本地记忆召回，先检索记忆库分块，再检索原始记忆。
+/// 参数：会话 ID、项目 ID（可选）、当前草稿文本、返回上限。
+/// 返回：按来源分组的记忆建议列表；已在当前会话引用过的内容会被自动排除。
+#[tauri::command]
+pub fn search_memory_suggestions(
+    input: SearchMemorySuggestionsInput,
+) -> Result<SearchMemorySuggestionsResult, String> {
+    let conn = get_db_connection().map_err(|error| error.to_string())?;
+    let session_id = normalize_required_string(input.session_id, "会话 ID")?;
+    let candidates = build_search_candidates(&input.draft_text);
+    let match_query = match build_fts_match_query(&candidates) {
+        Some(query) => query,
+        None => {
+            return Ok(SearchMemorySuggestionsResult {
+                library_suggestions: Vec::new(),
+                raw_suggestions: Vec::new(),
+            });
+        }
+    };
+
+    let resolved_project_id = match normalize_optional_string(input.project_id) {
+        Some(project_id) => Some(project_id),
+        None => resolve_project_id_from_session(&conn, &session_id)?,
+    };
+    let excluded_library_ids = match resolved_project_id.as_ref() {
+        Some(project_id) => list_project_memory_library_ids(&conn, project_id)?,
+        None => Vec::new(),
+    };
+    let limit = input.limit.unwrap_or(6).clamp(1, 10);
+    let library_limit = limit.min(4);
+    let raw_limit = limit.min(6);
+
+    let library_suggestions = search_library_suggestions(
+        &conn,
+        &session_id,
+        &excluded_library_ids,
+        &match_query,
+        &candidates,
+        library_limit,
+    )?;
+    let raw_suggestions = search_raw_memory_suggestions(
+        &conn,
+        &session_id,
+        resolved_project_id.as_ref(),
+        &input.draft_text,
+        &candidates,
+        raw_limit,
+    )?;
+
+    Ok(SearchMemorySuggestionsResult {
+        library_suggestions,
+        raw_suggestions,
+    })
+}
+
+/// 记录当前会话已经实际引用并发送过的记忆，防止后续自动重复推荐。
+///
+/// 用途：在用户消息发送成功后持久化会话级去重历史。
+/// 参数：会话 ID、消息 ID、已引用记忆列表。
+/// 返回：无。
+#[tauri::command]
+pub fn record_session_memory_references(
+    input: RecordSessionMemoryReferencesInput,
+) -> Result<(), String> {
+    if input.references.is_empty() {
+        return Ok(());
+    }
+
+    let mut conn = get_db_connection().map_err(|error| error.to_string())?;
+    let session_id = normalize_required_string(input.session_id, "会话 ID")?;
+    let message_id = normalize_required_string(input.message_id, "消息 ID")?;
+    let now = now_rfc3339();
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+
+    for reference in input.references {
+        tx.execute(
+            r#"
+            INSERT INTO session_memory_reference_history (
+                session_id,
+                source_type,
+                source_id,
+                message_id,
+                created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5)
+            ON CONFLICT(session_id, source_type, source_id) DO UPDATE SET
+                message_id = excluded.message_id,
+                created_at = excluded.created_at
+            "#,
+            params![
+                &session_id,
+                match reference.source_type {
+                    MemorySuggestionSourceType::LibraryChunk => "library_chunk",
+                    MemorySuggestionSourceType::RawRecord => "raw_record",
+                },
+                normalize_required_string(reference.source_id, "记忆来源 ID")?,
+                &message_id,
+                &now
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+
+    tx.commit().map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -802,6 +1506,7 @@ pub fn merge_raw_memories_into_library(
         params![&merged_content_md, &now, &input.library_id],
     )
     .map_err(|error| error.to_string())?;
+    sync_library_chunks(&tx, &input.library_id, &merged_content_md, &now)?;
 
     tx.execute(
         r#"

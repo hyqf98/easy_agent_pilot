@@ -16,7 +16,10 @@ import type {
   MemoryLibrary,
   MemoryMergeRun,
   MergeRawMemoriesIntoLibraryResult,
+  RecordSessionMemoryReferencesInput,
   RawMemoryRecord,
+  SearchMemorySuggestionsInput,
+  SearchMemorySuggestionsResult,
   UpdateMemoryLibraryInput,
   UpdateRawMemoryRecordInput
 } from '@/types/memory'
@@ -299,6 +302,40 @@ export const useMemoryStore = defineStore('memory', () => {
     }
   }
 
+  /**
+   * 基于当前输入内容检索可引用的记忆建议。
+   *
+   * 封装目的：统一调度后端轻量 FTS 检索，并在失败时返回空结果，避免打断输入体验。
+   */
+  async function searchSuggestions(input: SearchMemorySuggestionsInput): Promise<SearchMemorySuggestionsResult> {
+    try {
+      return await invoke<SearchMemorySuggestionsResult>('search_memory_suggestions', { input })
+    } catch (error) {
+      console.error('Failed to search memory suggestions:', error)
+      return {
+        librarySuggestions: [],
+        rawSuggestions: []
+      }
+    }
+  }
+
+  /**
+   * 记录本会话已成功引用并发送的记忆，用于后续去重。
+   *
+   * 副作用：写入 session_memory_reference_history；失败仅记录日志，不阻断消息发送成功态。
+   */
+  async function recordSessionMemoryReferences(input: RecordSessionMemoryReferencesInput): Promise<void> {
+    if (input.references.length === 0) {
+      return
+    }
+
+    try {
+      await invoke('record_session_memory_references', { input })
+    } catch (error) {
+      console.error('Failed to record session memory references:', error)
+    }
+  }
+
   async function resolveMergeAgent(preferredAgentId?: string): Promise<AgentConfig | null> {
     const agentStore = useAgentStore()
     if (agentStore.agents.length === 0) {
@@ -418,6 +455,8 @@ export const useMemoryStore = defineStore('memory', () => {
     deleteRawRecord,
     batchDeleteRawRecords,
     captureUserMessage,
+    searchSuggestions,
+    recordSessionMemoryReferences,
     mergeIntoLibrary,
     toggleRecordSelection,
     clearSelectedRecords,

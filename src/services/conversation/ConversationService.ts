@@ -1,6 +1,6 @@
 import { useMessageStore, type Message, type MessageAttachment, type ToolCall } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
-import { useSessionExecutionStore } from '@/stores/sessionExecution'
+import { useSessionExecutionStore, type ComposerMemoryReference } from '@/stores/sessionExecution'
 import { useProjectStore } from '@/stores/project'
 import { useAgentStore, type AgentConfig } from '@/stores/agent'
 import { useNotificationStore } from '@/stores/notification'
@@ -36,6 +36,9 @@ interface StreamTimingMetrics {
   persistedAt?: number
 }
 
+const REFERENCED_MEMORY_BLOCK_HEADER = '[用户主动引用的历史记忆]'
+const CURRENT_INPUT_BLOCK_HEADER = '[用户当前输入]'
+
 function finalizePendingToolCalls(toolCalls: ToolCall[]): ToolCall[] {
   let changed = false
   const finalized = toolCalls.map(toolCall => {
@@ -51,6 +54,20 @@ function finalizePendingToolCalls(toolCalls: ToolCall[]): ToolCall[] {
   })
 
   return changed ? finalized : toolCalls
+}
+
+function extractRawMemoryCaptureContent(content: string): string {
+  const trimmed = content.trim()
+  if (!trimmed.startsWith(REFERENCED_MEMORY_BLOCK_HEADER)) {
+    return trimmed
+  }
+
+  const currentInputIndex = trimmed.indexOf(CURRENT_INPUT_BLOCK_HEADER)
+  if (currentInputIndex === -1) {
+    return trimmed
+  }
+
+  return trimmed.slice(currentInputIndex + CURRENT_INPUT_BLOCK_HEADER.length).trim()
 }
 
 /**
@@ -119,6 +136,8 @@ export class ConversationService {
       modelId?: string
       injectedSystemMessages?: string[]
       dedupeInjectedSystemMessagesBySession?: boolean
+      previewContent?: string
+      memoryReferencesToPersist?: ComposerMemoryReference[]
     }
   ): Promise<void> {
     const messageStore = useMessageStore()
@@ -158,21 +177,32 @@ export class ConversationService {
         status: 'completed'
       })
 
-      await memoryStore.captureUserMessage({
+      const rawMemoryContent = extractRawMemoryCaptureContent(content)
+      if (rawMemoryContent) {
+        await memoryStore.captureUserMessage({
+          sessionId,
+          messageId: userMessage.id,
+          content: rawMemoryContent
+        })
+      }
+      await memoryStore.recordSessionMemoryReferences({
         sessionId,
         messageId: userMessage.id,
-        content
+        references: (options?.memoryReferencesToPersist ?? []).map(reference => ({
+          sourceType: reference.sourceType,
+          sourceId: reference.sourceId
+        }))
       })
 
       // 更新会话最后消息
-      const messagePreview = this.buildMessagePreview(content, attachments)
+      const messagePreview = this.buildMessagePreview(options?.previewContent ?? content, attachments)
       sessionStore.updateLastMessage(sessionId, messagePreview)
 
       // 如果会话名称是默认名称（未命名会话），则用第一条消息的前几个字更新
       const session = sessionStore.sessions.find(s => s.id === sessionId)
       if (session && (session.name === '未命名会话' || session.name.startsWith('新会话'))) {
         // 提取前20个字符作为会话名称，去掉换行符
-        const titleSource = this.buildMessagePreview(content, attachments)
+        const titleSource = this.buildMessagePreview(options?.previewContent ?? content, attachments)
         const newTitle = titleSource.replace(/\n/g, ' ').slice(0, 20).trim()
         const finalTitle = newTitle.length < titleSource.length ? newTitle + '...' : newTitle
         if (finalTitle) {
@@ -334,7 +364,11 @@ export class ConversationService {
         nextDraft.agentId,
         projectId,
         nextDraft.attachments,
-        { modelId: nextDraft.modelId }
+        {
+          modelId: nextDraft.modelId,
+          previewContent: nextDraft.displayContent,
+          memoryReferencesToPersist: nextDraft.memoryReferences ?? []
+        }
       )
     } catch (error) {
       const notificationStore = useNotificationStore()
@@ -461,6 +495,35 @@ export class ConversationService {
       scheduledUiFlushHandle = null
     }
 
+    const getCurrentAiMessage = () => {
+      return messageStore.messagesBySession(sessionId)
+        .find(message => message.id === aiMessage.id)
+    }
+
+    const isAiMessageInterrupted = () => getCurrentAiMessage()?.status === 'interrupted'
+
+    const normalizeBufferedMessageUpdate = (
+      updates: Partial<Message>
+    ): Partial<Message> | null => {
+      if (!isAiMessageInterrupted()) {
+        return updates
+      }
+
+      const nextUpdates: Partial<Message> = { ...updates }
+
+      if (nextUpdates.status === 'completed' || nextUpdates.status === 'error') {
+        delete nextUpdates.status
+      }
+
+      delete nextUpdates.errorMessage
+
+      if (nextUpdates.thinkingActive !== undefined) {
+        nextUpdates.thinkingActive = false
+      }
+
+      return Object.keys(nextUpdates).length > 0 ? nextUpdates : null
+    }
+
     const flushPendingUiUpdate = (options?: { immediate?: boolean }) => {
       clearScheduledUiFlush()
       if (!pendingUiUpdate) {
@@ -468,8 +531,11 @@ export class ConversationService {
       }
 
       markMetric('firstRenderAt')
-      const updates = pendingUiUpdate
+      const updates = normalizeBufferedMessageUpdate(pendingUiUpdate)
       pendingUiUpdate = null
+      if (!updates) {
+        return
+      }
       messageStore.updateMessageBuffered(aiMessage.id, updates, options)
     }
 
@@ -496,9 +562,14 @@ export class ConversationService {
       updates: Partial<Message>,
       options?: { immediate?: boolean }
     ) => {
+      const normalizedUpdates = normalizeBufferedMessageUpdate(updates)
+      if (!normalizedUpdates) {
+        return
+      }
+
       pendingUiUpdate = pendingUiUpdate
-        ? { ...pendingUiUpdate, ...updates }
-        : { ...updates }
+        ? { ...pendingUiUpdate, ...normalizedUpdates }
+        : { ...normalizedUpdates }
 
       if (options?.immediate) {
         flushPendingUiUpdate(options)
@@ -687,6 +758,13 @@ export class ConversationService {
             })
           },
           onError: (error) => {
+            if (isAiMessageInterrupted()) {
+              bufferMessageUpdate({
+                thinkingActive: false
+              }, { immediate: true })
+              return
+            }
+
             hasError = true
             bufferMessageUpdate({
               status: 'error',
@@ -701,7 +779,7 @@ export class ConversationService {
               toolCalls.splice(0, toolCalls.length, ...finalizedToolCalls)
             }
             // 更新消息状态
-            if (!hasError) {
+            if (!hasError && !isAiMessageInterrupted()) {
               bufferMessageUpdate({
                 status: 'completed',
                 thinkingActive: false,
@@ -759,6 +837,18 @@ export class ConversationService {
     } catch (error) {
       hasError = true
       const errorMessage = error instanceof Error ? error.message : String(error)
+      if (isAiMessageInterrupted()) {
+        bufferMessageUpdate({
+          thinkingActive: false
+        }, { immediate: true })
+        await messageStore.flushBufferedMessageUpdate(aiMessage.id, { notifyOnFailure: true })
+        markMetric('persistedAt')
+        recordTimingSummary()
+        recordUsageOnce(new Date().toISOString())
+        this.finalizeSend(sessionId)
+        return
+      }
+
       bufferMessageUpdate({
         status: 'error',
         errorMessage,

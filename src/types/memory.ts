@@ -98,3 +98,45 @@ export interface MergeRawMemoriesIntoLibraryResult {
   library: MemoryLibrary
   mergeRun: MemoryMergeRun
 }
+
+export type MemorySuggestionSourceType = 'library_chunk' | 'raw_record'
+
+export interface MemorySuggestion {
+  sourceType: MemorySuggestionSourceType
+  sourceId: string
+  title: string
+  snippet: string
+  fullContent: string
+  score: number
+  matchedTerms: string[]
+  libraryId?: string
+  libraryName?: string
+  sessionId?: string
+  sessionName?: string
+  projectId?: string
+  projectName?: string
+  createdAt?: string
+}
+
+export interface SearchMemorySuggestionsInput {
+  sessionId: string
+  projectId?: string
+  draftText: string
+  limit?: number
+}
+
+export interface SearchMemorySuggestionsResult {
+  librarySuggestions: MemorySuggestion[]
+  rawSuggestions: MemorySuggestion[]
+}
+
+export interface RecordSessionMemoryReferenceItem {
+  sourceType: MemorySuggestionSourceType
+  sourceId: string
+}
+
+export interface RecordSessionMemoryReferencesInput {
+  sessionId: string
+  messageId: string
+  references: RecordSessionMemoryReferenceItem[]
+}

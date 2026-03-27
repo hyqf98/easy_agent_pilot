@@ -574,7 +574,7 @@ export const useAgentConfigStore = defineStore('agentConfig', () => {
 
   async function ensureModelsConfigs(agentId: string, provider?: string) {
     const configs = await loadModelsConfigs(agentId)
-    if (configs.length > 0 || !provider) {
+    if (!provider) {
       return configs
     }
 

@@ -55,8 +55,12 @@ const {
   currentAgent,
   currentAgentId,
   currentAgentName,
+  currentMemoryPreview,
+  currentMemoryReferences,
   currentProjectPath,
   currentWorkingDirectory,
+  clearMemoryPreview,
+  dismissMemorySuggestion,
   fileInputRef,
   fileMentionPosition,
   focusInput,
@@ -64,6 +68,8 @@ const {
   handleCancelCompress,
   handleCdPathSelect,
   handleConfirmCompress,
+  handleCompositionEnd,
+  handleCompositionStart,
   handleFileSelect,
   handleImageFileChange,
   handleInput,
@@ -72,13 +78,16 @@ const {
   handleOpenCompress,
   handlePaste,
   resendMessage,
+  insertMemoryReference,
   handleSlashCommandSelect,
   inputPlaceholder,
   inputText,
   insertFileMentions,
+  isActiveMemorySuggestion,
   isAgentDropdownOpen,
   isCompressing,
   isModelDropdownOpen,
+  isSearchingMemory,
   isSending,
   isUploadingImages,
   mentionSearchText,
@@ -88,9 +97,12 @@ const {
   openImagePicker,
   parsedInputText,
   pendingImages,
+  previewMemoryReference,
+  previewMemorySuggestion,
   presetModelOptions,
   queuedMessages,
   removeImage,
+  removeMemoryReferenceFromDraft,
   removeQueuedMessage,
   renderLayerRef,
   retryQueuedMessage,
@@ -105,11 +117,13 @@ const {
   slashCommandPosition,
   slashCommandQuery,
   slashCommands,
+  shouldShowMemorySuggestions,
   syncScroll,
   textareaRef,
   toggleAgentDropdown,
   toggleModelDropdown,
-  tokenUsage
+  tokenUsage,
+  visibleMemorySuggestions
 } = useConversationComposer({
   panelType: props.panelType,
   sessionId: computed(() => props.sessionId),
@@ -559,6 +573,211 @@ defineExpose({
       </div>
 
       <div
+        v-if="isMainPanel && currentMemoryReferences.length > 0"
+        class="conversation-composer__memory-tray"
+      >
+        <div class="conversation-composer__memory-tray-label">
+          {{ t('message.memoryReferencesTitle') }}
+        </div>
+        <div class="conversation-composer__memory-chips">
+          <button
+            v-for="reference in currentMemoryReferences"
+            :key="`${reference.sourceType}:${reference.sourceId}`"
+            class="conversation-composer__memory-chip"
+            type="button"
+            :title="reference.fullContent"
+            @mouseenter="previewMemoryReference(reference)"
+            @mouseleave="clearMemoryPreview"
+            @focus="previewMemoryReference(reference)"
+            @blur="clearMemoryPreview"
+            @click="removeMemoryReferenceFromDraft(reference)"
+          >
+            <span class="conversation-composer__memory-chip-type">
+              {{ reference.sourceType === 'library_chunk' ? t('message.memorySourceLibrary') : t('message.memorySourceRaw') }}
+            </span>
+            <span class="conversation-composer__memory-chip-text">{{ reference.title }}</span>
+            <EaIcon
+              name="x"
+              :size="12"
+            />
+          </button>
+        </div>
+      </div>
+
+      <div
+        v-if="isMainPanel && currentMemoryPreview && !shouldShowMemorySuggestions"
+        class="conversation-composer__memory-preview"
+        :class="{
+          'conversation-composer__memory-preview--library': currentMemoryPreview.sourceType === 'library_chunk',
+          'conversation-composer__memory-preview--raw': currentMemoryPreview.sourceType === 'raw_record'
+        }"
+      >
+        <div class="conversation-composer__memory-preview-header">
+          <span class="conversation-composer__memory-preview-label">
+            {{ t('message.memoryPreviewTitle') }}
+          </span>
+          <span class="conversation-composer__memory-preview-source">
+            {{ currentMemoryPreview.sourceLabel }}
+          </span>
+        </div>
+        <div class="conversation-composer__memory-preview-name">
+          {{ currentMemoryPreview.title }}
+        </div>
+        <pre class="conversation-composer__memory-preview-content">{{ currentMemoryPreview.fullContent }}</pre>
+      </div>
+
+      <div
+        v-if="isMainPanel && shouldShowMemorySuggestions"
+        class="conversation-composer__memory-panel"
+      >
+        <div class="conversation-composer__memory-panel-header">
+          <div>
+            <div class="conversation-composer__memory-eyebrow">
+              {{ t('message.memorySuggestionEyebrow') }}
+            </div>
+            <div class="conversation-composer__memory-title">
+              {{ t('message.memorySuggestionTitle') }}
+            </div>
+            <div class="conversation-composer__memory-keyboard-hint">
+              {{ t('message.memoryKeyboardHint') }}
+            </div>
+          </div>
+          <div
+            v-if="isSearchingMemory"
+            class="conversation-composer__memory-loading"
+          >
+            {{ t('message.memorySearching') }}
+          </div>
+        </div>
+
+        <div
+          v-if="currentMemoryPreview"
+          class="conversation-composer__memory-preview"
+          :class="{
+            'conversation-composer__memory-preview--library': currentMemoryPreview.sourceType === 'library_chunk',
+            'conversation-composer__memory-preview--raw': currentMemoryPreview.sourceType === 'raw_record'
+          }"
+        >
+          <div class="conversation-composer__memory-preview-header">
+            <span class="conversation-composer__memory-preview-label">
+              {{ t('message.memoryPreviewTitle') }}
+            </span>
+            <span class="conversation-composer__memory-preview-source">
+              {{ currentMemoryPreview.sourceLabel }}
+            </span>
+          </div>
+          <div class="conversation-composer__memory-preview-name">
+            {{ currentMemoryPreview.title }}
+          </div>
+          <pre class="conversation-composer__memory-preview-content">{{ currentMemoryPreview.fullContent }}</pre>
+        </div>
+
+        <div
+          v-if="visibleMemorySuggestions.librarySuggestions.length > 0"
+          class="conversation-composer__memory-group"
+        >
+          <div class="conversation-composer__memory-group-title">
+            {{ t('message.memorySourceLibrary') }}
+          </div>
+          <div class="conversation-composer__memory-list">
+            <article
+              v-for="suggestion in visibleMemorySuggestions.librarySuggestions"
+              :key="`${suggestion.sourceType}:${suggestion.sourceId}`"
+              class="conversation-composer__memory-card conversation-composer__memory-card--library"
+              :class="{
+                'conversation-composer__memory-card--active': isActiveMemorySuggestion(suggestion)
+              }"
+              role="option"
+              :aria-selected="isActiveMemorySuggestion(suggestion)"
+              :title="suggestion.fullContent"
+              @mouseenter="previewMemorySuggestion(suggestion)"
+              @mouseleave="clearMemoryPreview"
+            >
+              <div class="conversation-composer__memory-card-body">
+                <div class="conversation-composer__memory-card-top">
+                  <span class="conversation-composer__memory-badge">
+                    {{ t('message.memorySourceLibrary') }}
+                  </span>
+                  <span class="conversation-composer__memory-card-title">{{ suggestion.title }}</span>
+                </div>
+                <p class="conversation-composer__memory-card-snippet">
+                  {{ suggestion.snippet || suggestion.fullContent }}
+                </p>
+              </div>
+              <div class="conversation-composer__memory-card-actions">
+                <button
+                  class="conversation-composer__memory-action conversation-composer__memory-action--ghost"
+                  type="button"
+                  @click="dismissMemorySuggestion(suggestion)"
+                >
+                  {{ t('message.memoryDismiss') }}
+                </button>
+                <button
+                  class="conversation-composer__memory-action conversation-composer__memory-action--primary"
+                  type="button"
+                  @click="insertMemoryReference(suggestion)"
+                >
+                  {{ t('message.memoryInsert') }}
+                </button>
+              </div>
+            </article>
+          </div>
+        </div>
+
+        <div
+          v-if="visibleMemorySuggestions.rawSuggestions.length > 0"
+          class="conversation-composer__memory-group"
+        >
+          <div class="conversation-composer__memory-group-title">
+            {{ t('message.memorySourceRaw') }}
+          </div>
+          <div class="conversation-composer__memory-list">
+            <article
+              v-for="suggestion in visibleMemorySuggestions.rawSuggestions"
+              :key="`${suggestion.sourceType}:${suggestion.sourceId}`"
+              class="conversation-composer__memory-card conversation-composer__memory-card--raw"
+              :class="{
+                'conversation-composer__memory-card--active': isActiveMemorySuggestion(suggestion)
+              }"
+              role="option"
+              :aria-selected="isActiveMemorySuggestion(suggestion)"
+              :title="suggestion.fullContent"
+              @mouseenter="previewMemorySuggestion(suggestion)"
+              @mouseleave="clearMemoryPreview"
+            >
+              <div class="conversation-composer__memory-card-body">
+                <div class="conversation-composer__memory-card-top">
+                  <span class="conversation-composer__memory-badge conversation-composer__memory-badge--raw">
+                    {{ t('message.memorySourceRaw') }}
+                  </span>
+                  <span class="conversation-composer__memory-card-title">{{ suggestion.title }}</span>
+                </div>
+                <p class="conversation-composer__memory-card-snippet">
+                  {{ suggestion.snippet || suggestion.fullContent }}
+                </p>
+              </div>
+              <div class="conversation-composer__memory-card-actions">
+                <button
+                  class="conversation-composer__memory-action conversation-composer__memory-action--ghost"
+                  type="button"
+                  @click="dismissMemorySuggestion(suggestion)"
+                >
+                  {{ t('message.memoryDismiss') }}
+                </button>
+                <button
+                  class="conversation-composer__memory-action conversation-composer__memory-action--primary"
+                  type="button"
+                  @click="insertMemoryReference(suggestion)"
+                >
+                  {{ t('message.memoryInsert') }}
+                </button>
+              </div>
+            </article>
+          </div>
+        </div>
+      </div>
+
+      <div
         class="conversation-composer__editor-shell"
         @contextmenu.prevent
       >
@@ -578,6 +797,11 @@ defineExpose({
               <span
                 v-else-if="segment.type === 'file'"
                 class="conversation-composer__file-tag"
+                :title="segment.titleContent"
+              >{{ segment.displayContent || segment.content }}</span>
+              <span
+                v-else-if="segment.type === 'memory'"
+                class="conversation-composer__memory-tag"
                 :title="segment.titleContent"
               >{{ segment.displayContent || segment.content }}</span>
               <span
@@ -606,6 +830,8 @@ defineExpose({
           class="conversation-composer__textarea"
           rows="4"
           :disabled="!sessionId"
+          @compositionstart="handleCompositionStart"
+          @compositionend="handleCompositionEnd"
           @input="handleInput"
           @keydown="handleKeyDown"
           @paste="handlePaste"
@@ -1196,6 +1422,286 @@ defineExpose({
   box-decoration-break: clone;
 }
 
+.conversation-composer__memory-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 2px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.12), rgba(16, 185, 129, 0.16));
+  color: color-mix(in srgb, var(--color-primary) 70%, var(--color-text-primary));
+  font-weight: var(--font-weight-medium);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.conversation-composer__memory-tray {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.conversation-composer__memory-tray-label,
+.conversation-composer__memory-group-title,
+.conversation-composer__memory-eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+
+.conversation-composer__memory-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.conversation-composer__memory-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 18%, var(--color-border));
+  background: color-mix(in srgb, var(--color-primary-light) 35%, white);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xs);
+  transition: transform 0.16s ease, border-color 0.16s ease, background-color 0.16s ease;
+}
+
+.conversation-composer__memory-chip:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--color-primary) 32%, var(--color-border));
+}
+
+.conversation-composer__memory-chip-type {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--color-text-secondary);
+}
+
+.conversation-composer__memory-chip-text {
+  max-width: min(30vw, 240px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-composer__memory-panel {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(10px, 1.2vw, 12px);
+  padding: clamp(10px, 1.6vw, 14px);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 16%, var(--color-border));
+  border-radius: clamp(14px, 2vw, 18px);
+  background:
+    radial-gradient(circle at top left, rgba(14, 165, 233, 0.08), transparent 36%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.98));
+  box-shadow: 0 16px 38px rgba(15, 23, 42, 0.08);
+}
+
+.conversation-composer__memory-panel-header,
+.conversation-composer__memory-card-top,
+.conversation-composer__memory-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.conversation-composer__memory-title {
+  font-size: clamp(13px, 0.82rem + 0.16vw, var(--font-size-sm));
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.conversation-composer__memory-keyboard-hint {
+  margin-top: 4px;
+  font-size: clamp(10px, 0.68rem + 0.12vw, 11px);
+  color: var(--color-text-secondary);
+}
+
+.conversation-composer__memory-loading {
+  font-size: clamp(11px, 0.72rem + 0.1vw, var(--font-size-xs));
+  color: var(--color-text-secondary);
+}
+
+.conversation-composer__memory-preview {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(6px, 1vw, 8px);
+  padding: clamp(10px, 1.4vw, 14px);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
+  border-radius: clamp(12px, 1.8vw, 16px);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 255, 255, 0.88)),
+    var(--color-surface);
+}
+
+.conversation-composer__memory-preview--library {
+  border-color: rgba(14, 165, 233, 0.22);
+}
+
+.conversation-composer__memory-preview--raw {
+  border-color: rgba(16, 185, 129, 0.22);
+}
+
+.conversation-composer__memory-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.conversation-composer__memory-preview-label {
+  font-size: clamp(10px, 0.68rem + 0.12vw, 11px);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+
+.conversation-composer__memory-preview-source {
+  font-size: clamp(10px, 0.68rem + 0.12vw, 11px);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.conversation-composer__memory-preview-name {
+  font-size: clamp(13px, 0.82rem + 0.16vw, var(--font-size-sm));
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.conversation-composer__memory-preview-content {
+  margin: 0;
+  max-height: clamp(112px, 18vh, 168px);
+  overflow: auto;
+  padding: clamp(8px, 1vw, 12px);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--color-bg-secondary) 84%, white);
+  color: var(--color-text-primary);
+  font-family: inherit;
+  font-size: clamp(12px, 0.78rem + 0.14vw, var(--font-size-sm));
+  line-height: 1.58;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.conversation-composer__memory-group {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(6px, 0.9vw, 8px);
+  min-height: 0;
+}
+
+.conversation-composer__memory-list {
+  display: grid;
+  gap: clamp(8px, 1vw, 10px);
+  max-height: clamp(140px, 26vh, 268px);
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
+}
+
+.conversation-composer__memory-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: clamp(10px, 1.3vw, 14px);
+  padding: clamp(10px, 1.4vw, 14px);
+  border-radius: clamp(12px, 1.8vw, 16px);
+  border: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.conversation-composer__memory-card--active {
+  border-color: color-mix(in srgb, var(--color-primary) 40%, var(--color-border));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-primary-light) 36%, white), rgba(255, 255, 255, 0.94));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 16%, transparent);
+}
+
+.conversation-composer__memory-card--library {
+  border-color: rgba(14, 165, 233, 0.18);
+}
+
+.conversation-composer__memory-card--raw {
+  border-color: rgba(16, 185, 129, 0.18);
+}
+
+.conversation-composer__memory-card-body {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: clamp(6px, 0.9vw, 8px);
+}
+
+.conversation-composer__memory-badge {
+  padding: 3px clamp(6px, 0.9vw, 8px);
+  border-radius: 999px;
+  background: rgba(14, 165, 233, 0.12);
+  color: #0369a1;
+  font-size: clamp(10px, 0.68rem + 0.12vw, 11px);
+  font-weight: 700;
+}
+
+.conversation-composer__memory-badge--raw {
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+}
+
+.conversation-composer__memory-card-title {
+  min-width: 0;
+  font-size: clamp(12px, 0.78rem + 0.16vw, var(--font-size-sm));
+  font-weight: 600;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-composer__memory-card-snippet {
+  margin: 0;
+  font-size: clamp(12px, 0.78rem + 0.14vw, var(--font-size-sm));
+  line-height: 1.55;
+  color: var(--color-text-secondary);
+}
+
+.conversation-composer__memory-card-actions {
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.conversation-composer__memory-action {
+  min-height: clamp(28px, 4vh, 32px);
+  padding: 0 clamp(10px, 1.1vw, 12px);
+  border-radius: 999px;
+  font-size: clamp(11px, 0.72rem + 0.1vw, var(--font-size-xs));
+  font-weight: 600;
+  transition: transform 0.16s ease, background-color 0.16s ease, border-color 0.16s ease;
+}
+
+.conversation-composer__memory-action:hover {
+  transform: translateY(-1px);
+}
+
+.conversation-composer__memory-action--ghost {
+  border: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+
+.conversation-composer__memory-action--primary {
+  border: none;
+  background: linear-gradient(135deg, #0ea5e9, #14b8a6);
+  color: white;
+}
+
 .conversation-composer__send {
   background: var(--color-primary);
   color: white;
@@ -1252,6 +1758,23 @@ defineExpose({
     min-height: 140px;
   }
 
+  .conversation-composer__memory-card {
+    flex-direction: column;
+  }
+
+  .conversation-composer__memory-card-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .conversation-composer__memory-list {
+    max-height: min(24vh, 220px);
+  }
+
+  .conversation-composer__memory-preview-content {
+    max-height: min(16vh, 140px);
+  }
+
   .conversation-composer--main .conversation-composer__render,
   .conversation-composer--main .conversation-composer__textarea {
     min-height: 140px;
@@ -1279,6 +1802,14 @@ defineExpose({
   .composer-chip--image {
     min-width: 60px;
     padding: 0 8px;
+  }
+
+  .conversation-composer__memory-chip {
+    padding: 7px 10px;
+  }
+
+  .conversation-composer__memory-chip-text {
+    max-width: min(40vw, 180px);
   }
 
   .conversation-composer--main .conversation-composer__queue-item {
@@ -1428,6 +1959,94 @@ defineExpose({
       rgba(245, 158, 11, 0.14) 100%
     );
   text-decoration-color: rgba(245, 158, 11, 0.34);
+}
+
+:global([data-theme='dark']) .conversation-composer__memory-tag,
+:global(.dark) .conversation-composer__memory-tag,
+.conversation-composer--dark .conversation-composer__memory-tag {
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.18), rgba(16, 185, 129, 0.22));
+  color: #bae6fd;
+}
+
+:global([data-theme='dark']) .conversation-composer__memory-panel,
+:global(.dark) .conversation-composer__memory-panel,
+.conversation-composer--dark .conversation-composer__memory-panel {
+  border-color: rgba(56, 189, 248, 0.18);
+  background:
+    radial-gradient(circle at top left, rgba(14, 165, 233, 0.12), transparent 36%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.94), rgba(15, 23, 42, 0.98));
+  box-shadow: 0 16px 38px rgba(2, 6, 23, 0.24);
+}
+
+:global([data-theme='dark']) .conversation-composer__memory-keyboard-hint,
+:global(.dark) .conversation-composer__memory-keyboard-hint,
+.conversation-composer--dark .conversation-composer__memory-keyboard-hint {
+  color: #94a3b8;
+}
+
+:global([data-theme='dark']) .conversation-composer__memory-card,
+:global(.dark) .conversation-composer__memory-card,
+.conversation-composer--dark .conversation-composer__memory-card {
+  background: rgba(15, 23, 42, 0.82);
+  border-color: rgba(71, 85, 105, 0.82);
+}
+
+:global([data-theme='dark']) .conversation-composer__memory-card--active,
+:global(.dark) .conversation-composer__memory-card--active,
+.conversation-composer--dark .conversation-composer__memory-card--active {
+  border-color: rgba(56, 189, 248, 0.44);
+  background:
+    linear-gradient(180deg, rgba(14, 165, 233, 0.16), rgba(15, 23, 42, 0.92));
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.16);
+}
+
+:global([data-theme='dark']) .conversation-composer__memory-chip,
+:global(.dark) .conversation-composer__memory-chip,
+.conversation-composer--dark .conversation-composer__memory-chip {
+  background: rgba(30, 41, 59, 0.94);
+  border-color: rgba(56, 189, 248, 0.18);
+  color: #e2e8f0;
+}
+
+:global([data-theme='dark']) .conversation-composer__memory-chip-type,
+:global(.dark) .conversation-composer__memory-chip-type,
+.conversation-composer--dark .conversation-composer__memory-chip-type {
+  background: rgba(51, 65, 85, 0.92);
+  color: #cbd5e1;
+}
+
+:global([data-theme='dark']) .conversation-composer__memory-preview,
+:global(.dark) .conversation-composer__memory-preview,
+.conversation-composer--dark .conversation-composer__memory-preview {
+  border-color: rgba(71, 85, 105, 0.82);
+  background:
+    linear-gradient(180deg, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.94)),
+    var(--color-surface);
+}
+
+:global([data-theme='dark']) .conversation-composer__memory-preview-label,
+:global(.dark) .conversation-composer__memory-preview-label,
+.conversation-composer--dark .conversation-composer__memory-preview-label {
+  color: #94a3b8;
+}
+
+:global([data-theme='dark']) .conversation-composer__memory-preview-source,
+:global(.dark) .conversation-composer__memory-preview-source,
+.conversation-composer--dark .conversation-composer__memory-preview-source {
+  color: #cbd5e1;
+}
+
+:global([data-theme='dark']) .conversation-composer__memory-preview-name,
+:global(.dark) .conversation-composer__memory-preview-name,
+.conversation-composer--dark .conversation-composer__memory-preview-name {
+  color: #f8fafc;
+}
+
+:global([data-theme='dark']) .conversation-composer__memory-preview-content,
+:global(.dark) .conversation-composer__memory-preview-content,
+.conversation-composer--dark .conversation-composer__memory-preview-content {
+  background: rgba(15, 23, 42, 0.9);
+  color: #e2e8f0;
 }
 
 .conversation-composer--dark.conversation-composer--main .composer-chip,
