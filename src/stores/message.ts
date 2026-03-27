@@ -392,6 +392,32 @@ export const useMessageStore = defineStore('message', () => {
     latestAssistantTraceBySession.value.delete(sessionId)
   }
 
+  /**
+   * 清理单个会话的消息缓存、分页和缓冲写入状态。
+   * 用于删除会话后同步移除前端残留数据，避免当前运行期继续引用已删除消息。
+   */
+  function clearSessionMessagesCache(sessionId: string): void {
+    const cachedSessionMessages = sessionMessages.value.get(sessionId) ?? EMPTY_MESSAGES
+    const messageIds = [...messages.value, ...cachedSessionMessages]
+      .filter(message => message.sessionId === sessionId)
+      .map(message => message.id)
+
+    for (const messageId of messageIds) {
+      const timer = pendingMessageTimers.get(messageId)
+      if (timer) {
+        clearTimeout(timer)
+        pendingMessageTimers.delete(messageId)
+      }
+
+      pendingMessageUpdates.delete(messageId)
+      inFlightMessageFlushes.delete(messageId)
+    }
+
+    updateGlobalMessagesForSession(sessionId, [])
+    clearSessionDerivedState(sessionId)
+    pagination.value.delete(sessionId)
+  }
+
   function updateGlobalMessagesForSession(sessionId: string, nextSessionMessages: Message[]): void {
     const otherSessionMessages = messages.value.filter(message => message.sessionId !== sessionId)
     messages.value = [...otherSessionMessages, ...nextSessionMessages]
@@ -761,9 +787,7 @@ export const useMessageStore = defineStore('message', () => {
 
     try {
       await invoke('clear_session_messages', { sessionId })
-      updateGlobalMessagesForSession(sessionId, [])
-      clearSessionDerivedState(sessionId)
-      pagination.value.delete(sessionId)
+      clearSessionMessagesCache(sessionId)
 
       const sessionStore = useSessionStore()
       const session = sessionStore.sessions.find(item => item.id === sessionId)
@@ -790,8 +814,7 @@ export const useMessageStore = defineStore('message', () => {
     const sessionIdSet = new Set(sessionIds)
     messages.value = messages.value.filter(message => !sessionIdSet.has(message.sessionId))
     sessionIds.forEach(sessionId => {
-      pagination.value.delete(sessionId)
-      clearSessionDerivedState(sessionId)
+      clearSessionMessagesCache(sessionId)
     })
   }
 
@@ -816,6 +839,7 @@ export const useMessageStore = defineStore('message', () => {
     flushBufferedMessageUpdate,
     deleteMessage,
     clearSessionMessages,
+    clearSessionMessagesCache,
     clearProjectMessages
   }
 })

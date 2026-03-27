@@ -6,6 +6,9 @@ import { getErrorMessage } from '@/utils/api'
 import { useSessionExecutionStore } from './sessionExecution'
 import { useWindowManagerStore } from './windowManager'
 import { useAppStateStore } from './appState'
+import { useMessageStore } from './message'
+import { useTokenStore } from './token'
+import { useAiEditTraceStore } from './aiEditTrace'
 
 export type SessionStatus = 'idle' | 'running' | 'paused' | 'error' | 'completed'
 
@@ -324,6 +327,12 @@ export const useSessionStore = defineStore('session', () => {
       // 清理该会话的执行状态
       const sessionExecutionStore = useSessionExecutionStore()
       sessionExecutionStore.clearExecutionState(id)
+
+      useMessageStore().clearSessionMessagesCache(id)
+
+      useTokenStore().clearSessionTokenCache(id)
+
+      useAiEditTraceStore().resetSession(id)
 
       // 从打开列表中移除
       const openIndex = openSessionIds.value.indexOf(id)

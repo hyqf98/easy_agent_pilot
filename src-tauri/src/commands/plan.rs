@@ -129,6 +129,18 @@ fn transform_plan(rust_plan: RustPlan) -> Plan {
     }
 }
 
+fn collect_plan_task_ids(conn: &rusqlite::Connection, plan_id: &str) -> Result<Vec<String>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id FROM tasks WHERE plan_id = ?1")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([plan_id], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
+}
+
 /// 获取指定项目的所有计划
 #[tauri::command]
 pub fn list_plans(project_id: String) -> Result<Vec<Plan>, String> {
@@ -544,10 +556,49 @@ pub fn update_plan(id: String, input: UpdatePlanInput) -> Result<Plan, String> {
 /// 删除计划
 #[tauri::command]
 pub fn delete_plan(id: String) -> Result<(), String> {
-    let conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let mut conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let task_ids = collect_plan_task_ids(&conn, &id)?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
 
-    conn.execute("DELETE FROM plans WHERE id = ?1", [&id])
+    tx.execute("DELETE FROM plan_split_logs WHERE plan_id = ?1", [&id])
         .map_err(|e| e.to_string())?;
+
+    tx.execute("DELETE FROM task_split_sessions WHERE plan_id = ?1", [&id])
+        .map_err(|e| e.to_string())?;
+
+    tx.execute("DELETE FROM task_execution_results WHERE plan_id = ?1", [&id])
+        .map_err(|e| e.to_string())?;
+
+    if !task_ids.is_empty() {
+        let placeholders = (0..task_ids.len())
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let delete_execution_logs_sql = format!(
+            "DELETE FROM task_execution_logs WHERE task_id IN ({})",
+            placeholders
+        );
+        tx.execute(
+            &delete_execution_logs_sql,
+            rusqlite::params_from_iter(task_ids.iter()),
+        )
+        .map_err(|e| e.to_string())?;
+
+        let delete_usage_logs_sql = format!(
+            "DELETE FROM agent_cli_usage_records WHERE task_id IN ({})",
+            placeholders
+        );
+        tx.execute(
+            &delete_usage_logs_sql,
+            rusqlite::params_from_iter(task_ids.iter()),
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    tx.execute("DELETE FROM plans WHERE id = ?1", [&id])
+        .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
 
     Ok(())
 }

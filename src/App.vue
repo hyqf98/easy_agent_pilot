@@ -78,9 +78,9 @@ function registerDevAppUpdateHooks() {
         switch (name) {
           case 'available':
             await appUpdateStore.__setAdapterFactoryForTesting(() => createMockUpdaterAdapter({
-              currentVersion: '1.1.1',
+              currentVersion: '1.2.0',
               availableUpdate: {
-                version: '1.1.2',
+                version: '1.2.1',
                 publishedAt: '2026-03-22T12:00:00Z',
                 notes: 'Mock release notes from Tauri MCP regression.'
               },
@@ -89,15 +89,15 @@ function registerDevAppUpdateHooks() {
             break
           case 'check-failed':
             await appUpdateStore.__setAdapterFactoryForTesting(() => createMockUpdaterAdapter({
-              currentVersion: '1.1.1',
+              currentVersion: '1.2.0',
               checkError: 'Mock check failure'
             }))
             break
           case 'install-failed':
             await appUpdateStore.__setAdapterFactoryForTesting(() => createMockUpdaterAdapter({
-              currentVersion: '1.1.1',
+              currentVersion: '1.2.0',
               availableUpdate: {
-                version: '1.1.2',
+                version: '1.2.1',
                 publishedAt: '2026-03-22T12:00:00Z',
                 notes: 'Mock release notes from Tauri MCP regression.'
               },
@@ -106,7 +106,7 @@ function registerDevAppUpdateHooks() {
             break
           case 'none':
             await appUpdateStore.__setAdapterFactoryForTesting(() => createMockUpdaterAdapter({
-              currentVersion: '1.1.1',
+              currentVersion: '1.2.0',
               availableUpdate: null
             }))
             break

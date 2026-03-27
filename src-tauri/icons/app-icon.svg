@@ -1,0 +1,73 @@
+<!--
+  Base glyph adapted from Tabler Icons `navigation-star`:
+  https://tabler.io/icons/icon/navigation-star
+  License: MIT https://github.com/tabler/tabler-icons/blob/master/LICENSE
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="160" y1="144" x2="864" y2="896" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0F172A"/>
+      <stop offset="0.52" stop-color="#1D4ED8"/>
+      <stop offset="1" stop-color="#0F766E"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(356 284) rotate(48.2) scale(478 436)">
+      <stop offset="0" stop-color="#93C5FD" stop-opacity="0.82"/>
+      <stop offset="0.52" stop-color="#60A5FA" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#60A5FA" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="core" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(512 422) rotate(90) scale(420)">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.28"/>
+      <stop offset="0.42" stop-color="#DBEAFE" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#0F172A" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ring" x1="270" y1="236" x2="748" y2="806" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E0F2FE" stop-opacity="0.58"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.12"/>
+    </linearGradient>
+    <linearGradient id="star" x1="490" y1="470" x2="702" y2="706" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FDE68A"/>
+      <stop offset="1" stop-color="#FB923C"/>
+    </linearGradient>
+    <filter id="softShadow" x="142" y="142" width="740" height="740" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="24"/>
+      <feGaussianBlur stdDeviation="28"/>
+      <feComposite in2="hardAlpha" operator="out"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.0156863 0 0 0 0 0.0901961 0 0 0 0 0.215686 0 0 0 0.34 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
+    </filter>
+  </defs>
+
+  <rect x="96" y="96" width="832" height="832" rx="224" fill="url(#bg)"/>
+  <rect x="96" y="96" width="832" height="832" rx="224" fill="url(#glow)"/>
+
+  <g filter="url(#softShadow)">
+    <circle cx="512" cy="512" r="298" fill="#0B1220" fill-opacity="0.22"/>
+    <circle cx="512" cy="512" r="286" fill="url(#core)"/>
+    <circle cx="512" cy="512" r="286" stroke="url(#ring)" stroke-width="10"/>
+    <circle cx="512" cy="512" r="232" stroke="#E2E8F0" stroke-opacity="0.14" stroke-width="2"/>
+  </g>
+
+  <circle cx="710" cy="304" r="26" fill="#F8FAFC" fill-opacity="0.18"/>
+  <circle cx="768" cy="368" r="12" fill="#38BDF8" fill-opacity="0.42"/>
+
+  <g transform="translate(512 512) scale(22.5) translate(-12 -12)">
+    <path
+      d="M15.574 10.747l-3.574 -7.747l-7.97 17.275c-.07 .2 -.017 .424 .135 .572c.15 .148 .374 .193 .57 .116l5.454 -1.85"
+      stroke="#F8FAFC"
+      stroke-opacity="0.96"
+      stroke-width="2.25"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+    <path
+      d="M17.8 20.817l-2.172 1.138a.392 .392 0 0 1 -.568 -.41l.415 -2.411l-1.757 -1.707a.389 .389 0 0 1 .217 -.665l2.428 -.352l1.086 -2.193a.392 .392 0 0 1 .702 0l1.086 2.193l2.428 .352a.39 .39 0 0 1 .217 .665l-1.757 1.707l.414 2.41a.39 .39 0 0 1 -.567 .411l-2.172 -1.138"
+      stroke="url(#star)"
+      stroke-width="2.25"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+  </g>
+</svg>

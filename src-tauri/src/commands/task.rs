@@ -1,6 +1,7 @@
 use anyhow::Result;
 use rusqlite::{types::Null, CachedStatement, Connection, Params, Row, ToSql};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 use super::support::{
     bind_value, now_rfc3339, open_db_connection, open_db_connection_with_foreign_keys,
@@ -272,6 +273,129 @@ fn map_rust_task_row(row: &Row<'_>) -> rusqlite::Result<RustTask> {
         created_at: row.get(23)?,
         updated_at: row.get(24)?,
     })
+}
+
+fn collect_task_subtree_ids(conn: &Connection, task_id: &str) -> Result<Vec<String>, String> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            WITH RECURSIVE descendants(id) AS (
+                SELECT id FROM tasks WHERE id = ?1
+                UNION ALL
+                SELECT tasks.id
+                FROM tasks
+                INNER JOIN descendants ON tasks.parent_id = descendants.id
+            )
+            SELECT id FROM descendants
+            "#,
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map([task_id], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
+}
+
+fn cleanup_deleted_task_references(
+    tx: &rusqlite::Transaction<'_>,
+    plan_id: &str,
+    deleted_task_ids: &[String],
+) -> Result<(), String> {
+    if deleted_task_ids.is_empty() {
+        return Ok(());
+    }
+
+    let deleted_task_id_set = deleted_task_ids
+        .iter()
+        .cloned()
+        .collect::<HashSet<String>>();
+    let now = now_rfc3339();
+
+    let placeholders = (0..deleted_task_ids.len())
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let delete_usage_sql = format!(
+        "DELETE FROM agent_cli_usage_records WHERE task_id IN ({})",
+        placeholders
+    );
+    tx.execute(
+        &delete_usage_sql,
+        rusqlite::params_from_iter(deleted_task_ids.iter()),
+    )
+    .map_err(|e| e.to_string())?;
+
+    let clear_current_task_sql = format!(
+        "UPDATE plans SET current_task_id = NULL, updated_at = ?1 WHERE current_task_id IN ({})",
+        placeholders
+    );
+    let mut clear_current_task_params: Vec<&dyn ToSql> = Vec::with_capacity(deleted_task_ids.len() + 1);
+    clear_current_task_params.push(&now);
+    for task_id in deleted_task_ids {
+        clear_current_task_params.push(task_id);
+    }
+    tx.execute(&clear_current_task_sql, rusqlite::params_from_iter(clear_current_task_params))
+        .map_err(|e| e.to_string())?;
+
+    let dependency_rows = {
+        let mut stmt = tx
+            .prepare(
+                r#"
+                SELECT id, dependencies
+                FROM tasks
+                WHERE plan_id = ?1
+                  AND dependencies IS NOT NULL
+                  AND dependencies != ''
+                "#,
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([plan_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?
+    };
+
+    for (task_id, dependencies_json) in dependency_rows {
+        if deleted_task_id_set.contains(&task_id) {
+            continue;
+        }
+
+        let Some(dependencies_json) = dependencies_json else {
+            continue;
+        };
+
+        let dependencies: Vec<String> = serde_json::from_str(&dependencies_json).unwrap_or_default();
+        if dependencies.is_empty() {
+            continue;
+        }
+
+        let filtered_dependencies = dependencies
+            .into_iter()
+            .filter(|dependency_id| !deleted_task_id_set.contains(dependency_id))
+            .collect::<Vec<_>>();
+
+        let filtered_dependencies_json =
+            serde_json::to_string(&filtered_dependencies).map_err(|e| e.to_string())?;
+
+        if filtered_dependencies_json == dependencies_json {
+            continue;
+        }
+
+        tx.execute(
+            "UPDATE tasks SET dependencies = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![filtered_dependencies_json, &now, &task_id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
 }
 
 fn collect_tasks<P>(conn: &Connection, sql: &str, params: P) -> Result<Vec<Task>, String>
@@ -608,10 +732,22 @@ pub fn reorder_tasks(input: ReorderTasksInput) -> Result<(), String> {
 /// 删除任务
 #[tauri::command]
 pub fn delete_task(id: String) -> Result<(), String> {
-    let conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let mut conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let deleted_task_ids = collect_task_subtree_ids(&conn, &id)?;
+    if deleted_task_ids.is_empty() {
+        return Ok(());
+    }
 
-    conn.execute("DELETE FROM tasks WHERE id = ?1", [&id])
+    let plan_id: String = conn
+        .query_row("SELECT plan_id FROM tasks WHERE id = ?1", [&id], |row| row.get(0))
         .map_err(|e| e.to_string())?;
+
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    cleanup_deleted_task_references(&tx, &plan_id, &deleted_task_ids)?;
+
+    tx.execute("DELETE FROM tasks WHERE id = ?1", [&id])
+        .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
 
     Ok(())
 }

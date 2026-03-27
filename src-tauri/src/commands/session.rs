@@ -47,6 +47,31 @@ fn generate_default_session_name() -> String {
     format!("新会话 {}", now.format("%m-%d %H:%M"))
 }
 
+fn delete_session_related_runtime_data(
+    tx: &rusqlite::Transaction<'_>,
+    session_id: &str,
+) -> Result<(), String> {
+    tx.execute(
+        "DELETE FROM window_session_locks WHERE session_id = ?1",
+        [session_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    tx.execute(
+        "UPDATE tasks SET session_id = NULL, updated_at = ?1 WHERE session_id = ?2",
+        rusqlite::params![now_rfc3339(), session_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    tx.execute(
+        "DELETE FROM agent_cli_usage_records WHERE session_id = ?1",
+        [session_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 /// 获取指定项目的所有会话
 #[tauri::command]
 pub fn list_sessions(project_id: String) -> Result<Vec<Session>, String> {
@@ -280,10 +305,14 @@ fn get_session_by_id(conn: &Connection, id: &str) -> Result<Session, String> {
 /// 删除会话
 #[tauri::command]
 pub fn delete_session(id: String) -> Result<(), String> {
-    let conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let mut conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
 
-    conn.execute("DELETE FROM sessions WHERE id = ?1", [&id])
+    delete_session_related_runtime_data(&tx, &id)?;
+
+    tx.execute("DELETE FROM sessions WHERE id = ?1", [&id])
         .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
     remove_session_uploads(&id)?;
 
     Ok(())

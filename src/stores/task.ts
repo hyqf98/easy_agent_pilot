@@ -366,8 +366,24 @@ export const useTaskStore = defineStore('task', () => {
 
     const deletedIds = collectTaskAndDescendantIds(id, previousTasks)
 
-    // 乐观更新：立即从本地移除任务及其子任务
-    tasks.value = tasks.value.filter(task => !deletedIds.has(task.id))
+    // 乐观更新：立即从本地移除任务及其子任务，并同步剔除其它任务上的已删除依赖
+    tasks.value = tasks.value
+      .filter(task => !deletedIds.has(task.id))
+      .map(task => {
+        if (!task.dependencies?.length) {
+          return task
+        }
+
+        const nextDependencies = task.dependencies.filter(dependencyId => !deletedIds.has(dependencyId))
+        if (nextDependencies.length === task.dependencies.length) {
+          return task
+        }
+
+        return {
+          ...task,
+          dependencies: nextDependencies
+        }
+      })
 
     if (currentTaskId.value && deletedIds.has(currentTaskId.value)) {
       currentTaskId.value = null
