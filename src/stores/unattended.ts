@@ -4,7 +4,14 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { unattendedService } from '@/services/unattended/UnattendedService'
 import { buildUnattendedSystemPrompt } from '@/services/unattended/promptBuilder'
 import {
+  buildUnattendedWorkspaceContext,
+  getUnattendedDeliveryCapabilities
+} from '@/services/unattended/contextBuilder'
+import {
   detectUnattendedIntent,
+  extractTaskExecutionDraft,
+  extractTaskCreateDraft,
+  extractTaskUpdateDraft,
   parseStructuredFormResponse,
   type UnattendedIntent
 } from '@/services/unattended/intentParser'
@@ -28,7 +35,7 @@ import { useSessionStore } from '@/stores/session'
 import { useMessageStore } from '@/stores/message'
 import { conversationService } from '@/services/conversation/ConversationService'
 import type { AgentConfig } from '@/stores/agent'
-import type { DynamicFormSchema, Plan } from '@/types/plan'
+import type { DynamicFormSchema, Plan, Task, TaskPriority, TaskStatus, UpdateTaskInput } from '@/types/plan'
 
 interface WeixinLoginSession {
   qrcode: string
@@ -76,8 +83,16 @@ function normalizeUnattendedAssistantReply(value: string): string {
 
 function buildProcessingNotice(intent: UnattendedIntent): string {
   switch (intent.type) {
+    case 'list_projects':
+      return '已收到，正在整理当前工作区项目列表，马上回复你。'
     case 'create_plan':
       return '已收到，正在为你创建计划并整理执行上下文，完成后马上回复你。'
+    case 'create_task':
+      return '已收到，正在为你创建任务，完成后马上回复你。'
+    case 'start_task':
+    case 'update_task':
+    case 'stop_task':
+      return '已收到，正在更新任务状态，完成后马上回复你。'
     case 'start_split':
     case 'continue_split':
     case 'form_response':
@@ -97,7 +112,7 @@ function buildProcessingNotice(intent: UnattendedIntent): string {
 }
 
 function shouldDelayProcessingNotice(intent: UnattendedIntent): boolean {
-  return !['switch_project', 'switch_agent', 'switch_model'].includes(intent.type)
+  return !['list_projects', 'switch_project', 'switch_agent', 'switch_model'].includes(intent.type)
 }
 
 function schemaToReplyTemplate(schema: DynamicFormSchema): string {
@@ -136,6 +151,47 @@ function mapStructuredValuesToSchema(
     .filter((entry): entry is readonly [string, string] => entry !== null)
 
   return Object.fromEntries(mappedEntries)
+}
+
+function normalizeTaskTitle(value?: string): string | undefined {
+  const normalized = value
+    ?.replace(/^(任务|创建任务|新建任务|新增任务)/u, '')
+    ?.replace(/[，。,；;！!].*$/u, '')
+    ?.trim()
+
+  return normalized || undefined
+}
+
+function translateTaskPriority(priority?: TaskPriority): string | null {
+  switch (priority) {
+    case 'high':
+      return '高'
+    case 'medium':
+      return '中'
+    case 'low':
+      return '低'
+    default:
+      return null
+  }
+}
+
+function translateTaskStatus(status?: TaskStatus): string | null {
+  switch (status) {
+    case 'pending':
+      return '待办'
+    case 'in_progress':
+      return '进行中'
+    case 'completed':
+      return '已完成'
+    case 'blocked':
+      return '阻塞'
+    case 'failed':
+      return '失败'
+    case 'cancelled':
+      return '已取消'
+    default:
+      return null
+  }
 }
 
 export const useUnattendedStore = defineStore('unattended', () => {
@@ -387,6 +443,9 @@ export const useUnattendedStore = defineStore('unattended', () => {
     }
     if (normalizedStatus === 'confirmed') {
       clearLoginPolling(channelId)
+      const nextLoginSessions = { ...loginSessions.value }
+      delete nextLoginSessions[channelId]
+      loginSessions.value = nextLoginSessions
       await unattendedService.startRuntime(channelId).catch(() => undefined)
       await loadAll()
       return
@@ -404,6 +463,24 @@ export const useUnattendedStore = defineStore('unattended', () => {
   }
 
   async function stopRuntime(channelId: string): Promise<void> {
+    clearLoginPolling(channelId)
+    if (loginSessions.value[channelId]) {
+      const nextLoginSessions = { ...loginSessions.value }
+      delete nextLoginSessions[channelId]
+      loginSessions.value = nextLoginSessions
+    }
+
+    accounts.value = accounts.value.map(account =>
+      account.channelId === channelId
+        ? { ...account, runtimeStatus: 'stopped', lastError: undefined }
+        : account
+    )
+    runtimeStatuses.value = runtimeStatuses.value.map(status =>
+      accountsById.value.get(status.channelAccountId)?.channelId === channelId
+        ? { ...status, runtimeStatus: 'stopped', lastError: undefined }
+        : status
+    )
+
     await unattendedService.stopRuntime(channelId)
     await loadAll()
   }
@@ -535,7 +612,32 @@ export const useUnattendedStore = defineStore('unattended', () => {
       return replyText
     }
 
+    const syncVisiblePlanTaskState = async (targetProjectId: string, targetPlanId?: string): Promise<void> => {
+      if (projectStore.currentProjectId !== targetProjectId) {
+        return
+      }
+
+      await planStore.loadPlans(targetProjectId)
+
+      if (!targetPlanId) {
+        return
+      }
+
+      const shouldRefreshTasks = planStore.currentPlanId === targetPlanId
+        || taskStore.tasks.some(task => task.planId === targetPlanId)
+
+      if (!shouldRefreshTasks) {
+        return
+      }
+
+      await taskStore.loadTasks(targetPlanId)
+    }
+
     const intent = detectUnattendedIntent(payload.text)
+
+    if (intent.type === 'list_projects') {
+      return replyWithTranscript(buildProjectSummary(channel, thread, projectStore))
+    }
 
     if (intent.type === 'switch_project') {
       const nextProject = resolveProjectFromIntent(intent, projectStore.projects)
@@ -651,7 +753,171 @@ export const useUnattendedStore = defineStore('unattended', () => {
     }
 
     if (intent.type === 'query_task_status') {
-      return replyWithTranscript(await buildTaskSummary(projectId), { projectId })
+      return replyWithTranscript(await buildTaskSummary(projectId, intent), { projectId })
+    }
+
+    if (intent.type === 'create_task') {
+      const projectPlans = planStore.plans.filter(item => item.projectId === projectId)
+      const taskDraft = extractTaskCreateDraft(payload.text)
+      const targetPlan = resolvePlanByText(taskDraft.planHint || intent.planName || intent.rawText, projectPlans)
+        || (thread.lastPlanId ? projectPlans.find(item => item.id === thread.lastPlanId) : undefined)
+        || projectPlans.find(item => item.status === 'executing' || item.executionStatus === 'running')
+        || projectPlans[0]
+
+      if (!targetPlan) {
+        return '当前项目下还没有可承载任务的计划，请先创建计划。'
+      }
+
+      const title = normalizeTaskTitle(taskDraft.title)
+      if (!title || title.length < 2) {
+        return `要创建任务的话，请至少告诉我任务标题。当前可用计划是“${targetPlan.name}”。`
+      }
+
+      const activeAgent = resolveActiveAgent(thread, channel, agentStore.agents)
+      const modelId = activeAgent
+        ? await resolveModelId(
+          agentConfigStore,
+          activeAgent,
+          thread.activeModelId || (activeAgent.id === channel.defaultAgentId ? channel.defaultModelId : undefined)
+        )
+        : undefined
+
+      const createdTask = await taskStore.createTask({
+        planId: targetPlan.id,
+        title,
+        description: payload.text,
+        priority: taskDraft.priority,
+        agentId: activeAgent?.id,
+        modelId
+      })
+
+      await unattendedService.updateThreadContext(thread.id, {
+        lastPlanId: targetPlan.id,
+        lastTaskId: createdTask.id
+      })
+      await syncVisiblePlanTaskState(projectId, targetPlan.id)
+
+      const priorityLabel = translateTaskPriority(createdTask.priority)
+      const prioritySummary = priorityLabel ? `，优先级 ${priorityLabel}` : ''
+      return replyWithTranscript(
+        `已在计划“${targetPlan.name}”下创建任务“${createdTask.title}”${prioritySummary}。`,
+        { projectId }
+      )
+    }
+
+    if (intent.type === 'start_task' || intent.type === 'update_task' || intent.type === 'stop_task') {
+      const projectPlans = planStore.plans.filter(item => item.projectId === projectId)
+      const loadedTaskGroups = await loadTasksForPlanCandidates(projectPlans, thread)
+      const updateDraft = extractTaskUpdateDraft(payload.text)
+      const executionDraft = extractTaskExecutionDraft(payload.text)
+      const targetHint = intent.type === 'start_task'
+        ? (executionDraft.targetHint || intent.taskHint || intent.rawText)
+        : (updateDraft.targetHint || intent.taskHint || intent.rawText)
+      const taskCandidate = loadedTaskGroups
+        .map(group => ({
+          plan: group.plan,
+          task: resolveTaskFromText(targetHint, group.tasks, thread)
+        }))
+        .find(group => group.task)
+
+      if (!taskCandidate?.task) {
+        return '没有匹配到对应任务，请在消息里带上任务标题。'
+      }
+
+      const targetTask = taskCandidate.task
+      const targetPlan = taskCandidate.plan
+
+      if (intent.type === 'start_task') {
+        if (targetTask.status === 'completed') {
+          return `任务“${targetTask.title}”已经完成，不需要再次启动。`
+        }
+
+        if (targetTask.status === 'cancelled') {
+          return `任务“${targetTask.title}”当前已取消，如需重新执行，请先将状态改回待办。`
+        }
+
+        await planStore.startPlanExecution(targetPlan.id)
+
+        if (taskExecutionStore.isTaskExecuting(targetTask.id)) {
+          await syncVisiblePlanTaskState(projectId, targetPlan.id)
+          await unattendedService.updateThreadContext(thread.id, {
+            lastPlanId: targetPlan.id,
+            lastTaskId: targetTask.id
+          })
+          return replyWithTranscript(
+            `任务“${targetTask.title}”已经在执行队列中，当前状态为 ${translateTaskStatus(targetTask.status) || targetTask.status}。`,
+            { projectId }
+          )
+        }
+
+        if (targetTask.status === 'in_progress') {
+          await taskExecutionStore.resumeTaskExecution(targetTask.id)
+        } else {
+          await taskExecutionStore.enqueueTask(targetPlan.id, targetTask.id)
+        }
+
+        const refreshedTask = taskStore.tasks.find(task => task.id === targetTask.id) || targetTask
+        await unattendedService.updateThreadContext(thread.id, {
+          lastPlanId: targetPlan.id,
+          lastTaskId: refreshedTask.id
+        })
+        await syncVisiblePlanTaskState(projectId, targetPlan.id)
+        return replyWithTranscript(
+          `任务“${refreshedTask.title}”已开始执行，当前状态为 ${translateTaskStatus(refreshedTask.status) || refreshedTask.status}。`,
+          { projectId }
+        )
+      }
+
+      if (intent.type === 'stop_task') {
+        const stoppedTask = await taskStore.stopTask(targetTask.id)
+        await unattendedService.updateThreadContext(thread.id, {
+          lastPlanId: targetPlan.id,
+          lastTaskId: stoppedTask.id
+        })
+        await syncVisiblePlanTaskState(projectId, targetPlan.id)
+        return replyWithTranscript(
+          `任务“${stoppedTask.title}”已停止，当前状态为 ${translateTaskStatus(stoppedTask.status) || stoppedTask.status}。`,
+          { projectId }
+        )
+      }
+
+      const updates: UpdateTaskInput = {}
+      const nextTitle = normalizeTaskTitle(updateDraft.title)
+      if (nextTitle && nextTitle !== targetTask.title) {
+        updates.title = nextTitle
+      }
+      if (updateDraft.description) {
+        updates.description = updateDraft.description
+      }
+      if (updateDraft.priority && updateDraft.priority !== targetTask.priority) {
+        updates.priority = updateDraft.priority
+      }
+      if (updateDraft.status && updateDraft.status !== targetTask.status) {
+        updates.status = updateDraft.status
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return `我已经定位到任务“${targetTask.title}”，但还缺少明确的修改内容，请补充要改的标题、状态、优先级或说明。`
+      }
+
+      const updatedTask = await taskStore.updateTask(targetTask.id, updates)
+      await unattendedService.updateThreadContext(thread.id, {
+        lastPlanId: targetPlan.id,
+        lastTaskId: updatedTask.id
+      })
+      await syncVisiblePlanTaskState(projectId, targetPlan.id)
+
+      const updatedFields = [
+        updates.title ? `标题改为“${updatedTask.title}”` : null,
+        updates.status ? `状态改为 ${translateTaskStatus(updatedTask.status) || updatedTask.status}` : null,
+        updates.priority ? `优先级改为 ${translateTaskPriority(updatedTask.priority) || updatedTask.priority}` : null,
+        updates.description ? '说明已更新' : null
+      ].filter((item): item is string => Boolean(item))
+
+      return replyWithTranscript(
+        `任务“${targetTask.title}”已更新：${updatedFields.join('，')}。`,
+        { projectId }
+      )
     }
 
     if (intent.type === 'start_plan' || intent.type === 'pause_plan' || intent.type === 'resume_plan') {
@@ -660,16 +926,15 @@ export const useUnattendedStore = defineStore('unattended', () => {
         return '没有找到对应的计划，请在对话里带上计划名称。'
       }
       await taskStore.loadTasks(plan.id)
-      planStore.setCurrentPlan(plan.id)
 
       if (intent.type === 'start_plan') {
-        await taskStore.batchStartTasks(plan.id)
-        await planStore.startPlanExecution(plan.id)
         const readyTasks = taskStore.getReadyTasks(plan.id)
+        await planStore.startPlanExecution(plan.id)
         for (const task of readyTasks) {
           await taskExecutionStore.enqueueTask(plan.id, task.id)
         }
         await unattendedService.updateThreadContext(thread.id, { lastPlanId: plan.id })
+        await syncVisiblePlanTaskState(projectId, plan.id)
         return replyWithTranscript(`计划“${plan.name}”已开始执行。当前待执行任务 ${readyTasks.length} 个。`, {
           projectId
         })
@@ -679,6 +944,7 @@ export const useUnattendedStore = defineStore('unattended', () => {
         await taskExecutionStore.pausePlanExecutionFlow(plan.id)
         await planStore.pausePlanExecution(plan.id)
         await unattendedService.updateThreadContext(thread.id, { lastPlanId: plan.id })
+        await syncVisiblePlanTaskState(projectId, plan.id)
         return replyWithTranscript(`计划“${plan.name}”已暂停。`, {
           projectId
         })
@@ -687,6 +953,7 @@ export const useUnattendedStore = defineStore('unattended', () => {
       await taskExecutionStore.resumePlanExecutionFlow(plan.id)
       await planStore.resumePlanExecution(plan.id)
       await unattendedService.updateThreadContext(thread.id, { lastPlanId: plan.id })
+      await syncVisiblePlanTaskState(projectId, plan.id)
       return replyWithTranscript(`计划“${plan.name}”已恢复执行。`, {
         projectId
       })
@@ -779,7 +1046,15 @@ export const useUnattendedStore = defineStore('unattended', () => {
     )
 
     const sessionId = await ensureThreadSession(thread, projectId, agent.id, agent.type)
-    const systemPrompt = buildUnattendedSystemPrompt(channel, thread, agent)
+    const capabilities = getUnattendedDeliveryCapabilities()
+    const systemPrompt = buildUnattendedSystemPrompt(channel, thread, agent, capabilities)
+    const contextSnapshot = await buildUnattendedContextSnapshot(
+      channel,
+      thread,
+      agent,
+      project,
+      projectId
+    )
 
     await conversationService.sendMessage(
       sessionId,
@@ -789,7 +1064,7 @@ export const useUnattendedStore = defineStore('unattended', () => {
       [],
       {
         modelId,
-        injectedSystemMessages: [systemPrompt],
+        injectedSystemMessages: [systemPrompt, contextSnapshot],
         dedupeInjectedSystemMessagesBySession: true
       }
     )
@@ -928,6 +1203,67 @@ export const useUnattendedStore = defineStore('unattended', () => {
       || plans[0]
   }
 
+  function sortPlansForThread(thread: UnattendedThread, plans: Plan[]): Plan[] {
+    return [...plans].sort((left, right) => {
+      const leftScore = (
+        (left.id === thread.lastPlanId ? 100 : 0)
+        + ((left.status === 'executing' || left.executionStatus === 'running') ? 50 : 0)
+      )
+      const rightScore = (
+        (right.id === thread.lastPlanId ? 100 : 0)
+        + ((right.status === 'executing' || right.executionStatus === 'running') ? 50 : 0)
+      )
+
+      if (leftScore !== rightScore) {
+        return rightScore - leftScore
+      }
+
+      return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+    })
+  }
+
+  function resolvePlanByText(hint: string | undefined, plans: Plan[]): Plan | undefined {
+    const normalizedHint = hint?.trim().toLowerCase()
+    if (!normalizedHint) {
+      return undefined
+    }
+
+    return plans.find(plan => normalizedHint.includes(plan.name.toLowerCase()))
+      || plans.find(plan => normalizedHint.includes(plan.id.toLowerCase()))
+  }
+
+  function resolveTaskFromText(hint: string | undefined, tasks: Task[], thread: UnattendedThread): Task | undefined {
+    const normalizedHint = hint?.trim().toLowerCase()
+    if (!normalizedHint) {
+      return tasks.find(task => task.id === thread.lastTaskId)
+        || tasks.find(task => task.status === 'in_progress')
+    }
+
+    return tasks.find(task => normalizedHint.includes(task.title.toLowerCase()))
+      || tasks.find(task => normalizedHint.includes(task.id.toLowerCase()))
+      || tasks.find(task => task.id === thread.lastTaskId)
+      || tasks.find(task => task.status === 'in_progress')
+  }
+
+  async function loadTasksForPlanCandidates(
+    planCandidates: Plan[],
+    thread: UnattendedThread
+  ): Promise<{ plan: Plan, tasks: Task[] }[]> {
+    const taskStore = useTaskStore()
+    const orderedPlans = sortPlansForThread(thread, planCandidates)
+    const loaded: { plan: Plan, tasks: Task[] }[] = []
+
+    for (const plan of orderedPlans.slice(0, 6)) {
+      await taskStore.loadTasks(plan.id)
+      loaded.push({
+        plan,
+        tasks: taskStore.tasks.filter(task => task.planId === plan.id)
+      })
+    }
+
+    return loaded
+  }
+
   async function resolveModelId(
     agentConfigStore: ReturnType<typeof useAgentConfigStore>,
     agent: AgentConfig,
@@ -1013,6 +1349,24 @@ export const useUnattendedStore = defineStore('unattended', () => {
     ].join('\n')
   }
 
+  function buildProjectSummary(
+    channel: UnattendedChannel,
+    thread: UnattendedThread,
+    projectStore: ReturnType<typeof useProjectStore>
+  ): string {
+    if (projectStore.projects.length === 0) {
+      return '当前工作区还没有导入项目。'
+    }
+
+    const activeProjectId = thread.activeProjectId || channel.defaultProjectId
+    return [
+      `当前工作区共导入 ${projectStore.projects.length} 个项目：`,
+      ...projectStore.projects.slice(0, 8).map(project =>
+        `- ${project.name}${project.id === activeProjectId ? '（当前线程项目）' : ''}：${project.path}`
+      )
+    ].join('\n')
+  }
+
   async function buildExecutionSummary(projectId: string): Promise<string> {
     const planStore = usePlanStore()
     const taskExecutionStore = useTaskExecutionStore()
@@ -1027,16 +1381,26 @@ export const useUnattendedStore = defineStore('unattended', () => {
       if (!progress) {
         return `- ${plan.name}：执行中，暂时还没有进度快照`
       }
+      const activeTasks = progress.tasks
+        .filter(task => task.status === 'in_progress' || task.status === 'blocked' || task.status === 'failed')
+        .slice(0, 3)
+        .map(task => `${task.title}(${task.status})`)
+      const activeTaskSummary = activeTasks.length > 0
+        ? `；重点任务：${activeTasks.join('、')}`
+        : ''
       return `- ${plan.name}：总任务 ${progress.total_tasks}，待办 ${progress.pending_count}，进行中 ${progress.in_progress_count}，完成 ${progress.completed_count}，失败 ${progress.failed_count}`
+        + activeTaskSummary
     }))
     return ['当前执行进度：', ...summaries].join('\n')
   }
 
-  async function buildTaskSummary(projectId: string): Promise<string> {
+  async function buildTaskSummary(projectId: string, intent?: UnattendedIntent): Promise<string> {
     const planStore = usePlanStore()
     const taskStore = useTaskStore()
-    const targetPlan = planStore.plans.find(plan => plan.projectId === projectId && (plan.status === 'executing' || plan.executionStatus === 'running'))
-      || planStore.plans.find(plan => plan.projectId === projectId)
+    const projectPlans = planStore.plans.filter(plan => plan.projectId === projectId)
+    const targetPlan = (intent ? resolvePlanFromIntent(intent, projectPlans) : undefined)
+      || projectPlans.find(plan => plan.status === 'executing' || plan.executionStatus === 'running')
+      || projectPlans[0]
 
     if (!targetPlan) {
       return '当前项目下还没有计划任务。'
@@ -1052,6 +1416,43 @@ export const useUnattendedStore = defineStore('unattended', () => {
       `计划“${targetPlan.name}”任务概览：`,
       ...tasks.slice(0, 8).map(task => `- ${task.title}：${task.status}${task.errorMessage ? ` / ${compactText(task.errorMessage, '')}` : ''}`)
     ].join('\n')
+  }
+
+  async function buildUnattendedContextSnapshot(
+    channel: UnattendedChannel,
+    thread: UnattendedThread,
+    agent: AgentConfig | undefined,
+    project: Project,
+    projectId: string
+  ): Promise<string> {
+    const planStore = usePlanStore()
+    const taskStore = useTaskStore()
+    const projectPlans = sortPlansForThread(
+      thread,
+      planStore.plans.filter(item => item.projectId === projectId)
+    )
+    const highlightedTasks: Task[] = []
+
+    for (const plan of projectPlans.slice(0, 3)) {
+      await taskStore.loadTasks(plan.id)
+      highlightedTasks.push(
+        ...taskStore.tasks
+          .filter(task => task.planId === plan.id)
+          .filter(task => task.status === 'in_progress' || task.status === 'blocked' || task.status === 'failed')
+          .slice(0, 3)
+      )
+    }
+
+    return buildUnattendedWorkspaceContext({
+      channel,
+      thread,
+      agent,
+      project,
+      projects: useProjectStore().projects,
+      plans: projectPlans,
+      activeTasks: highlightedTasks,
+      capabilities: getUnattendedDeliveryCapabilities()
+    })
   }
 
   return {

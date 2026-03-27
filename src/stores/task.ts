@@ -205,6 +205,33 @@ export const useTaskStore = defineStore('task', () => {
     }
   })
 
+  function upsertTask(task: Task): void {
+    const index = tasks.value.findIndex(item => item.id === task.id)
+    if (index === -1) {
+      tasks.value.push(task)
+      sortTasks()
+      return
+    }
+
+    tasks.value[index] = task
+  }
+
+  function replacePlanTasks(planId: string, nextTasks: Task[]): void {
+    tasks.value = [
+      ...tasks.value.filter(task => task.planId !== planId),
+      ...nextTasks
+    ]
+    sortTasks()
+
+    if (currentTaskId.value && !tasks.value.some(task => task.id === currentTaskId.value)) {
+      currentTaskId.value = null
+    }
+
+    if (editingTask.value && !tasks.value.some(task => task.id === editingTask.value?.id)) {
+      closeEditDialog()
+    }
+  }
+
   // Actions
   async function loadTasks(planId: string) {
     isLoading.value = true
@@ -212,10 +239,9 @@ export const useTaskStore = defineStore('task', () => {
     const notificationStore = useNotificationStore()
     try {
       const rustTasks = await invoke<RustTask[]>('list_tasks', { planId })
-      tasks.value = rustTasks.map(transformTask)
+      replacePlanTasks(planId, rustTasks.map(transformTask))
     } catch (error) {
       console.error('Failed to load tasks:', error)
-      tasks.value = []
       loadError.value = getErrorMessage(error)
       notificationStore.networkError(
         '加载任务列表',
@@ -244,12 +270,7 @@ export const useTaskStore = defineStore('task', () => {
       if (rustTask) {
         const task = transformTask(rustTask)
         // 合并到本地状态
-        const existingIndex = tasks.value.findIndex(t => t.id === task.id)
-        if (existingIndex === -1) {
-          tasks.value.push(task)
-        } else {
-          tasks.value[existingIndex] = task
-        }
+        upsertTask(task)
         return task
       }
       return null
@@ -281,9 +302,7 @@ export const useTaskStore = defineStore('task', () => {
     try {
       const rustTask = await invoke<RustTask>('create_task', { input: rustInput })
       const newTask = transformTask(rustTask)
-      tasks.value.push(newTask)
-      // 重新排序
-      sortTasks()
+      upsertTask(newTask)
       return newTask
     } catch (error) {
       console.error('Failed to create task:', error)
@@ -324,12 +343,7 @@ export const useTaskStore = defineStore('task', () => {
     try {
       const rustTask = await invoke<RustTask>('update_task', { id, input })
       const updatedTask = transformTask(rustTask)
-
-      const index = tasks.value.findIndex(t => t.id === id)
-      if (index !== -1) {
-        tasks.value[index] = updatedTask
-      }
-
+      upsertTask(updatedTask)
       return updatedTask
     } catch (error) {
       console.error('Failed to update task:', error)
@@ -420,12 +434,7 @@ export const useTaskStore = defineStore('task', () => {
 
       // 合并到本地状态
       subtasks.forEach(st => {
-        const index = tasks.value.findIndex(t => t.id === st.id)
-        if (index !== -1) {
-          tasks.value[index] = st
-        } else {
-          tasks.value.push(st)
-        }
+        upsertTask(st)
       })
 
       return subtasks
@@ -523,10 +532,7 @@ export const useTaskStore = defineStore('task', () => {
 
       // 更新本地状态
       updatedTasks.forEach(updatedTask => {
-        const index = tasks.value.findIndex(t => t.id === updatedTask.id)
-        if (index !== -1) {
-          tasks.value[index] = updatedTask
-        }
+        upsertTask(updatedTask)
       })
 
       return updatedTasks
@@ -548,12 +554,7 @@ export const useTaskStore = defineStore('task', () => {
     try {
       const rustTask = await invoke<RustTask>('retry_task', { id: taskId })
       const updatedTask = transformTask(rustTask)
-
-      const index = tasks.value.findIndex(t => t.id === taskId)
-      if (index !== -1) {
-        tasks.value[index] = updatedTask
-      }
-
+      upsertTask(updatedTask)
       return updatedTask
     } catch (error) {
       console.error('Failed to retry task:', error)
@@ -573,12 +574,7 @@ export const useTaskStore = defineStore('task', () => {
     try {
       const rustTask = await invoke<RustTask>('stop_task', { id: taskId })
       const updatedTask = transformTask(rustTask)
-
-      const index = tasks.value.findIndex(t => t.id === taskId)
-      if (index !== -1) {
-        tasks.value[index] = updatedTask
-      }
-
+      upsertTask(updatedTask)
       return updatedTask
     } catch (error) {
       console.error('Failed to stop task:', error)
@@ -655,14 +651,8 @@ export const useTaskStore = defineStore('task', () => {
 
       // 添加到本地状态
       newTasks.forEach(task => {
-        const existingIndex = tasks.value.findIndex(t => t.id === task.id)
-        if (existingIndex === -1) {
-          tasks.value.push(task)
-        }
+        upsertTask(task)
       })
-
-      // 重新排序
-      sortTasks()
 
       return newTasks
     } catch (error) {

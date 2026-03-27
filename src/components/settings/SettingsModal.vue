@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { watch, onMounted, onUnmounted } from 'vue'
+import { nextTick, watch, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useUIStore } from '@/stores/ui'
 import SettingsNav from './SettingsNav.vue'
 import SettingsContent from './SettingsContent.vue'
 
 const uiStore = useUIStore()
+const router = useRouter()
 
 // ESC 关闭
 const handleKeydown = (e: KeyboardEvent) => {
@@ -51,6 +53,14 @@ const handleOverlayClick = (e: MouseEvent) => {
     uiStore.closeSettings()
   }
 }
+
+const openFullscreenSettings = async () => {
+  uiStore.closeSettings()
+  await nextTick()
+  if (router.currentRoute.value.path !== '/settings') {
+    await router.push('/settings')
+  }
+}
 </script>
 
 <template>
@@ -68,21 +78,45 @@ const handleOverlayClick = (e: MouseEvent) => {
             <h2 class="settings-modal__title">
               设置
             </h2>
-            <button
-              class="settings-modal__close"
-              @click="uiStore.closeSettings"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                width="20"
-                height="20"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
+            <div class="settings-modal__actions">
+              <button
+                class="settings-modal__action-btn"
+                title="全屏打开设置"
+                @click="openFullscreenSettings"
               >
-                <path d="M18 6L6 18M6 6l12 12" />
-              </svg>
-            </button>
+                <svg
+                  viewBox="0 0 24 24"
+                  width="18"
+                  height="18"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M9 3H5a2 2 0 0 0-2 2v4" />
+                  <path d="M15 3h4a2 2 0 0 1 2 2v4" />
+                  <path d="M21 15v4a2 2 0 0 1-2 2h-4" />
+                  <path d="M3 15v4a2 2 0 0 0 2 2h4" />
+                </svg>
+              </button>
+              <button
+                class="settings-modal__action-btn"
+                title="关闭设置"
+                @click="uiStore.closeSettings"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  width="20"
+                  height="20"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <path d="M18 6L6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
           </div>
           <div class="settings-modal__body">
             <SettingsNav />
@@ -138,7 +172,13 @@ const handleOverlayClick = (e: MouseEvent) => {
   color: var(--color-text-primary);
 }
 
-.settings-modal__close {
+.settings-modal__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.settings-modal__action-btn {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -149,7 +189,7 @@ const handleOverlayClick = (e: MouseEvent) => {
   transition: all var(--transition-fast) var(--easing-default);
 }
 
-.settings-modal__close:hover {
+.settings-modal__action-btn:hover {
   background-color: var(--color-surface-hover);
   color: var(--color-text-primary);
 }

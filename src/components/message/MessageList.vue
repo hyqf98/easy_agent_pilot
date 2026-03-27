@@ -481,11 +481,14 @@ const handleOpenEditTrace = (messageId: string, traceId: string) => {
 
 <style scoped>
 .message-list {
+  --message-list-bottom-safe-space: clamp(72px, 9vh, 112px);
+  --message-list-scroll-btn-gap: clamp(10px, 1.8vh, 18px);
+  --message-list-scroll-btn-size: clamp(28px, 2.8vw, 34px);
   flex: 1;
   overflow-y: auto;
   padding: var(--spacing-3);
-  padding-bottom: calc(112px + env(safe-area-inset-bottom, 0px));
-  scroll-padding-bottom: 112px;
+  padding-bottom: calc(var(--message-list-bottom-safe-space) + env(safe-area-inset-bottom, 0px));
+  scroll-padding-bottom: var(--message-list-bottom-safe-space);
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
@@ -558,16 +561,16 @@ const handleOpenEditTrace = (messageId: string, traceId: string) => {
 /* 回到底部按钮 */
 .scroll-to-bottom-btn {
   position: sticky;
-  bottom: 8px;
+  bottom: calc(var(--message-list-scroll-btn-gap) - var(--message-list-bottom-safe-space));
   left: 50%;
   transform: translateX(-50%);
   z-index: 10;
   align-self: center;
   margin-top: auto;
-  width: 28px;
-  height: 28px;
-  min-width: 28px;
-  min-height: 28px;
+  width: var(--message-list-scroll-btn-size);
+  height: var(--message-list-scroll-btn-size);
+  min-width: var(--message-list-scroll-btn-size);
+  min-height: var(--message-list-scroll-btn-size);
   padding: 0;
   border: none;
   border-radius: 50%;
@@ -600,7 +603,7 @@ const handleOpenEditTrace = (messageId: string, traceId: string) => {
 /* 按钮光环动画 */
 .scroll-to-bottom-btn__ring {
   position: absolute;
-  inset: -3px;
+  inset: clamp(-4px, -0.24vw, -3px);
   border-radius: 50%;
   border: 1.5px solid var(--color-border-strong);
   opacity: 0;
@@ -697,5 +700,12 @@ const handleOpenEditTrace = (messageId: string, traceId: string) => {
 .message-enter-from {
   opacity: 0;
   transform: translateY(10px);
+}
+
+@media (max-width: 900px) {
+  .message-list {
+    --message-list-bottom-safe-space: clamp(64px, 8vh, 92px);
+    --message-list-scroll-btn-gap: clamp(8px, 1.4vh, 14px);
+  }
 }
 </style>

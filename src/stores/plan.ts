@@ -95,6 +95,20 @@ export const usePlanStore = defineStore('plan', () => {
     }
   })
 
+  function replaceProjectPlans(projectId: string, nextPlans: Plan[]): void {
+    plans.value = [
+      ...plans.value.filter(plan => plan.projectId !== projectId),
+      ...nextPlans
+    ]
+
+    if (currentPlanId.value) {
+      const currentPlan = plans.value.find(plan => plan.id === currentPlanId.value)
+      if (!currentPlan) {
+        currentPlanId.value = null
+      }
+    }
+  }
+
   // Actions
   async function loadPlans(projectId: string) {
     isLoading.value = true
@@ -102,16 +116,9 @@ export const usePlanStore = defineStore('plan', () => {
     const notificationStore = useNotificationStore()
     try {
       const rustPlans = await invoke<RustPlan[]>('list_plans', { projectId })
-      plans.value = rustPlans.map(transformPlan)
-
-      // 项目切换后，如果当前计划不在新列表中，清空选中计划
-      if (currentPlanId.value && !plans.value.some(plan => plan.id === currentPlanId.value)) {
-        currentPlanId.value = null
-      }
+      replaceProjectPlans(projectId, rustPlans.map(transformPlan))
     } catch (error) {
       console.error('Failed to load plans:', error)
-      plans.value = []
-      currentPlanId.value = null
       loadError.value = getErrorMessage(error)
       notificationStore.networkError(
         '加载计划列表',

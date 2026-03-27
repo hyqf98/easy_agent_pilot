@@ -299,8 +299,37 @@ function resolveRuntimeLabel(channelId: string): string {
   return t('settings.unattended.runtimeIdle')
 }
 
+function hasActiveLoginSession(channelId: string): boolean {
+  return Boolean(unattendedStore.loginSessions[channelId]?.qrcode)
+}
+
+function hasConnectedAccount(channelId: string): boolean {
+  return getChannelAccounts(channelId).length > 0
+}
+
+function canStartRuntime(channelId: string): boolean {
+  return hasConnectedAccount(channelId) && resolveRuntimeTone(channelId) !== 'listening'
+}
+
+function canStopRuntime(channelId: string): boolean {
+  return hasActiveLoginSession(channelId) || resolveRuntimeTone(channelId) === 'listening'
+}
+
+function shouldShowQrCode(channelId: string): boolean {
+  const loginSession = unattendedStore.loginSessions[channelId]
+  if (!loginSession?.qrcodeImg) {
+    return false
+  }
+
+  return loginSession.status === 'waiting' || loginSession.status === 'scanned'
+}
+
 function resolveChannelStatusTone(channelId: string): 'listening' | 'warning' | 'idle' | 'error' {
   const loginState = resolveLoginState(channelId)
+  if (hasConnectedAccount(channelId) && !hasActiveLoginSession(channelId)) {
+    return resolveRuntimeTone(channelId)
+  }
+
   if (['expired', 'cancelled', 'error'].includes(loginState)) {
     return 'error'
   }
@@ -321,12 +350,12 @@ function resolveChannelStatusTone(channelId: string): 'listening' | 'warning' | 
 
 function resolveChannelStatusLabel(channelId: string): string {
   const loginState = resolveLoginState(channelId)
-  if (['waiting', 'scanned', 'expired', 'cancelled', 'error'].includes(loginState)) {
-    return resolveLoginStateLabel(channelId)
+  if (hasConnectedAccount(channelId) && !hasActiveLoginSession(channelId)) {
+    return resolveRuntimeLabel(channelId)
   }
 
-  if (resolveRuntimeTone(channelId) === 'listening' || loginState === 'confirmed') {
-    return t('settings.unattended.loginConfirmed')
+  if (['waiting', 'scanned', 'expired', 'cancelled', 'error'].includes(loginState)) {
+    return resolveLoginStateLabel(channelId)
   }
 
   if (resolveRuntimeTone(channelId) === 'error') {
@@ -634,12 +663,14 @@ watch(
               </button>
               <button
                 class="action-btn action-btn--soft"
+                :disabled="!canStartRuntime(channel.id)"
                 @click="unattendedStore.startRuntime(channel.id)"
               >
                 {{ t('settings.unattended.actionStart') }}
               </button>
               <button
                 class="action-btn action-btn--warning"
+                :disabled="!canStopRuntime(channel.id)"
                 @click="unattendedStore.stopRuntime(channel.id)"
               >
                 {{ t('settings.unattended.actionStop') }}
@@ -696,7 +727,7 @@ watch(
           </div>
 
           <div
-            v-if="unattendedStore.loginSessions[channel.id]?.qrcodeImg"
+            v-if="shouldShowQrCode(channel.id)"
             class="channel-card__qr"
           >
             <img
@@ -1067,6 +1098,13 @@ watch(
   padding: 8px 10px;
   font-size: 10.5px;
   font-weight: 700;
+}
+
+.action-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+  transform: none;
+  box-shadow: none;
 }
 
 .action-btn--primary {

@@ -296,8 +296,6 @@ async function handleExecuteAll() {
   if (pendingTasks.length === 0) return
 
   try {
-    await taskStore.batchStartTasks(currentPlanId.value)
-
     await planStore.startPlanExecution(currentPlanId.value)
 
     for (const task of pendingTasks) {
