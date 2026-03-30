@@ -143,7 +143,7 @@ const {
 })
 
 const shouldUseRichTextOverlay = computed(() => (
-  !inputText.value || parsedInputText.value.some(segment => segment.type !== 'text')
+  parsedInputText.value.some(segment => segment.type !== 'text')
 ))
 
 const composerSendShortcutHint = computed(() => (
@@ -957,38 +957,33 @@ defineExpose({
               >{{ segment.content }}</span>
             </template>
           </template>
-          <span
-            v-else
-            class="conversation-composer__placeholder"
-          >
-            {{ inputPlaceholder || t('message.inputPlaceholder', { shortcut: t('message.shortcutEnter') }) }}
+        </div>
+
+        <div
+          v-if="isMainPanel && !inputText"
+          class="conversation-composer__ghost-hints"
+        >
+          <span class="conversation-composer__ghost-hint-pill">
+            <EaIcon
+              name="image-up"
+              :size="11"
+            />
+            <span>{{ t('message.ghostHintImages') }}</span>
           </span>
-          <div
-            v-if="isMainPanel && !inputText"
-            class="conversation-composer__ghost-hints"
-          >
-            <span class="conversation-composer__ghost-hint-pill">
-              <EaIcon
-                name="image-up"
-                :size="11"
-              />
-              <span>{{ t('message.ghostHintImages') }}</span>
-            </span>
-            <span class="conversation-composer__ghost-hint-pill">
-              <EaIcon
-                name="at-sign"
-                :size="11"
-              />
-              <span>{{ t('message.ghostHintFiles') }}</span>
-            </span>
-            <span class="conversation-composer__ghost-hint-pill">
-              <EaIcon
-                name="corner-down-left"
-                :size="11"
-              />
-              <span>{{ t('message.ghostHintSend', { shortcut: composerSendShortcutHint }) }}</span>
-            </span>
-          </div>
+          <span class="conversation-composer__ghost-hint-pill">
+            <EaIcon
+              name="at-sign"
+              :size="11"
+            />
+            <span>{{ t('message.ghostHintFiles') }}</span>
+          </span>
+          <span class="conversation-composer__ghost-hint-pill">
+            <EaIcon
+              name="corner-down-left"
+              :size="11"
+            />
+            <span>{{ t('message.ghostHintSend', { shortcut: composerSendShortcutHint }) }}</span>
+          </span>
         </div>
 
         <textarea
@@ -996,10 +991,11 @@ defineExpose({
           v-model="inputText"
           class="conversation-composer__textarea"
           :class="{
-            'conversation-composer__textarea--plain': !shouldUseRichTextOverlay
+            'conversation-composer__textarea--overlay': shouldUseRichTextOverlay
           }"
           rows="4"
           :disabled="!sessionId"
+          :placeholder="shouldUseRichTextOverlay ? '' : (inputPlaceholder || t('message.inputPlaceholder', { shortcut: t('message.shortcutEnter') }))"
           @compositionstart="handleCompositionStart"
           @compositionend="handleCompositionEnd"
           @input="handleInput"
@@ -1064,6 +1060,7 @@ defineExpose({
   --composer-menu-tag-text: var(--color-text-tertiary);
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
   gap: 10px;
   padding: 14px;
   border-top: none;
@@ -1556,6 +1553,8 @@ defineExpose({
 }
 
 .conversation-composer__render {
+  position: relative;
+  z-index: 0;
   pointer-events: none;
   color: var(--color-text-primary);
   text-align: start;
@@ -1569,24 +1568,31 @@ defineExpose({
 .conversation-composer__textarea {
   position: absolute;
   inset: 0;
+  z-index: 1;
   resize: none;
   background: transparent;
-  color: transparent;
+  color: var(--color-text-primary);
+  -webkit-text-fill-color: currentColor;
   caret-color: var(--color-text-primary);
-  -webkit-text-fill-color: transparent;
   text-align: start;
   text-indent: 0;
 }
 
-.conversation-composer__textarea--plain {
-  color: var(--color-text-primary);
+.conversation-composer__textarea--overlay {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+.conversation-composer__textarea::placeholder {
+  color: var(--color-text-tertiary);
   -webkit-text-fill-color: currentColor;
+  opacity: 1;
 }
 
 .conversation-composer__textarea::selection {
   background: color-mix(in srgb, var(--color-primary) 22%, transparent);
-  color: transparent;
-  -webkit-text-fill-color: transparent;
+  color: inherit;
+  -webkit-text-fill-color: currentColor;
 }
 
 .conversation-composer__textarea::-moz-selection {
@@ -1594,13 +1600,13 @@ defineExpose({
   color: transparent;
 }
 
-.conversation-composer__textarea--plain::selection {
-  color: inherit;
-  -webkit-text-fill-color: currentColor;
+.conversation-composer__textarea--overlay::selection {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
 }
 
-.conversation-composer__textarea--plain::-moz-selection {
-  color: inherit;
+.conversation-composer__textarea--overlay::-moz-selection {
+  color: transparent;
 }
 
 .conversation-composer__placeholder {

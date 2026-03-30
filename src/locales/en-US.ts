@@ -348,7 +348,7 @@ export default {
     memorySourceLibrary: 'Library',
     memorySourceRaw: 'Raw',
     ghostHintImages: 'Images',
-    ghostHintFiles: '@ files',
+    ghostHintFiles: "{'@'} files",
     ghostHintSend: '{shortcut} to send',
     queueImages: '{count} images',
     slash: {
@@ -1534,6 +1534,8 @@ export default {
       currentConfig: 'Active Configuration',
       noActiveConfig: 'No active configuration',
       currentFileConfig: 'Current CLI Connection Info',
+      defaultConfigName: 'Default Configuration',
+      defaultConfigTag: 'Default',
       // Connection Info
       configFile: 'Config File',
       settingsFile: 'Settings File',
@@ -1555,6 +1557,7 @@ export default {
       form: {
         addTitle: 'Add Configuration',
         editTitle: 'Edit Configuration',
+        editCurrentTitle: 'Edit Default Configuration',
         name: 'Configuration Name',
         namePlaceholder: 'e.g., Production',
         nameRequired: 'Please enter configuration name',

@@ -26,6 +26,7 @@ const showDeleteConfirm = ref(false)
 const deletingProfile = ref<ProviderProfile | null>(null)
 const switchingId = ref<string | null>(null)
 const showApiKey = ref(false)
+const isEditingCurrentConfig = ref(false)
 
 const currentProfiles = computed(() =>
   currentCliType.value === 'claude' ? store.claudeProfiles : store.codexProfiles
@@ -39,6 +40,17 @@ const currentConnection = computed(() =>
   currentCliType.value === 'claude' ? store.claudeConnection : store.codexConnection
 )
 
+const currentDefaultProfile = computed<ProviderProfile | null>(() => {
+  if (!store.currentConfig || store.currentConfig.cliType !== currentCliType.value) {
+    return null
+  }
+
+  return {
+    ...store.currentConfig,
+    name: t('settings.providerSwitch.defaultConfigName')
+  }
+})
+
 function handleCliTypeChange(type: CliType) {
   currentCliType.value = type
   store.currentCliType = type
@@ -47,11 +59,13 @@ function handleCliTypeChange(type: CliType) {
 
 function handleAdd() {
   editingProfile.value = null
+  isEditingCurrentConfig.value = false
   showFormModal.value = true
 }
 
 function handleEdit(profile: ProviderProfile) {
   editingProfile.value = { ...profile }
+  isEditingCurrentConfig.value = !profile.id
   showFormModal.value = true
 }
 
@@ -91,7 +105,9 @@ async function handleDelete() {
 
 async function handleSave(input: CreateProviderProfileInput | UpdateProviderProfileInput) {
   try {
-    if (editingProfile.value) {
+    if (isEditingCurrentConfig.value) {
+      await store.updateCurrentConfig(currentCliType.value, input as UpdateProviderProfileInput)
+    } else if (editingProfile.value) {
       await store.updateProfile(editingProfile.value.id, input as UpdateProviderProfileInput)
     } else {
       await store.createProfile(input as CreateProviderProfileInput)
@@ -99,14 +115,15 @@ async function handleSave(input: CreateProviderProfileInput | UpdateProviderProf
 
     await store.refreshCliTypeState(currentCliType.value, { reloadProfiles: true })
 
-    showSuccess(editingProfile.value
+    showSuccess((editingProfile.value || isEditingCurrentConfig.value)
       ? t('settings.providerSwitch.messages.updateSuccess')
       : t('settings.providerSwitch.messages.createSuccess'))
     showFormModal.value = false
     editingProfile.value = null
+    isEditingCurrentConfig.value = false
   } catch (error) {
     console.error('Save failed:', error)
-    showError(editingProfile.value
+    showError((editingProfile.value || isEditingCurrentConfig.value)
       ? t('settings.providerSwitch.messages.updateFailed')
       : t('settings.providerSwitch.messages.createFailed'))
     throw error
@@ -135,6 +152,13 @@ onMounted(async () => {
 
 watch(currentCliType, async (type) => {
   await store.refreshCliTypeState(type)
+})
+
+watch(showFormModal, (visible) => {
+  if (!visible) {
+    editingProfile.value = null
+    isEditingCurrentConfig.value = false
+  }
 })
 </script>
 
@@ -165,6 +189,7 @@ watch(currentCliType, async (type) => {
       :loading="store.isLoading"
       :profiles="currentProfiles"
       :active-profile="currentActiveProfile"
+      :default-profile="currentActiveProfile ? null : currentDefaultProfile"
       :switching-id="switchingId"
       @add="handleAdd"
       @edit="handleEdit"

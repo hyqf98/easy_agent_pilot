@@ -262,6 +262,49 @@ pub fn update_provider_profile(
     Ok(updated_profile)
 }
 
+/// 直接更新当前 CLI 配置文件中的默认配置。
+///
+/// 该命令不依赖数据库中的 provider_profiles 记录，而是读取当前 CLI 配置文件，
+/// 按输入字段覆写后立即写回文件，并返回最新的文件配置快照。
+#[tauri::command]
+pub fn update_current_cli_config(
+    cli_type: String,
+    input: UpdateProviderProfileInput,
+) -> Result<ProviderProfile, String> {
+    let mut profile = read_current_cli_config(cli_type.clone())?;
+
+    if let Some(api_key) = input.api_key {
+        profile.api_key = Some(api_key);
+    }
+    if let Some(base_url) = input.base_url {
+        profile.base_url = Some(base_url);
+    }
+    if let Some(provider_name) = input.provider_name {
+        profile.provider_name = Some(provider_name);
+    }
+    if let Some(main_model) = input.main_model {
+        profile.main_model = Some(main_model);
+    }
+    if let Some(reasoning_model) = input.reasoning_model {
+        profile.reasoning_model = Some(reasoning_model);
+    }
+    if let Some(haiku_model) = input.haiku_model {
+        profile.haiku_model = Some(haiku_model);
+    }
+    if let Some(sonnet_default) = input.sonnet_default {
+        profile.sonnet_default = Some(sonnet_default);
+    }
+    if let Some(opus_default) = input.opus_default {
+        profile.opus_default = Some(opus_default);
+    }
+    if let Some(codex_model) = input.codex_model {
+        profile.codex_model = Some(codex_model);
+    }
+
+    write_to_cli_config(&profile)?;
+    read_current_cli_config(cli_type)
+}
+
 /// 获取单个 Provider 配置
 fn get_provider_profile_by_id(conn: &Connection, id: &str) -> Result<ProviderProfile, String> {
     conn.query_row(

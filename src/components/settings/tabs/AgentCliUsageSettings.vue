@@ -388,6 +388,11 @@ function applyAgentChart() {
   }
 
   const rows = [...topAgentRows.value].reverse()
+  const chartWidth = agentChartRef.value?.clientWidth ?? 0
+  const axisLabelWidth = chartWidth > 0
+    ? Math.max(112, Math.min(168, Math.floor(chartWidth * 0.24)))
+    : 168
+  const compact = chartWidth > 0 && chartWidth < 760
   agentChart.setOption({
     animation: false,
     tooltip: {
@@ -407,12 +412,18 @@ function applyAgentChart() {
         ].join('<br />')
       }
     },
-    grid: { left: 210, right: 40, top: 16, bottom: 68, containLabel: true },
+    grid: {
+      left: 8,
+      right: compact ? 16 : 24,
+      top: 16,
+      bottom: compact ? 58 : 68,
+      containLabel: true
+    },
     xAxis: {
       type: 'value',
       name: t('settings.usageStats.summaryTotalTokens'),
       nameLocation: 'middle',
-      nameGap: 42,
+      nameGap: compact ? 34 : 42,
       axisLabel: {
         hideOverlap: true,
         margin: 12
@@ -425,7 +436,7 @@ function applyAgentChart() {
       type: 'category',
       data: rows.map(item => item.label),
       axisLabel: {
-        width: 180,
+        width: axisLabelWidth,
         overflow: 'truncate'
       }
     },
@@ -446,6 +457,11 @@ function applyModelChart() {
   }
 
   const rows = [...topModelRows.value].reverse()
+  const chartWidth = modelChartRef.value?.clientWidth ?? 0
+  const axisLabelWidth = chartWidth > 0
+    ? Math.max(120, Math.min(184, Math.floor(chartWidth * 0.26)))
+    : 184
+  const compact = chartWidth > 0 && chartWidth < 760
   modelChart.setOption({
     animation: false,
     tooltip: {
@@ -466,12 +482,18 @@ function applyModelChart() {
         ].join('<br />')
       }
     },
-    grid: { left: 230, right: 48, top: 16, bottom: 72, containLabel: true },
+    grid: {
+      left: 8,
+      right: compact ? 16 : 24,
+      top: 16,
+      bottom: compact ? 60 : 72,
+      containLabel: true
+    },
     xAxis: {
       type: 'value',
       name: t('settings.usageStats.summaryEstimatedCost'),
       nameLocation: 'middle',
-      nameGap: 44,
+      nameGap: compact ? 36 : 44,
       axisLabel: {
         formatter: (value: number) => formatCurrency(value),
         hideOverlap: true,
@@ -485,7 +507,7 @@ function applyModelChart() {
       type: 'category',
       data: rows.map(item => item.label),
       axisLabel: {
-        width: 200,
+        width: axisLabelWidth,
         overflow: 'truncate'
       }
     },
@@ -959,7 +981,7 @@ onBeforeUnmount(() => {
 }
 
 .usage-chart-grid--ranking {
-  grid-template-columns: repeat(2, minmax(420px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .usage-chart {

@@ -34,10 +34,13 @@ const form = ref({
 
 // 是否是编辑模式
 const isEditMode = computed(() => !!props.profile)
+const isCurrentConfig = computed(() => isEditMode.value && props.profile?.id === '')
 
 // 弹窗标题
 const modalTitle = computed(() =>
-  isEditMode.value
+  isCurrentConfig.value
+    ? t('settings.providerSwitch.form.editCurrentTitle')
+    : isEditMode.value
     ? t('settings.providerSwitch.form.editTitle')
     : t('settings.providerSwitch.form.addTitle')
 )
@@ -100,14 +103,27 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(handl
 
 // 提交表单
 async function handleSubmit() {
-  if (!form.value.name.trim()) {
+  if (!isCurrentConfig.value && !form.value.name.trim()) {
     return
   }
 
   saving.value = true
 
   try {
-    if (isEditMode.value) {
+    if (isCurrentConfig.value) {
+      const input: UpdateProviderProfileInput = {
+        apiKey: form.value.apiKey || undefined,
+        baseUrl: form.value.baseUrl || undefined,
+        providerName: form.value.providerName || undefined,
+        mainModel: form.value.mainModel || undefined,
+        reasoningModel: form.value.reasoningModel || undefined,
+        haikuModel: form.value.haikuModel || undefined,
+        sonnetDefault: form.value.sonnetDefault || undefined,
+        opusDefault: form.value.opusDefault || undefined,
+        codexModel: form.value.codexModel || undefined
+      }
+      emit('save', input)
+    } else if (isEditMode.value) {
       // 编辑模式
       const input: UpdateProviderProfileInput = {
         name: form.value.name,
@@ -146,214 +162,213 @@ async function handleSubmit() {
 </script>
 
 <template>
-  <div
-    v-if="visible"
-    class="modal-overlay"
-    @pointerdown.capture="handleOverlayPointerDown"
-    @click.self="handleOverlayClick"
-  >
-    <div class="modal-content">
-      <div class="modal-header">
-        <h3>{{ modalTitle }}</h3>
-        <button
-          class="close-btn"
-          @click="handleClose"
-        >
-          <EaIcon
-            name="close"
-            :size="20"
-          />
-        </button>
-      </div>
-
-      <form
-        class="modal-body"
-        @submit.prevent="handleSubmit"
-      >
-        <!-- 基本信息 -->
-        <div class="form-section">
-          <div class="form-group">
-            <label class="form-label">
-              {{ t('settings.providerSwitch.form.name') }} <span class="required">*</span>
-            </label>
-            <input
-              v-model="form.name"
-              type="text"
-              class="form-input"
-              :placeholder="t('settings.providerSwitch.form.namePlaceholder')"
-              required
-            >
-          </div>
+  <Teleport to="body">
+    <div
+      v-if="visible"
+      class="modal-overlay"
+      @pointerdown.capture="handleOverlayPointerDown"
+      @click.self="handleOverlayClick"
+    >
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>{{ modalTitle }}</h3>
+          <button
+            class="close-btn"
+            @click="handleClose"
+          >
+            <EaIcon
+              name="close"
+              :size="20"
+            />
+          </button>
         </div>
 
-        <!-- Claude CLI 配置 -->
-        <template v-if="cliType === 'claude'">
-          <div class="form-section">
-            <h4 class="section-title">
-              {{ t('settings.providerSwitch.form.claudeConfig') }}
-            </h4>
-
+        <form
+          class="modal-body"
+          @submit.prevent="handleSubmit"
+        >
+          <!-- 基本信息 -->
+          <div
+            v-if="!isCurrentConfig"
+            class="form-section"
+          >
             <div class="form-group">
-              <label class="form-label">{{ t('settings.providerSwitch.form.apiKey') }}</label>
+              <label class="form-label">
+                {{ t('settings.providerSwitch.form.name') }} <span class="required">*</span>
+              </label>
               <input
-                v-model="form.apiKey"
-                type="password"
-                class="form-input"
-                :placeholder="t('settings.providerSwitch.form.apiKeyPlaceholder')"
-              >
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">{{ t('settings.providerSwitch.form.baseUrl') }}</label>
-              <input
-                v-model="form.baseUrl"
+                v-model="form.name"
                 type="text"
                 class="form-input"
-                :placeholder="t('settings.providerSwitch.form.baseUrlPlaceholder')"
+                :placeholder="t('settings.providerSwitch.form.namePlaceholder')"
+                required
               >
             </div>
+          </div>
 
-            <div class="form-group">
-              <label class="form-label">{{ t('settings.providerSwitch.form.mainModel') }}</label>
-              <input
-                v-model="form.mainModel"
-                type="text"
-                class="form-input"
-                :placeholder="t('settings.providerSwitch.form.mainModelPlaceholder')"
-              >
-            </div>
+          <!-- Claude CLI 配置 -->
+          <template v-if="cliType === 'claude'">
+            <div class="form-section">
+              <h4 class="section-title">
+                {{ t('settings.providerSwitch.form.claudeConfig') }}
+              </h4>
 
-            <div class="form-group">
-              <label class="form-label">{{ t('settings.providerSwitch.form.reasoningModel') }}</label>
-              <input
-                v-model="form.reasoningModel"
-                type="text"
-                class="form-input"
-                :placeholder="t('settings.providerSwitch.form.reasoningModelPlaceholder')"
-              >
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">{{ t('settings.providerSwitch.form.haikuModel') }}</label>
-              <input
-                v-model="form.haikuModel"
-                type="text"
-                class="form-input"
-                :placeholder="t('settings.providerSwitch.form.haikuModelPlaceholder')"
-              >
-            </div>
-
-            <div class="form-row">
               <div class="form-group">
-                <label class="form-label">{{ t('settings.providerSwitch.form.sonnetDefault') }}</label>
+                <label class="form-label">{{ t('settings.providerSwitch.form.apiKey') }}</label>
                 <input
-                  v-model="form.sonnetDefault"
-                  type="text"
+                  v-model="form.apiKey"
+                  type="password"
                   class="form-input"
+                  :placeholder="t('settings.providerSwitch.form.apiKeyPlaceholder')"
                 >
               </div>
 
               <div class="form-group">
-                <label class="form-label">{{ t('settings.providerSwitch.form.opusDefault') }}</label>
+                <label class="form-label">{{ t('settings.providerSwitch.form.baseUrl') }}</label>
                 <input
-                  v-model="form.opusDefault"
+                  v-model="form.baseUrl"
                   type="text"
                   class="form-input"
+                  :placeholder="t('settings.providerSwitch.form.baseUrlPlaceholder')"
+                >
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">{{ t('settings.providerSwitch.form.mainModel') }}</label>
+                <input
+                  v-model="form.mainModel"
+                  type="text"
+                  class="form-input"
+                  :placeholder="t('settings.providerSwitch.form.mainModelPlaceholder')"
+                >
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">{{ t('settings.providerSwitch.form.reasoningModel') }}</label>
+                <input
+                  v-model="form.reasoningModel"
+                  type="text"
+                  class="form-input"
+                  :placeholder="t('settings.providerSwitch.form.reasoningModelPlaceholder')"
+                >
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">{{ t('settings.providerSwitch.form.haikuModel') }}</label>
+                <input
+                  v-model="form.haikuModel"
+                  type="text"
+                  class="form-input"
+                  :placeholder="t('settings.providerSwitch.form.haikuModelPlaceholder')"
+                >
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">{{ t('settings.providerSwitch.form.sonnetDefault') }}</label>
+                  <input
+                    v-model="form.sonnetDefault"
+                    type="text"
+                    class="form-input"
+                  >
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">{{ t('settings.providerSwitch.form.opusDefault') }}</label>
+                  <input
+                    v-model="form.opusDefault"
+                    type="text"
+                    class="form-input"
+                  >
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <!-- Codex CLI 配置 -->
+          <template v-if="cliType === 'codex'">
+            <div class="form-section">
+              <h4 class="section-title">
+                {{ t('settings.providerSwitch.form.codexConfig') }}
+              </h4>
+
+              <div class="form-group">
+                <label class="form-label">{{ t('settings.providerSwitch.form.apiKey') }}</label>
+                <input
+                  v-model="form.apiKey"
+                  type="password"
+                  class="form-input"
+                  :placeholder="t('settings.providerSwitch.form.apiKeyPlaceholder')"
+                >
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">{{ t('settings.providerSwitch.form.baseUrl') }}</label>
+                <input
+                  v-model="form.baseUrl"
+                  type="text"
+                  class="form-input"
+                  :placeholder="t('settings.providerSwitch.form.baseUrlPlaceholder')"
+                >
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">{{ t('settings.providerSwitch.form.codexModel') }}</label>
+                <input
+                  v-model="form.codexModel"
+                  type="text"
+                  class="form-input"
+                  :placeholder="t('settings.providerSwitch.form.codexModelPlaceholder')"
                 >
               </div>
             </div>
-          </div>
-        </template>
+          </template>
+        </form>
 
-        <!-- Codex CLI 配置 -->
-        <template v-if="cliType === 'codex'">
-          <div class="form-section">
-            <h4 class="section-title">
-              {{ t('settings.providerSwitch.form.codexConfig') }}
-            </h4>
-
-            <div class="form-group">
-              <label class="form-label">{{ t('settings.providerSwitch.form.apiKey') }}</label>
-              <input
-                v-model="form.apiKey"
-                type="password"
-                class="form-input"
-                :placeholder="t('settings.providerSwitch.form.apiKeyPlaceholder')"
-              >
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">{{ t('settings.providerSwitch.form.baseUrl') }}</label>
-              <input
-                v-model="form.baseUrl"
-                type="text"
-                class="form-input"
-                :placeholder="t('settings.providerSwitch.form.baseUrlPlaceholder')"
-              >
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">{{ t('settings.providerSwitch.form.codexModel') }}</label>
-              <input
-                v-model="form.codexModel"
-                type="text"
-                class="form-input"
-                :placeholder="t('settings.providerSwitch.form.codexModelPlaceholder')"
-              >
-            </div>
-          </div>
-        </template>
-      </form>
-
-      <div class="modal-footer">
-        <EaButton
-          type="secondary"
-          @click="handleClose"
-        >
-          {{ t('common.cancel') }}
-        </EaButton>
-        <EaButton
-          type="primary"
-          :loading="saving"
-          :disabled="!form.name.trim()"
-          @click="handleSubmit"
-        >
-          {{ t('common.save') }}
-        </EaButton>
+        <div class="modal-footer">
+          <EaButton
+            type="secondary"
+            @click="handleClose"
+          >
+            {{ t('common.cancel') }}
+          </EaButton>
+          <EaButton
+            type="primary"
+            :loading="saving"
+            :disabled="!isCurrentConfig && !form.name.trim()"
+            @click="handleSubmit"
+          >
+            {{ t('common.save') }}
+          </EaButton>
+        </div>
       </div>
     </div>
-  </div>
+  </Teleport>
 </template>
 
 <style scoped>
 .modal-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(4px);
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  padding: var(--spacing-4);
+  background: color-mix(in srgb, var(--color-bg-overlay, rgba(0, 0, 0, 0.5)) 36%, transparent);
+  backdrop-filter: blur(10px) saturate(115%);
+  z-index: calc(var(--z-modal, 1050) + 10);
 }
 
 .modal-content {
-  background: var(--color-bg-primary, #ffffff);
-  border-radius: 16px;
-  max-width: 500px;
-  width: 90%;
-  max-height: 80vh;
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(84vh, 900px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
-}
-
-:global(.dark) .modal-content {
-  background: var(--color-bg-primary, #1a1a1a);
+  border-radius: var(--radius-xl);
+  border: 1px solid color-mix(in srgb, var(--color-border, #e0e0e0) 88%, white 12%);
+  background: var(--color-surface, #ffffff);
+  box-shadow: var(--shadow-2xl);
 }
 
 .modal-header {
@@ -364,19 +379,11 @@ async function handleSubmit() {
   border-bottom: 1px solid var(--color-border, #e0e0e0);
 }
 
-:global(.dark) .modal-header {
-  border-color: var(--color-border, #404040);
-}
-
 .modal-header h3 {
   margin: 0;
   font-size: 18px;
   font-weight: 600;
   color: var(--color-text-primary, #1a1a1a);
-}
-
-:global(.dark) .modal-header h3 {
-  color: var(--color-text-primary, #ffffff);
 }
 
 .close-btn {
@@ -395,15 +402,6 @@ async function handleSubmit() {
 .close-btn:hover {
   color: var(--color-text-primary, #1a1a1a);
   background: var(--color-surface-hover, rgba(0, 0, 0, 0.05));
-}
-
-:global(.dark) .close-btn {
-  color: var(--color-text-secondary, #a0a0a0);
-}
-
-:global(.dark) .close-btn:hover {
-  color: var(--color-text-primary, #ffffff);
-  background: var(--color-surface-hover, rgba(255, 255, 255, 0.1));
 }
 
 .modal-body {
@@ -429,11 +427,6 @@ async function handleSubmit() {
   border-bottom: 1px solid var(--color-border, #e0e0e0);
 }
 
-:global(.dark) .section-title {
-  color: var(--color-text-secondary, #a0a0a0);
-  border-color: var(--color-border, #404040);
-}
-
 .form-group {
   margin-bottom: 16px;
 }
@@ -450,10 +443,6 @@ async function handleSubmit() {
   color: var(--color-text-primary, #1a1a1a);
 }
 
-:global(.dark) .form-label {
-  color: var(--color-text-primary, #ffffff);
-}
-
 .required {
   color: var(--color-danger, #ef4444);
 }
@@ -467,6 +456,7 @@ async function handleSubmit() {
   background: var(--color-bg-primary, #ffffff);
   color: var(--color-text-primary, #1a1a1a);
   transition: all 0.2s;
+  box-sizing: border-box;
 }
 
 .form-input:focus {
@@ -477,21 +467,6 @@ async function handleSubmit() {
 
 .form-input::placeholder {
   color: var(--color-text-tertiary, #999);
-}
-
-:global(.dark) .form-input {
-  background: var(--color-bg-secondary, #2a2a2a);
-  border-color: var(--color-border, #404040);
-  color: var(--color-text-primary, #ffffff);
-}
-
-:global(.dark) .form-input:focus {
-  border-color: var(--color-primary, #8b5cf6);
-  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.2);
-}
-
-:global(.dark) .form-input::placeholder {
-  color: var(--color-text-tertiary, #666);
 }
 
 .form-row {
@@ -512,8 +487,22 @@ async function handleSubmit() {
   background: var(--color-bg-secondary, #f5f5f5);
 }
 
-:global(.dark) .modal-footer {
-  border-color: var(--color-border, #404040);
-  background: var(--color-bg-secondary, #2a2a2a);
+@media (max-width: 640px) {
+  .modal-content {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+  }
+
+  .modal-header,
+  .modal-body,
+  .modal-footer {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .form-row {
+    flex-direction: column;
+    gap: 0;
+  }
 }
 </style>

@@ -262,7 +262,7 @@ const zhCN = {
     memorySourceLibrary: '记忆库',
     memorySourceRaw: '原始记忆',
     ghostHintImages: '图片',
-    ghostHintFiles: '@ 引用文件',
+    ghostHintFiles: "{'@'} 引用文件",
     ghostHintSend: '{shortcut} 发送',
     queueImages: '{count} 张图片',
     slash: {
@@ -1001,6 +1001,8 @@ const zhCN = {
     },
     providerSwitch: {
       ...enUS.settings.providerSwitch,
+      defaultConfigName: '默认配置',
+      defaultConfigTag: '默认',
       title: '配置快速切换',
       description: '管理多个 API Provider 配置，快速切换 Claude CLI 和 Codex API 设置',
       cliType: {
@@ -1027,6 +1029,7 @@ const zhCN = {
       form: {
         addTitle: '添加配置',
         editTitle: '编辑配置',
+        editCurrentTitle: '编辑默认配置',
         name: '配置名称',
         namePlaceholder: '例如：生产环境',
         nameRequired: '请输入配置名称',

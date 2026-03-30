@@ -289,6 +289,7 @@ pub fn run() {
             commands::provider_profile::delete_provider_profile,
             commands::provider_profile::get_active_provider_profile,
             commands::provider_profile::switch_provider_profile,
+            commands::provider_profile::update_current_cli_config,
             commands::provider_profile::read_current_cli_config,
             commands::provider_profile::read_cli_connection_info,
             commands::provider_profile::read_all_cli_connections,

@@ -7,6 +7,7 @@ defineProps<{
   loading: boolean
   profiles: ProviderProfile[]
   activeProfile: ProviderProfile | null
+  defaultProfile?: ProviderProfile | null
   switchingId: string | null
 }>()
 
@@ -26,28 +27,34 @@ const { t } = useI18n()
       {{ t('settings.providerSwitch.currentConfig') }}
     </h3>
     <div
-      v-if="activeProfile"
+      v-if="activeProfile || defaultProfile"
       class="active-profile-card"
     >
       <div class="profile-info">
         <div class="profile-name">
           <EaIcon
-            name="check-circle"
+            :name="activeProfile ? 'check-circle' : 'settings-2'"
             class="active-icon"
             :size="18"
           />
-          {{ activeProfile.name }}
+          {{ (activeProfile || defaultProfile)?.name }}
+          <span
+            v-if="!activeProfile && defaultProfile"
+            class="badge active-badge"
+          >
+            {{ t('settings.providerSwitch.defaultConfigTag') }}
+          </span>
         </div>
         <div class="profile-details">
-          <span v-if="activeProfile.baseUrl">{{ activeProfile.baseUrl }}</span>
-          <span v-if="activeProfile.mainModel">{{ activeProfile.mainModel }}</span>
-          <span v-if="activeProfile.codexModel">{{ activeProfile.codexModel }}</span>
+          <span v-if="(activeProfile || defaultProfile)?.baseUrl">{{ (activeProfile || defaultProfile)?.baseUrl }}</span>
+          <span v-if="(activeProfile || defaultProfile)?.mainModel">{{ (activeProfile || defaultProfile)?.mainModel }}</span>
+          <span v-if="(activeProfile || defaultProfile)?.codexModel">{{ (activeProfile || defaultProfile)?.codexModel }}</span>
         </div>
       </div>
       <div class="profile-actions">
         <EaButton
           size="small"
-          @click="emit('edit', activeProfile)"
+          @click="emit('edit', activeProfile || defaultProfile!)"
         >
           <EaIcon
             name="edit"

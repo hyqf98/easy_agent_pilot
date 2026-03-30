@@ -409,6 +409,39 @@ export const useProviderProfileStore = defineStore('providerProfile', () => {
     }
   }
 
+  /** 直接更新当前 CLI 配置文件中的默认配置 */
+  async function updateCurrentConfig(cliType: CliType, input: UpdateProviderProfileInput) {
+    const notificationStore = useNotificationStore()
+    try {
+      const rawProfile = await invoke<RawProviderProfile>('update_current_cli_config', {
+        cliType,
+        input: {
+          api_key: input.apiKey,
+          base_url: input.baseUrl,
+          provider_name: input.providerName,
+          main_model: input.mainModel,
+          reasoning_model: input.reasoningModel,
+          haiku_model: input.haikuModel,
+          sonnet_default: input.sonnetDefault,
+          opus_default: input.opusDefault,
+          codex_model: input.codexModel
+        }
+      })
+
+      const updatedProfile = transformProfile(rawProfile)
+      currentConfig.value = updatedProfile
+      return updatedProfile
+    } catch (error) {
+      console.error('Failed to update current CLI config:', error)
+      notificationStore.databaseError(
+        '更新默认配置失败',
+        getErrorMessage(error),
+        async () => { void await updateCurrentConfig(cliType, input) }
+      )
+      throw error
+    }
+  }
+
   /** 读取当前 CLI 配置文件 */
   async function readCurrentConfig(cliType: CliType) {
     const notificationStore = useNotificationStore()
@@ -517,6 +550,7 @@ export const useProviderProfileStore = defineStore('providerProfile', () => {
     deleteProfile,
     loadActiveProfile,
     switchProfile,
+    updateCurrentConfig,
     readCurrentConfig,
     readCliConnectionInfo,
     readAllCliConnections,

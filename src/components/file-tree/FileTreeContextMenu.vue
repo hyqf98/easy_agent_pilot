@@ -91,41 +91,41 @@ const handleSendToSession = () => {
         :style="menuStyle"
         @click.stop
       >
-      <div
-        v-if="!isRoot"
-        class="context-menu__item"
-        @click="handleSendToSession"
-      >
-        <EaIcon
+        <div
+          v-if="!isRoot"
+          class="context-menu__item"
+          @click="handleSendToSession"
+        >
+          <EaIcon
             name="at-sign"
             :size="14"
             class="context-menu__icon"
-        />
-        <span>{{ t('fileTree.sendToSession') }}</span>
-      </div>
-      <div
-        class="context-menu__item"
-        @click="handleCreateFile"
-      >
-        <EaIcon
-          name="file-plus"
-          :size="14"
-          class="context-menu__icon"
-        />
-        <span>{{ t('fileTree.createFile') }}</span>
-      </div>
-      <div
-        class="context-menu__item"
-        @click="handleCreateFolder"
-      >
-        <EaIcon
-          name="folder-plus"
-          :size="14"
-          class="context-menu__icon"
-        />
-        <span>{{ t('fileTree.createFolder') }}</span>
-      </div>
-      <div class="context-menu__divider" />
+          />
+          <span>{{ t('fileTree.sendToSession') }}</span>
+        </div>
+        <div
+          class="context-menu__item"
+          @click="handleCreateFile"
+        >
+          <EaIcon
+            name="file-plus"
+            :size="14"
+            class="context-menu__icon"
+          />
+          <span>{{ t('fileTree.createFile') }}</span>
+        </div>
+        <div
+          class="context-menu__item"
+          @click="handleCreateFolder"
+        >
+          <EaIcon
+            name="folder-plus"
+            :size="14"
+            class="context-menu__icon"
+          />
+          <span>{{ t('fileTree.createFolder') }}</span>
+        </div>
+        <div class="context-menu__divider" />
         <div
           v-if="!isRoot"
           class="context-menu__item"
