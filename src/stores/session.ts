@@ -92,6 +92,8 @@ export const useSessionStore = defineStore('session', () => {
   const searchQuery = ref('')
   // 打开的会话 ID 列表（用于标签栏）
   const openSessionIds = ref<string[]>([])
+  const loadedProjectIds = ref<Set<string>>(new Set())
+  const loadingProjectIds = ref<Set<string>>(new Set())
   const EMPTY_SESSIONS: Session[] = []
 
   // Getters
@@ -244,23 +246,35 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   // Actions
-  async function loadSessions(projectId: string) {
+  async function loadSessions(projectId: string, options: { force?: boolean } = {}) {
+    const { force = false } = options
+    if (!force && loadedProjectIds.value.has(projectId)) {
+      return
+    }
+
+    if (loadingProjectIds.value.has(projectId)) {
+      return
+    }
+
     isLoading.value = true
     loadError.value = null
+    loadingProjectIds.value.add(projectId)
     const notificationStore = useNotificationStore()
     try {
       const rustSessions = await invoke<RustSession[]>('list_sessions', { projectId })
       replaceProjectSessions(projectId, rustSessions.map(transformSession))
       pruneStaleOpenSessions()
+      loadedProjectIds.value.add(projectId)
     } catch (error) {
       console.error('Failed to load sessions:', error)
       loadError.value = getErrorMessage(error)
       notificationStore.networkError(
         '加载会话列表',
         getErrorMessage(error),
-        () => loadSessions(projectId)
+        () => loadSessions(projectId, { force: true })
       )
     } finally {
+      loadingProjectIds.value.delete(projectId)
       isLoading.value = false
     }
   }
@@ -395,6 +409,8 @@ export const useSessionStore = defineStore('session', () => {
 
     sessions.value = sessions.value.filter(session => session.projectId !== projectId)
     openSessionIds.value = openSessionIds.value.filter(sessionId => !projectSessionIdSet.has(sessionId))
+    loadedProjectIds.value.delete(projectId)
+    loadingProjectIds.value.delete(projectId)
     pruneStaleOpenSessions()
 
     const sessionExecutionStore = useSessionExecutionStore()
@@ -555,6 +571,8 @@ export const useSessionStore = defineStore('session', () => {
     loadError,
     searchQuery,
     openSessionIds,
+    loadedProjectIds,
+    loadingProjectIds,
     // Getters
     currentSession,
     sessionsByProject,

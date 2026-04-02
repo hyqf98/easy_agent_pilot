@@ -440,7 +440,7 @@ const diffStats = computed(() => diffOps.value.reduce((stats, op) => {
   border: 1px solid rgba(148, 163, 184, 0.18);
   background: color-mix(in srgb, var(--color-surface) 92%, white 8%);
   color: var(--color-text-secondary);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
 }
 
@@ -456,9 +456,11 @@ const diffStats = computed(() => diffOps.value.reduce((stats, op) => {
   padding: 6px 10px;
   border-radius: 999px;
   border: 1px solid rgba(148, 163, 184, 0.16);
-  font-size: 11px;
+  font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
 }
 
 .trace-diff-stack__summary-chip--removed {

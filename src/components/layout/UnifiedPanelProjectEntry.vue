@@ -1,19 +1,12 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { TreeOption } from 'naive-ui'
 import { FileTree } from '@/components/file-tree'
 import type { Project } from '@/stores/project'
 import type { Session } from '@/stores/session'
 import type { ProjectTabType } from '@/stores/layout'
-import { EaIcon, EaSkeleton } from '@/components/common'
+import { EaIcon } from '@/components/common'
 import UnifiedPanelSessionList from './UnifiedPanelSessionList.vue'
-
-interface TreeRenderProps {
-  option: TreeOption
-  checked: boolean
-  selected: boolean
-}
 
 interface Props {
   project: Project
@@ -25,11 +18,7 @@ interface Props {
   currentSessionId: string | null
   editingSessionId: string | null
   editingSessionName: string
-  isFileTreeLoading: boolean
-  treeData: TreeOption[]
-  expandedKeys: string[]
   importedTimeLabel: string
-  renderTreeLabel: (props: TreeRenderProps) => ReturnType<typeof import('vue').h>
 }
 
 defineProps<Props>()
@@ -48,8 +37,7 @@ const emit = defineEmits<{
   cancelEditSession: []
   deleteSession: [session: Session]
   updateEditingName: [value: string]
-  expandTree: [keys: string[], projectId: string]
-  selectFile: [keys: Array<string | number>, options: Array<TreeOption | null>, project: Project]
+  selectFile: [path: string, project: Project]
 }>()
 
 const { t } = useI18n()
@@ -124,12 +112,18 @@ function handleProjectCompactAction(action: 'edit' | 'delete', project: Project,
   emit('deleteProject', project)
 }
 
-onMounted(() => {
-  document.addEventListener('mousedown', handleDocumentMouseDown)
-  document.addEventListener('keydown', handleDocumentKeydown)
+onBeforeUnmount(() => {
+  document.removeEventListener('mousedown', handleDocumentMouseDown)
+  document.removeEventListener('keydown', handleDocumentKeydown)
 })
 
-onBeforeUnmount(() => {
+watch(isCompactMenuOpen, (open) => {
+  if (open) {
+    document.addEventListener('mousedown', handleDocumentMouseDown)
+    document.addEventListener('keydown', handleDocumentKeydown)
+    return
+  }
+
   document.removeEventListener('mousedown', handleDocumentMouseDown)
   document.removeEventListener('keydown', handleDocumentKeydown)
 })
@@ -156,12 +150,9 @@ onBeforeUnmount(() => {
   >
     <div class="project-item__arrow">
       <EaIcon
-        :name="isFileTreeLoading ? 'loader' : 'chevron-right'"
+        name="chevron-right"
         :size="14"
-        :class="{
-          'project-item__arrow--expanded': isExpanded,
-          'animate-spin': isFileTreeLoading
-        }"
+        :class="{ 'project-item__arrow--expanded': isExpanded }"
       />
     </div>
 
@@ -325,29 +316,11 @@ onBeforeUnmount(() => {
       v-else-if="currentTab === 'files'"
       class="tab-content tab-content--files"
     >
-      <div
-        v-if="isFileTreeLoading && treeData.length === 0"
-        class="file-tree__loading"
-      >
-        <EaSkeleton
-          variant="text"
-          height="14px"
-          width="80%"
-          animation="wave"
-        />
-        <EaSkeleton
-          variant="text"
-          height="14px"
-          width="60%"
-          animation="wave"
-        />
-      </div>
       <FileTree
-        v-else
         :project-id="project.id"
         :project-path="project.path"
         class="file-tree__content"
-        @file-select="emit('selectFile', [$event], [], project)"
+        @file-select="emit('selectFile', $event, project)"
       />
     </div>
   </div>

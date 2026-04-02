@@ -388,9 +388,6 @@ onMounted(async () => {
             class="select-input"
             :disabled="!form.runtimeAgentId"
           >
-            <option value="">
-              {{ t('settings.agentTeams.placeholders.followAgentDefaultModel') }}
-            </option>
             <option
               v-for="model in runtimeModelOptions"
               :key="model.id"

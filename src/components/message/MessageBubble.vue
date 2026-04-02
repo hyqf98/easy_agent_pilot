@@ -1370,12 +1370,13 @@ const resolvedFormResponse = computed(() => {
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  font-family: var(--font-family-mono);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  color: var(--color-text-tertiary);
-  padding-top: 6px;
+  font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--color-text-secondary) 88%, var(--color-text-primary) 12%);
+  padding-top: 7px;
   border-top: 1px solid var(--trace-tile-meta-border);
 }
 
@@ -1386,7 +1387,7 @@ const resolvedFormResponse = computed(() => {
   flex-shrink: 0;
   padding: 2px 6px;
   border-radius: var(--radius-full);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.02em;

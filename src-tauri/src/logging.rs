@@ -3,7 +3,7 @@ use chrono::{DateTime, Local};
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -12,7 +12,9 @@ static PANIC_HOOK_INSTALLED: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false))
 
 const LOG_FILE_PREFIX: &str = "app-";
 const LOG_FILE_SUFFIX: &str = ".log";
-const DEFAULT_TAIL_LINES: usize = 800;
+const DEFAULT_TAIL_LINES: usize = 500;
+const MAX_TAIL_LINES: usize = 5_000;
+const TAIL_READ_CHUNK_BYTES: usize = 8 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,6 +41,51 @@ pub struct RuntimeLogReadResult {
     pub content: String,
     pub truncated: bool,
     pub line_count: usize,
+}
+
+fn normalize_tail_lines(tail_lines: Option<usize>) -> usize {
+    tail_lines
+        .unwrap_or(DEFAULT_TAIL_LINES)
+        .clamp(1, MAX_TAIL_LINES)
+}
+
+fn read_log_tail(path: &Path, limit: usize) -> Result<(String, bool, usize)> {
+    let mut file = fs::File::open(path)?;
+    let file_size = file.metadata()?.len();
+    if file_size == 0 {
+        return Ok((String::new(), false, 0));
+    }
+
+    let mut offset = file_size;
+    let mut newline_count = 0usize;
+    let mut chunks: Vec<Vec<u8>> = Vec::new();
+
+    while offset > 0 && newline_count <= limit {
+        let read_size = usize::min(TAIL_READ_CHUNK_BYTES, offset as usize);
+        offset -= read_size as u64;
+        file.seek(SeekFrom::Start(offset))?;
+
+        let mut chunk = vec![0u8; read_size];
+        file.read_exact(&mut chunk)?;
+        newline_count += chunk.iter().filter(|byte| **byte == b'\n').count();
+        chunks.push(chunk);
+    }
+
+    let total_bytes = chunks.iter().map(|chunk| chunk.len()).sum();
+    let mut combined = Vec::with_capacity(total_bytes);
+    for chunk in chunks.iter().rev() {
+        combined.extend_from_slice(chunk);
+    }
+
+    let decoded = String::from_utf8_lossy(&combined);
+    let mut lines: Vec<&str> = decoded.lines().collect();
+    let truncated = offset > 0 || lines.len() > limit;
+
+    if lines.len() > limit {
+        lines = lines.split_off(lines.len() - limit);
+    }
+
+    Ok((lines.join("\n"), truncated, lines.len()))
 }
 
 fn get_log_dir() -> Result<PathBuf> {
@@ -178,19 +225,14 @@ pub fn read_runtime_log_file(
     }
 
     let metadata = fs::metadata(&path)?;
-    let file = fs::File::open(&path)?;
-    let reader = BufReader::new(file);
-    let all_lines: Vec<String> = reader.lines().collect::<std::io::Result<Vec<_>>>()?;
-    let total_lines = all_lines.len();
-    let limit = tail_lines.unwrap_or(DEFAULT_TAIL_LINES);
-    let start = total_lines.saturating_sub(limit);
-    let content = all_lines[start..].join("\n");
+    let limit = normalize_tail_lines(tail_lines);
+    let (content, truncated, line_count) = read_log_tail(&path, limit)?;
 
     Ok(RuntimeLogReadResult {
         file: build_file_info(&path, &metadata),
         content,
-        truncated: start > 0,
-        line_count: total_lines,
+        truncated,
+        line_count,
     })
 }
 

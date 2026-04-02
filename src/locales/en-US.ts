@@ -1408,8 +1408,12 @@ export default {
       clearFailed: 'Failed to clear runtime logs',
       clearSuccess: 'Cleared {count} log file(s)',
       clearConfirm: 'Clear all runtime log files? This cannot be undone.',
+      latestLines: 'Latest lines',
+      latestLinesOption: '{count} lines',
+      latestLinesShort: 'Latest {count}',
       truncatedNotice: 'Only the latest portion of the file is shown here to keep the view responsive.',
-      lineCount: '{count} lines'
+      lineCount: '{count} lines',
+      visibleLineCount: 'Showing {count} lines'
     },
     installSessions: {
       title: 'Install Sessions',

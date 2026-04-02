@@ -1,15 +1,17 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSessionStore, type SessionStatus } from '@/stores/session'
 import { useWindowManagerStore } from '@/stores/windowManager'
 import { EaIcon } from '@/components/common'
 import { useMessage } from 'naive-ui'
+import { useSessionView } from '@/composables'
 
 const { t } = useI18n()
 const sessionStore = useSessionStore()
 const windowManagerStore = useWindowManagerStore()
 const message = useMessage()
+const { openSessionTarget } = useSessionView()
 
 // 标签栏容器引用
 const tabsContainerRef = ref<HTMLElement | null>(null)
@@ -107,17 +109,16 @@ const getStatusIcon = (status: SessionStatus): string => {
 }
 
 // 切换到指定会话
-const switchToSession = (sessionId: string) => {
+const switchToSession = async (sessionId: string) => {
   if (sessionId === sessionStore.currentSessionId) return
 
-  // 添加视觉反馈
   switchingTabId.value = sessionId
-  sessionStore.setCurrentSession(sessionId)
 
-  // 移除视觉反馈
-  setTimeout(() => {
+  try {
+    await openSessionTarget(sessionId)
+  } finally {
     switchingTabId.value = null
-  }, 150)
+  }
 }
 
 // 关闭指定会话标签
@@ -157,7 +158,11 @@ const scrollToActiveTab = async () => {
 onMounted(() => {
   // 加载保存的打开会话列表
   sessionStore.loadOpenSessions()
-  scrollToActiveTab()
+  void scrollToActiveTab()
+})
+
+watch(() => sessionStore.currentSessionId, () => {
+  void scrollToActiveTab()
 })
 </script>
 

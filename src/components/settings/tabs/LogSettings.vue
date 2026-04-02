@@ -38,6 +38,8 @@ const errorMessage = ref('')
 const successMessage = ref('')
 const summary = ref<RuntimeLogSummary | null>(null)
 const files = ref<RuntimeLogFileInfo[]>([])
+const lineLimitOptions = [200, 500, 1000, 2000, 5000] as const
+const selectedLineLimit = ref<number>(500)
 const selectedFileName = ref('')
 const logContent = ref<RuntimeLogReadResult | null>(null)
 const contentRef = ref<HTMLElement | null>(null)
@@ -115,7 +117,7 @@ async function loadLogFile(fileName?: string, options: { scrollToLatest?: boolea
   try {
     logContent.value = await invoke<RuntimeLogReadResult>('read_runtime_log_file_command', {
       fileName,
-      tailLines: 1200
+      tailLines: selectedLineLimit.value
     })
 
     if (options.scrollToLatest !== false) {
@@ -279,6 +281,15 @@ watch(selectedFileName, async (fileName, previous) => {
   await loadLogFile(fileName, { scrollToLatest: true })
 })
 
+watch(selectedLineLimit, async () => {
+  if (!selectedFileName.value) {
+    return
+  }
+
+  errorMessage.value = ''
+  await loadLogFile(selectedFileName.value, { scrollToLatest: true })
+})
+
 watch(isListening, (listening) => {
   if (!listening) {
     stopWatchingLogs()
@@ -312,6 +323,23 @@ onBeforeUnmount(() => {
       :description="t('settings.logs.description')"
     >
       <template #actions>
+        <label class="log-settings__limit-control">
+          <span class="log-settings__limit-label">
+            {{ t('settings.logs.latestLines') }}
+          </span>
+          <select
+            v-model.number="selectedLineLimit"
+            class="log-settings__limit-select"
+          >
+            <option
+              v-for="option in lineLimitOptions"
+              :key="option"
+              :value="option"
+            >
+              {{ t('settings.logs.latestLinesOption', { count: option }) }}
+            </option>
+          </select>
+        </label>
         <EaButton
           type="secondary"
           @click="handleManualRefresh"
@@ -412,7 +440,10 @@ onBeforeUnmount(() => {
                 v-if="logContent"
                 class="badge"
               >
-                {{ t('settings.logs.lineCount', { count: logContent.lineCount }) }}
+                {{ t('settings.logs.visibleLineCount', { count: logContent.lineCount }) }}
+              </span>
+              <span class="badge badge--neutral">
+                {{ t('settings.logs.latestLinesShort', { count: selectedLineLimit }) }}
               </span>
             </div>
           </div>
@@ -486,6 +517,50 @@ onBeforeUnmount(() => {
   gap: var(--spacing-4);
   min-height: 780px;
   height: 100%;
+}
+
+.log-settings__limit-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.log-settings__limit-label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.log-settings__limit-select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  min-width: 118px;
+  height: 34px;
+  padding: 0 30px 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2364758b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-position: right 9px center;
+  background-repeat: no-repeat;
+  background-size: 14px;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  line-height: 1.2;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+.log-settings__limit-select:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 14%, transparent);
 }
 
 .log-settings__workspace--full {
@@ -573,15 +648,32 @@ onBeforeUnmount(() => {
 .log-settings__viewer-badges {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: var(--spacing-2);
+  min-width: 0;
 }
 
 .badge {
-  padding: 4px 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 4px 10px;
   border-radius: var(--radius-full);
   background: rgba(59, 130, 246, 0.16);
   color: #bfdbfe;
   font-size: 11px;
+  font-weight: var(--font-weight-medium);
+  line-height: 1;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+.badge--neutral {
+  background: rgba(148, 163, 184, 0.16);
+  color: #cbd5e1;
 }
 
 .log-settings__truncated {
@@ -612,9 +704,29 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 960px) {
+  .log-settings__limit-control {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .log-settings__limit-select {
+    flex: 1;
+    min-width: 0;
+  }
+
   .log-settings__workspace {
     grid-template-columns: 1fr;
     min-height: 680px;
+  }
+
+  .log-settings__viewer-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .log-settings__viewer-badges {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .log-settings__sidebar {

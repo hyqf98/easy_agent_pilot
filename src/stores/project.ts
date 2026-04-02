@@ -374,6 +374,14 @@ export const useProjectStore = defineStore('project', () => {
     }
   }
 
+  function expandProject(projectId: string) {
+    expandedProjects.value.add(projectId)
+  }
+
+  function collapseProject(projectId: string) {
+    expandedProjects.value.delete(projectId)
+  }
+
   // 检查项目是否展开
   function isProjectExpanded(projectId: string): boolean {
     return expandedProjects.value.has(projectId)
@@ -560,6 +568,8 @@ export const useProjectStore = defineStore('project', () => {
     loadProjectFiles,
     loadDirectoryChildren,
     toggleProjectExpand,
+    expandProject,
+    collapseProject,
     isProjectExpanded,
     getProjectFileTree,
     isFileTreeLoading,

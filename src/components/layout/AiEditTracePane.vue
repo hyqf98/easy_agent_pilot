@@ -643,7 +643,7 @@ const formatChangeType = (changeType: FileEditTrace['changeType']) => {
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 10px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--color-text-secondary);
 }
 
@@ -686,7 +686,10 @@ const formatChangeType = (changeType: FileEditTrace['changeType']) => {
 }
 
 .trace-pane__file-meta {
-  font-size: 11px;
+  font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
   color: var(--color-text-tertiary);
 }
 
@@ -757,7 +760,7 @@ const formatChangeType = (changeType: FileEditTrace['changeType']) => {
   gap: var(--spacing-3);
   padding: var(--spacing-2) var(--spacing-3);
   border-bottom: 1px solid rgba(148, 163, 184, 0.14);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--color-text-secondary);
 }
 

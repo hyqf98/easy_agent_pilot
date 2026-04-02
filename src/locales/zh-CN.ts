@@ -1243,8 +1243,12 @@ const zhCN = {
       clearFailed: '清空日志失败',
       clearSuccess: '已清空 {count} 个日志文件',
       clearConfirm: '确定清空所有运行日志文件吗？此操作不可恢复。',
+      latestLines: '显示最新',
+      latestLinesOption: '{count} 行',
+      latestLinesShort: '最近 {count} 行',
       truncatedNotice: '当前仅显示文件末尾部分内容，以保证界面响应速度。',
-      lineCount: '{count} 行'
+      lineCount: '{count} 行',
+      visibleLineCount: '当前显示 {count} 行'
     },
     installSessions: {
       ...enUS.settings.installSessions,

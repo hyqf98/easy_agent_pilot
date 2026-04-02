@@ -1,4 +1,5 @@
 import { useI18n } from 'vue-i18n'
+import { useLayoutStore } from '@/stores/layout'
 import { usePlanStore } from '@/stores/plan'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore, type SessionStatus } from '@/stores/session'
@@ -13,6 +14,7 @@ export function useSessionView() {
   const { t } = useI18n()
   const sessionStore = useSessionStore()
   const projectStore = useProjectStore()
+  const layoutStore = useLayoutStore()
   const uiStore = useUIStore()
   const taskStore = useTaskStore()
   const planStore = usePlanStore()
@@ -23,6 +25,9 @@ export function useSessionView() {
     const session = sessionStore.sessions.find(item => item.id === id)
     if (session?.projectId) {
       projectStore.setCurrentProject(session.projectId)
+      projectStore.expandProject(session.projectId)
+      layoutStore.setProjectTab(session.projectId, 'sessions')
+      await sessionStore.loadSessions(session.projectId)
     }
 
     if (session?.agentType === 'planner') {

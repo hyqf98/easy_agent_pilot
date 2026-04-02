@@ -1,9 +1,7 @@
 <script setup lang="ts">
-import { ref, h, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { TreeOption } from 'naive-ui'
-import type { UnwatchFn } from '@tauri-apps/plugin-fs'
-import { useProjectStore, type Project, type FileTreeNode } from '@/stores/project'
+import { useProjectStore, type Project } from '@/stores/project'
 import { useSessionStore, type Session } from '@/stores/session'
 import { useLayoutStore, type ProjectTabType } from '@/stores/layout'
 import { useUIStore } from '@/stores/ui'
@@ -11,20 +9,11 @@ import { useAgentStore } from '@/stores/agent'
 import { useAgentTeamsStore } from '@/stores/agentTeams'
 import { useSessionView } from '@/composables'
 import { useFileEditorStore } from '@/modules/file-editor'
-import { resolveFileIcon } from '@/utils/fileIcon'
-import { startFsWatcher } from '@/utils/fsWatcher'
 import { EaIcon, EaButton, EaSkeleton } from '@/components/common'
 import { ProjectCreateModal } from '@/components/project'
 import UnifiedPanelConfirmDialog from './UnifiedPanelConfirmDialog.vue'
 import UnifiedPanelProjectEntry from './UnifiedPanelProjectEntry.vue'
 import { resolveExpertRuntime } from '@/services/agentTeams/runtime'
-
-// 定义 TreeRenderProps 类型
-interface TreeRenderProps {
-  option: TreeOption
-  checked: boolean
-  selected: boolean
-}
 
 const { t } = useI18n()
 
@@ -63,14 +52,6 @@ const deletingSession = ref<Session | null>(null)
 const editingSessionId = ref<string | null>(null)
 const editingSessionName = ref('')
 
-// 文件树展开的节点 keys
-const expandedKeysMap = ref<Map<string, Set<string>>>(new Map())
-
-// 本地维护的 Tree 数据
-const projectTreeDataMap = ref<Map<string, TreeOption[]>>(new Map())
-const projectWatcherMap = ref<Map<string, UnwatchFn>>(new Map())
-const projectRefreshTimerMap = ref<Map<string, ReturnType<typeof setTimeout>>>(new Map())
-
 // 获取项目当前 Tab
 const getProjectTab = (projectId: string): ProjectTabType => {
   return layoutStore.getProjectTab(projectId)
@@ -79,18 +60,8 @@ const getProjectTab = (projectId: string): ProjectTabType => {
 // 设置项目当前 Tab
 const setProjectTab = async (projectId: string, tab: ProjectTabType) => {
   layoutStore.setProjectTab(projectId, tab)
-  // 切换到会话 Tab 时加载会话
   if (tab === 'sessions') {
-    stopProjectWatcher(projectId)
-    sessionStore.loadSessions(projectId)
-    return
-  }
-
-  if (tab === 'files') {
-    const project = projectStore.projects.find(p => p.id === projectId)
-    if (!project) return
-    await refreshProjectFileTree(project)
-    await startProjectWatcher(project)
+    await sessionStore.loadSessions(projectId)
   }
 }
 
@@ -126,19 +97,7 @@ const formatImportTime = (dateStr: string): string => {
 const handleProjectCardClick = async (project: Project) => {
   projectStore.toggleProjectExpand(project.id)
 
-  if (projectStore.isProjectExpanded(project.id)) {
-    if (getProjectTab(project.id) === 'files') {
-      await refreshProjectFileTree(project)
-      await startProjectWatcher(project)
-    } else {
-      stopProjectWatcher(project.id)
-    }
-  } else {
-    stopProjectWatcher(project.id)
-  }
-
-  // 展开时加载会话
-  if (projectStore.isProjectExpanded(project.id)) {
+  if (projectStore.isProjectExpanded(project.id) && getProjectTab(project.id) === 'sessions') {
     await sessionStore.loadSessions(project.id)
   }
 }
@@ -151,7 +110,6 @@ onMounted(async () => {
 
 onUnmounted(() => {
   document.removeEventListener('keydown', handleModalKeydown)
-  stopAllProjectWatchers()
 })
 
 // ESC 键关闭模态框
@@ -173,25 +131,11 @@ const handleModalKeydown = (e: KeyboardEvent) => {
 const handleRefresh = async () => {
   await projectStore.loadProjects()
 
-  const activeProjectIds = new Set(projectStore.projects.map(p => p.id))
-  Array.from(projectWatcherMap.value.keys()).forEach(projectId => {
-    if (!activeProjectIds.has(projectId)) {
-      stopProjectWatcher(projectId)
-      projectTreeDataMap.value.delete(projectId)
-      expandedKeysMap.value.delete(projectId)
-    }
-  })
-
   const expandedProjectIds = Array.from(projectStore.expandedProjects)
   const expandedProjects = projectStore.projects.filter(project => expandedProjectIds.includes(project.id))
-  await Promise.all(expandedProjects.map(async project => {
-    if (getProjectTab(project.id) === 'files') {
-      await refreshProjectFileTree(project)
-      await startProjectWatcher(project)
-    } else {
-      stopProjectWatcher(project.id)
-    }
-  }))
+  await Promise.all(expandedProjects
+    .filter(project => getProjectTab(project.id) === 'sessions')
+    .map(project => sessionStore.loadSessions(project.id, { force: true })))
 }
 
 const handleAddProject = () => {
@@ -308,142 +252,7 @@ const saveSessionName = async (session: Session) => {
   cancelEditSessionName()
 }
 
-// ========== 文件树操作 ==========
-const convertToTreeOptions = (nodes: FileTreeNode[], projectId: string): TreeOption[] => {
-  return nodes.map(node => {
-    const isFile = node.nodeType === 'file'
-    const option: TreeOption = {
-      key: node.path,
-      label: node.name,
-      isLeaf: isFile,
-      nodeType: node.nodeType,
-      extension: node.extension,
-      projectId
-    }
-
-    if (!isFile) {
-      if (node.children && node.children.length > 0) {
-        option.children = convertToTreeOptions(node.children, projectId)
-      } else {
-        // 目录节点默认给空 children，避免 Tree 组件进入无 on-load 的加载态
-        option.children = []
-      }
-    }
-
-    return option
-  }) as TreeOption[]
-}
-
-const initProjectTreeData = (projectId: string, force: boolean = false) => {
-  if (!force && projectTreeDataMap.value.has(projectId)) {
-    return
-  }
-
-  const fileTree = projectStore.getProjectFileTree(projectId)
-  if (!fileTree) {
-    projectTreeDataMap.value.delete(projectId)
-    return
-  }
-
-  const treeData = convertToTreeOptions(fileTree, projectId)
-  projectTreeDataMap.value.set(projectId, treeData)
-}
-
-const getProjectTreeData = (projectId: string): TreeOption[] => {
-  initProjectTreeData(projectId)
-  return projectTreeDataMap.value.get(projectId) || []
-}
-
-const getProjectExpandedKeys = (projectId: string): string[] => {
-  const keys = expandedKeysMap.value.get(projectId)
-  return keys ? Array.from(keys) : []
-}
-
-const findTreeNodeByKey = (nodes: TreeOption[], key: string): (TreeOption & { nodeType?: string }) | null => {
-  for (const node of nodes) {
-    if (String(node.key) === key) {
-      return node as (TreeOption & { nodeType?: string })
-    }
-    if (node.children?.length) {
-      const matched = findTreeNodeByKey(node.children as TreeOption[], key)
-      if (matched) {
-        return matched
-      }
-    }
-  }
-  return null
-}
-
-const loadChildrenForNode = async (node: TreeOption): Promise<void> => {
-  const projectId = (node as any).projectId as string
-  const nodePath = node.key as string
-
-  if (!projectId) {
-    return
-  }
-
-  const children = await projectStore.loadDirectoryChildren(nodePath)
-  node.children = children.map(child => {
-    const isFile = child.nodeType === 'file'
-    const option: TreeOption = {
-      key: child.path,
-      label: child.name,
-      isLeaf: isFile,
-      nodeType: child.nodeType,
-      extension: child.extension,
-      projectId: projectId
-    }
-    if (!isFile) {
-      option.children = []
-    }
-    return option
-  }) as TreeOption[]
-}
-
-const handleTreeExpand = async (expandedKeys: string[], projectId: string) => {
-  const previousKeys = expandedKeysMap.value.get(projectId) || new Set<string>()
-  const currentKeys = new Set(expandedKeys)
-  expandedKeysMap.value.set(projectId, currentKeys)
-
-  const justExpandedKeys = expandedKeys.filter(key => !previousKeys.has(key))
-  if (justExpandedKeys.length === 0) {
-    return
-  }
-
-  const treeData = getProjectTreeData(projectId)
-  const targetNodes = justExpandedKeys
-    .map(key => findTreeNodeByKey(treeData, key))
-    .filter((node): node is TreeOption & { nodeType?: string } => !!node)
-    .filter(node => node.nodeType === 'directory' || node.isLeaf === false)
-
-  await Promise.all(targetNodes.map(async node => {
-    try {
-      // 每次展开目录都重新查询目录内容，避免使用历史数据缓存
-      await loadChildrenForNode(node)
-    } catch (error) {
-      console.error('[handleTreeExpand] 加载目录失败:', error)
-    }
-  }))
-}
-
-const handleFileSelect = async (
-  keys: Array<string | number>,
-  options: Array<TreeOption | null> = [],
-  project: Project
-) => {
-  if (!keys.length) {
-    return
-  }
-
-  const selectedPath = String(keys[0])
-  const selectedNodeFromEvent = (options[0] ?? null) as (TreeOption & { nodeType?: string }) | null
-  const selectedNode = selectedNodeFromEvent
-    ?? findTreeNodeByKey(getProjectTreeData(project.id), selectedPath)
-
-  if (selectedNode?.nodeType === 'directory' || selectedNode?.isLeaf === false) {
-    return
-  }
-
+const handleFileSelect = async (selectedPath: string, project: Project) => {
   projectStore.setCurrentProject(project.id)
 
   await fileEditorStore.openFile({
@@ -451,91 +260,6 @@ const handleFileSelect = async (
     projectPath: project.path,
     filePath: selectedPath
   })
-}
-
-// 自定义节点渲染
-const renderTreeLabel = ({ option }: TreeRenderProps) => {
-  const nodeType = (option as any).nodeType as string
-  const fileName = option.label as string
-  const extension = (option as any).extension as string | undefined
-  const iconMeta = resolveFileIcon(nodeType, fileName, extension)
-
-  return h('div', { class: 'file-tree-node__content' }, [
-    h(EaIcon, {
-      name: iconMeta.icon,
-      size: 14,
-      class: 'file-tree-node__icon',
-      style: { color: iconMeta.color }
-    }),
-    h('span', { class: 'file-tree-node__name' }, fileName)
-  ])
-}
-
-const refreshProjectFileTree = async (project: Project) => {
-  await projectStore.refreshFileTree(project.id, project.path)
-  initProjectTreeData(project.id, true)
-  if (!expandedKeysMap.value.has(project.id)) {
-    expandedKeysMap.value.set(project.id, new Set())
-  }
-}
-
-const scheduleProjectTreeRefresh = (project: Project) => {
-  const oldTimer = projectRefreshTimerMap.value.get(project.id)
-  if (oldTimer) {
-    clearTimeout(oldTimer)
-  }
-
-  const timer = setTimeout(async () => {
-    projectRefreshTimerMap.value.delete(project.id)
-
-    if (!projectStore.isProjectExpanded(project.id)) {
-      return
-    }
-
-    await refreshProjectFileTree(project)
-  }, 250)
-
-  projectRefreshTimerMap.value.set(project.id, timer)
-}
-
-const stopProjectWatcher = (projectId: string) => {
-  const timer = projectRefreshTimerMap.value.get(projectId)
-  if (timer) {
-    clearTimeout(timer)
-    projectRefreshTimerMap.value.delete(projectId)
-  }
-
-  const unwatch = projectWatcherMap.value.get(projectId)
-  if (unwatch) {
-    unwatch()
-    projectWatcherMap.value.delete(projectId)
-  }
-}
-
-const stopAllProjectWatchers = () => {
-  Array.from(projectWatcherMap.value.keys()).forEach(stopProjectWatcher)
-}
-
-const startProjectWatcher = async (project: Project) => {
-  stopProjectWatcher(project.id)
-
-  try {
-    const unwatch = await startFsWatcher(
-      project.path,
-      () => {
-        scheduleProjectTreeRefresh(project)
-      },
-      {
-        recursive: true,
-        delayMs: 300
-      }
-    )
-    if (unwatch) {
-      projectWatcherMap.value.set(project.id, unwatch)
-    }
-  } catch (error) {
-    console.error('[UnifiedPanel] 启动目录监听失败:', error)
-  }
 }
 </script>
 
@@ -696,11 +420,7 @@ const startProjectWatcher = async (project: Project) => {
           :current-session-id="sessionStore.currentSessionId"
           :editing-session-id="editingSessionId"
           :editing-session-name="editingSessionName"
-          :is-file-tree-loading="projectStore.isFileTreeLoading(project.id)"
-          :tree-data="getProjectTreeData(project.id)"
-          :expanded-keys="getProjectExpandedKeys(project.id)"
           :imported-time-label="formatImportTime(project.createdAt)"
-          :render-tree-label="renderTreeLabel"
           @toggle-project="handleProjectCardClick"
           @edit-project="handleEditProject"
           @delete-project="handleDeleteProject"
@@ -714,7 +434,6 @@ const startProjectWatcher = async (project: Project) => {
           @cancel-edit-session="cancelEditSessionName"
           @delete-session="handleDeleteSession"
           @update-editing-name="editingSessionName = $event"
-          @expand-tree="handleTreeExpand"
           @select-file="handleFileSelect"
         />
       </div>

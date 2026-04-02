@@ -1871,7 +1871,8 @@ export function useConversationComposer(options: UseConversationComposerOptions)
   const retryMessage = async (
     messageId: string,
     content: string,
-    attachments: MessageAttachment[] = []
+    attachments: MessageAttachment[] = [],
+    replaceMessageId?: string
   ) => {
     const sessionId = currentSessionId.value
     const normalizedContent = content.trim()
@@ -1899,6 +1900,11 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       if (!expert) {
         throw new Error('未找到可用专家')
       }
+
+      if (replaceMessageId && replaceMessageId !== messageId) {
+        await messageStore.deleteMessage(replaceMessageId)
+      }
+
       await conversationService.sendMessage(
         sessionId,
         normalizedContent,
