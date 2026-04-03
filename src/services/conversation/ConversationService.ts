@@ -299,8 +299,8 @@ export class ConversationService {
 
       const injectedSystemMessages = [
         ...sessionScopedInjectedSystemMessages,
-        buildMainConversationFormRequestPrompt(),
-        ...(projectMemoryPrompt ? [projectMemoryPrompt] : [])
+        ...(projectMemoryPrompt ? [projectMemoryPrompt] : []),
+        buildMainConversationFormRequestPrompt()
       ]
 
       const session = sessionStore.sessions.find(s => s.id === sessionId)

@@ -429,23 +429,30 @@ const sortedToolCalls = computed(() => {
 const toggleToolCallsExpanded = () => {
   areToolCallsExpanded.value = !areToolCallsExpanded.value
 }
+const assistantStructuredBlocks = computed(() => {
+  if (!isAssistant.value) {
+    return []
+  }
+
+  return parseStructuredContent(props.message.content)
+})
+
+const assistantFormBlocks = computed(() => {
+  return assistantStructuredBlocks.value
+    .filter(block => block.type === 'form')
+})
+
 const isAssistantFormOnly = computed(() => {
   if (!isAssistant.value) {
     return false
   }
 
-  const blocks = parseStructuredContent(props.message.content)
+  const blocks = assistantStructuredBlocks.value
   return blocks.length > 0 && blocks.every(block => block.type === 'form')
 })
 
 const assistantFormIds = computed(() => {
-  if (!isAssistantFormOnly.value) {
-    return []
-  }
-
-  return parseStructuredContent(props.message.content)
-    .filter(block => block.type === 'form')
-    .map(block => block.formSchema.formId)
+  return assistantFormBlocks.value.map(block => block.formSchema.formId)
 })
 
 const resolvedFormResponse = computed(() => {

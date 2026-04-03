@@ -41,6 +41,14 @@ let flushTimer: ReturnType<typeof setTimeout> | null = null
 let queuedWrite = ''
 let writeChain = Promise.resolve()
 
+function isBackspaceInput(data: string) {
+  return data === '\u007F' || data === '\u0008'
+}
+
+function isEnterInput(data: string) {
+  return data === '\r' || data === '\n'
+}
+
 function isPrintableInput(data: string) {
   return Array.from(data).every((character) => {
     const code = character.charCodeAt(0)
@@ -139,10 +147,10 @@ async function handleTerminalInput(data: string) {
     return
   }
 
-  if (data === '\r') {
+  if (isEnterInput(data)) {
     terminalStore.rememberCommand(props.tab.projectId, inputBuffer.value)
     resetSuggestionState()
-    await queueWrite(data, true)
+    await queueWrite('\r', true)
     return
   }
 
@@ -152,12 +160,12 @@ async function handleTerminalInput(data: string) {
     return
   }
 
-  if (data === '\u007F') {
+  if (isBackspaceInput(data)) {
     if (canSuggest.value && inputBuffer.value.length > 0) {
       inputBuffer.value = inputBuffer.value.slice(0, -1)
       refreshSuggestion()
     }
-    await queueWrite(data, true)
+    await queueWrite('\u007F', true)
     return
   }
 
@@ -220,6 +228,20 @@ onMounted(async () => {
     scrollback: 5000,
     convertEol: false,
     theme: createTerminalTheme()
+  })
+
+  // 打包态 WebView 对 Backspace/Tab 的默认行为不稳定，这里显式拦截，统一交给 xterm 处理。
+  xterm.attachCustomKeyEventHandler((event) => {
+    if (event.type !== 'keydown') {
+      return true
+    }
+
+    if (event.key === 'Backspace' || event.key === 'Tab') {
+      event.preventDefault()
+      event.stopPropagation()
+    }
+
+    return true
   })
 
   fitAddon = new FitAddon()
