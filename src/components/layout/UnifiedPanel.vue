@@ -194,8 +194,9 @@ const handleAddSession = async (projectId: string) => {
       status: 'idle'
     })
     projectStore.incrementSessionCount(projectId)
+    uiStore.setAppMode('chat')
     uiStore.setMainContentMode('chat')
-    sessionStore.openSession(newSession.id)
+    await sessionStore.openSession(newSession.id)
   } catch (error) {
     console.error('[UnifiedPanel] 创建会话失败:', error)
   }

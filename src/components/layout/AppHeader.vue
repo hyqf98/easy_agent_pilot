@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { invoke } from '@tauri-apps/api/core'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useThemeStore } from '@/stores/theme'
 import { useUIStore } from '@/stores/ui'
 import { useProjectStore } from '@/stores/project'
@@ -23,6 +25,22 @@ function handleLogoClick() {
   projectStore.setCurrentProject(null)
   sessionStore.setCurrentSession(null)
 }
+
+/**
+ * 切换迷你面板显示状态
+ * - 复用 Tauri 侧现有的 mini panel 显示/隐藏命令
+ * - 失败时只记录日志，避免影响主窗口交互
+ */
+async function handleToggleMiniPanel() {
+  try {
+    const isMiniPanelVisible = await invoke<boolean>('toggle_mini_panel')
+    if (isMiniPanelVisible) {
+      await getCurrentWindow().hide()
+    }
+  } catch (error) {
+    console.error('Failed to toggle mini panel:', error)
+  }
+}
 </script>
 
 <template>
@@ -41,6 +59,17 @@ function handleLogoClick() {
     </div>
 
     <div class="app-header__right">
+      <button
+        class="header-btn"
+        title="切换迷你面板"
+        @click="handleToggleMiniPanel"
+      >
+        <EaIcon
+          name="panel-left-open"
+          :size="18"
+        />
+      </button>
+
       <!-- 主题切换 -->
       <button
         class="header-btn"

@@ -53,9 +53,24 @@ const isPlanModeActive = () => {
   return uiStore.appMode === 'plan'
 }
 
+// 切换 SOLO 模式
+const toggleSoloMode = () => {
+  if (uiStore.appMode === 'solo') {
+    uiStore.setAppMode('chat')
+  } else {
+    uiStore.setAppMode('solo')
+    layoutStore.closePanel()
+  }
+}
+
 // 判断记忆模式是否激活
 const isMemoryModeActive = () => {
   return uiStore.appMode === 'memory'
+}
+
+// 判断 SOLO 模式是否激活
+const isSoloModeActive = () => {
+  return uiStore.appMode === 'solo'
 }
 </script>
 
@@ -100,6 +115,23 @@ const isMemoryModeActive = () => {
         <!-- 激活指示器 -->
         <span
           v-if="isPlanModeActive()"
+          class="nav-item__indicator"
+        />
+      </button>
+
+      <button
+        :class="['nav-item', 'nav-item--solo', { 'nav-item--active': isSoloModeActive() }]"
+        title="SOLO 模式"
+        @click="toggleSoloMode"
+      >
+        <EaIcon
+          name="sparkles"
+          :size="20"
+          class="nav-item__icon"
+        />
+        <span class="nav-item__label">SOLO</span>
+        <span
+          v-if="isSoloModeActive()"
           class="nav-item__indicator"
         />
       </button>
@@ -226,6 +258,10 @@ const isMemoryModeActive = () => {
 }
 
 .nav-item--memory {
+  margin-top: var(--spacing-1);
+}
+
+.nav-item--solo {
   margin-top: var(--spacing-1);
 }
 

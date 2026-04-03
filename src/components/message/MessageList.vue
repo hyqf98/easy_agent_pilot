@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import { useSessionExecutionStore } from '@/stores/sessionExecution'
+import { useUIStore } from '@/stores/ui'
 import { EaIcon } from '@/components/common'
 import MessageBubble from './MessageBubble.vue'
 import type { Message } from '@/stores/message'
@@ -14,10 +15,18 @@ interface VirtualMessageItem {
   height: number
 }
 
+interface SessionScrollSnapshot {
+  scrollTop: number
+  isAtBottom: boolean
+}
+
+const sessionScrollSnapshots = new Map<string, SessionScrollSnapshot>()
+
 const { t } = useI18n()
 const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
 const sessionExecutionStore = useSessionExecutionStore()
+const uiStore = useUIStore()
 
 const props = withDefaults(defineProps<{
   sessionId?: string
@@ -77,6 +86,14 @@ const currentIsSending = computed(() => {
   const targetSessionId = props.sessionId || sessionStore.currentSessionId
   if (!targetSessionId) return false
   return sessionExecutionStore.getIsSending(targetSessionId)
+})
+
+const isListVisible = computed(() => {
+  if (props.sessionId) {
+    return true
+  }
+
+  return uiStore.appMode === 'chat'
 })
 
 const shouldVirtualize = computed(() =>
@@ -180,6 +197,47 @@ const visibleMessages = computed(() => {
   return messageLayout.value.slice(virtualWindow.value.start, virtualWindow.value.end)
 })
 
+const resolveTargetSessionId = () => props.sessionId || sessionStore.currentSessionId
+
+const saveScrollSnapshot = (sessionId?: string | null) => {
+  if (!sessionId || !listRef.value) return
+  const { scrollTop, scrollHeight, clientHeight } = listRef.value
+  const isAtBottom = scrollHeight - scrollTop - clientHeight < SCROLL_THRESHOLD
+  sessionScrollSnapshots.set(sessionId, {
+    scrollTop,
+    isAtBottom
+  })
+}
+
+const restoreScrollSnapshot = async (sessionId?: string | null) => {
+  if (!sessionId || !listRef.value) return
+
+  const savedSnapshot = sessionScrollSnapshots.get(sessionId)
+  if (!savedSnapshot) {
+    showScrollToBottom.value = false
+    scrollToBottom(false)
+    return
+  }
+
+  await nextTick()
+
+  if (!listRef.value) return
+
+  if (savedSnapshot.isAtBottom) {
+    isUserAtBottom.value = true
+    showScrollToBottom.value = false
+    scrollToBottom(false)
+    updateViewportMetrics()
+    return
+  }
+
+  const maxScrollTop = Math.max(0, listRef.value.scrollHeight - listRef.value.clientHeight)
+  listRef.value.scrollTop = Math.min(savedSnapshot.scrollTop, maxScrollTop)
+  updateViewportMetrics()
+  isUserAtBottom.value = checkIsAtBottom()
+  showScrollToBottom.value = !isUserAtBottom.value
+}
+
 const checkIsAtBottom = () => {
   if (!listRef.value) return true
   const { scrollTop, scrollHeight, clientHeight } = listRef.value
@@ -204,7 +262,8 @@ const handleScroll = () => {
     isUserAtBottom.value = checkIsAtBottom()
     showScrollToBottom.value = !isUserAtBottom.value
 
-    const targetSessionId = props.sessionId || sessionStore.currentSessionId
+    const targetSessionId = resolveTargetSessionId()
+    saveScrollSnapshot(targetSessionId)
     if (checkIsAtTop() && hasMoreMessages.value && !isLoadingMore.value && targetSessionId) {
       savedScrollHeight.value = listRef.value?.scrollHeight ?? 0
       void messageStore.loadMoreMessages(targetSessionId)
@@ -263,17 +322,35 @@ const bindMessageElement = (messageId: string, element: Element | null) => {
   resizeObservers.set(messageId, observer)
 }
 
-watch(() => props.sessionId || sessionStore.currentSessionId, async (sessionId) => {
+watch(() => resolveTargetSessionId(), async (sessionId, previousSessionId) => {
+  saveScrollSnapshot(previousSessionId)
   if (sessionId) {
-    isUserAtBottom.value = true
+    const savedSnapshot = sessionScrollSnapshots.get(sessionId)
+    isUserAtBottom.value = savedSnapshot?.isAtBottom ?? true
     previousMessageCount.value = 0
     messageHeights.value = {}
     await messageStore.loadMessages(sessionId)
-    await nextTick()
-    updateViewportMetrics()
-    scrollToBottom(false)
+    if (!isListVisible.value) {
+      return
+    }
+
+    await restoreScrollSnapshot(sessionId)
   }
 }, { immediate: true })
+
+watch(isListVisible, async (visible, wasVisible) => {
+  const targetSessionId = resolveTargetSessionId()
+  if (!targetSessionId) return
+
+  if (!visible) {
+    saveScrollSnapshot(targetSessionId)
+    return
+  }
+
+  if (wasVisible === false) {
+    await restoreScrollSnapshot(targetSessionId)
+  }
+})
 
 watch(latestMessageActivity, async () => {
   const messages = currentMessages.value
@@ -294,6 +371,10 @@ watch(latestMessageActivity, async () => {
 
   previousMessageCount.value = currentCount
 
+  if (!isListVisible.value) {
+    return
+  }
+
   await nextTick()
   updateViewportMetrics()
 
@@ -311,6 +392,10 @@ watch(latestMessageActivity, async () => {
 
 watch(currentIsSending, async (sending, wasSending) => {
   if (!sending || wasSending) {
+    return
+  }
+
+  if (!isListVisible.value) {
     return
   }
 
@@ -344,6 +429,10 @@ watch(totalMessageHeight, async (currentHeight, previousHeight) => {
     return
   }
 
+  if (!isListVisible.value) {
+    return
+  }
+
   await nextTick()
   updateViewportMetrics()
 
@@ -361,6 +450,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  saveScrollSnapshot(resolveTargetSessionId())
   if (listRef.value) {
     listRef.value.removeEventListener('scroll', handleScroll)
   }

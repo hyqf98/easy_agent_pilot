@@ -41,6 +41,7 @@ pub mod session;
 pub mod settings;
 pub mod skill_plugin;
 pub mod skills_market;
+pub mod solo;
 pub mod support;
 pub mod task;
 pub mod task_execution;

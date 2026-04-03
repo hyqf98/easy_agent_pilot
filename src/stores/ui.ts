@@ -18,7 +18,7 @@ export type SettingsTab =
   | 'sessions'
   | 'unattended'
 
-export type AppMode = 'chat' | 'plan' | 'memory'
+export type AppMode = 'chat' | 'plan' | 'solo' | 'memory'
 export type MainContentMode = 'chat' | 'fileEditor'
 
 export const useUIStore = defineStore('ui', () => {
@@ -76,8 +76,8 @@ export const useUIStore = defineStore('ui', () => {
   }
 
   function toggleAppMode() {
-    // 循环切换: chat -> plan -> memory -> chat
-    const modes: AppMode[] = ['chat', 'plan', 'memory']
+    // 循环切换: chat -> plan -> solo -> memory -> chat
+    const modes: AppMode[] = ['chat', 'plan', 'solo', 'memory']
     const currentIndex = modes.indexOf(appMode.value)
     appMode.value = modes[(currentIndex + 1) % modes.length]
   }

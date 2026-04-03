@@ -3,14 +3,14 @@ import type { AgentConfig } from '@/stores/agent'
 import { resolveAgentRuntimeProfile, type AgentRuntimeKey } from './runtimeProfiles'
 
 export interface RuntimeBindingRecord {
-  runtimeKey: AgentRuntimeKey
+  runtimeKey: string
   externalSessionId: string
   createdAt: string
   updatedAt: string
 }
 
 interface RawRuntimeBindingRecord {
-  runtime_key: AgentRuntimeKey
+  runtime_key: string
   external_session_id: string
   created_at: string
   updated_at: string
@@ -89,6 +89,38 @@ export async function deleteTaskRuntimeBinding(
   runtimeKey: AgentRuntimeKey
 ): Promise<void> {
   await invoke('delete_task_runtime_binding', { taskId, runtimeKey })
+}
+
+export async function getSoloRuntimeBinding(
+  runId: string,
+  runtimeKey: string
+): Promise<RuntimeBindingRecord | null> {
+  const record = await invoke<RawRuntimeBindingRecord | null>('get_solo_runtime_binding', {
+    runId,
+    runtimeKey
+  })
+  return record ? transformRuntimeBindingRecord(record) : null
+}
+
+export async function upsertSoloRuntimeBinding(
+  runId: string,
+  runtimeKey: string,
+  externalSessionId: string
+): Promise<void> {
+  await invoke('upsert_solo_runtime_binding', {
+    input: {
+      run_id: runId,
+      runtime_key: runtimeKey,
+      external_session_id: externalSessionId
+    }
+  })
+}
+
+export async function deleteSoloRuntimeBinding(
+  runId: string,
+  runtimeKey: string
+): Promise<void> {
+  await invoke('delete_solo_runtime_binding', { runId, runtimeKey })
 }
 
 export function isInvalidCliResumeError(

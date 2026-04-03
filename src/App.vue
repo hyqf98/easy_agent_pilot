@@ -228,6 +228,7 @@ onMounted(async () => {
 
       if (projectExists) {
         projectStore.setCurrentProject(appStateStore.lastProjectId)
+        await sessionStore.loadSessions(appStateStore.lastProjectId, { force: true })
 
         for (const sessionId of appStateStore.lastSessionIds) {
           await sessionStore.openSession(sessionId)

@@ -298,6 +298,87 @@ const INIT_SQL: &str = r#"
     CREATE INDEX IF NOT EXISTS idx_plans_project ON plans(project_id);
     CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
 
+    CREATE TABLE IF NOT EXISTS solo_runs (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        execution_path TEXT NOT NULL DEFAULT '',
+        name TEXT NOT NULL,
+        requirement TEXT NOT NULL,
+        goal TEXT NOT NULL,
+        participant_expert_ids_json TEXT NOT NULL DEFAULT '[]',
+        coordinator_expert_id TEXT,
+        coordinator_agent_id TEXT,
+        coordinator_model_id TEXT,
+        max_dispatch_depth INTEGER NOT NULL DEFAULT 3,
+        current_depth INTEGER NOT NULL DEFAULT 0,
+        current_step_id TEXT,
+        status TEXT NOT NULL DEFAULT 'draft',
+        execution_status TEXT NOT NULL DEFAULT 'idle',
+        last_error TEXT,
+        input_request_json TEXT,
+        input_response_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_at TEXT,
+        completed_at TEXT,
+        stopped_at TEXT,
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_solo_runs_project ON solo_runs(project_id);
+    CREATE INDEX IF NOT EXISTS idx_solo_runs_status ON solo_runs(status);
+
+    CREATE TABLE IF NOT EXISTS solo_steps (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        step_ref TEXT NOT NULL,
+        parent_step_ref TEXT,
+        depth INTEGER NOT NULL DEFAULT 1,
+        title TEXT NOT NULL,
+        description TEXT,
+        execution_prompt TEXT,
+        selected_expert_id TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        summary TEXT,
+        result_summary TEXT,
+        result_files_json TEXT,
+        fail_reason TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_at TEXT,
+        completed_at TEXT,
+        FOREIGN KEY (run_id) REFERENCES solo_runs(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_solo_steps_run ON solo_steps(run_id, created_at ASC);
+    CREATE INDEX IF NOT EXISTS idx_solo_steps_status ON solo_steps(status);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_solo_steps_run_ref ON solo_steps(run_id, step_ref);
+
+    CREATE TABLE IF NOT EXISTS solo_logs (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        step_id TEXT,
+        scope TEXT NOT NULL,
+        log_type TEXT NOT NULL,
+        content TEXT NOT NULL,
+        metadata TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (run_id) REFERENCES solo_runs(id) ON DELETE CASCADE,
+        FOREIGN KEY (step_id) REFERENCES solo_steps(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_solo_logs_run ON solo_logs(run_id, created_at ASC);
+    CREATE INDEX IF NOT EXISTS idx_solo_logs_step ON solo_logs(step_id, created_at ASC);
+
+    CREATE TABLE IF NOT EXISTS solo_runtime_bindings (
+        run_id TEXT NOT NULL,
+        runtime_key TEXT NOT NULL,
+        external_session_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (run_id, runtime_key),
+        FOREIGN KEY (run_id) REFERENCES solo_runs(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_solo_runtime_bindings_runtime
+        ON solo_runtime_bindings(runtime_key, updated_at DESC);
+
     -- 任务�?(Plan Mode)
     CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY,
@@ -746,6 +827,24 @@ pub fn init_database() -> Result<()> {
                 println!("Unified agent migration warning: {}", e);
             }
         }
+    }
+
+    if !table_has_column(&conn, "solo_runs", "participant_expert_ids_json")? {
+        conn.execute(
+            "ALTER TABLE solo_runs ADD COLUMN participant_expert_ids_json TEXT NOT NULL DEFAULT '[]'",
+            [],
+        )?;
+    }
+
+    if !table_has_column(&conn, "solo_runs", "execution_path")? {
+        conn.execute(
+            "ALTER TABLE solo_runs ADD COLUMN execution_path TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+        conn.execute(
+            "UPDATE solo_runs SET execution_path = COALESCE((SELECT path FROM projects WHERE projects.id = solo_runs.project_id), '') WHERE execution_path = ''",
+            [],
+        )?;
     }
 
     // skills 表添加新字段（从市场安装�?skills�?

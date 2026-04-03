@@ -11,7 +11,10 @@ const activeTabDescriptor = computed(() => getSettingsTabDescriptor(uiStore.acti
   <div
     :class="[
       'settings-content',
-      { 'settings-content--full': activeTabDescriptor.layout === 'full' }
+      {
+        'settings-content--wide': activeTabDescriptor.layout === 'wide',
+        'settings-content--full': activeTabDescriptor.layout === 'full'
+      }
     ]"
   >
     <component
@@ -19,6 +22,12 @@ const activeTabDescriptor = computed(() => getSettingsTabDescriptor(uiStore.acti
       v-if="activeTabDescriptor.layout === 'full'"
       class="settings-content__full"
     />
+    <div
+      v-else-if="activeTabDescriptor.layout === 'wide'"
+      class="settings-content__wide"
+    >
+      <component :is="activeTabDescriptor.component" />
+    </div>
     <div
       v-else
       class="settings-content__inner"
@@ -48,9 +57,18 @@ const activeTabDescriptor = computed(() => getSettingsTabDescriptor(uiStore.acti
   overflow: hidden;
 }
 
+.settings-content--wide {
+  justify-content: stretch;
+}
+
 .settings-content__inner {
   max-width: 640px;
   width: 100%;
+}
+
+.settings-content__wide {
+  width: 100%;
+  min-width: 0;
 }
 
 .settings-content__full {

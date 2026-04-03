@@ -4,7 +4,7 @@ export type AgentCliUsageProviderFilter = 'all' | 'claude' | 'codex'
 
 export interface RecordAgentCliUsageInput {
   executionId: string
-  executionMode: 'chat' | 'task_split' | 'task_execution'
+  executionMode: 'chat' | 'task_split' | 'task_execution' | 'solo_execution'
   provider: 'claude' | 'codex'
   agentId?: string | null
   agentNameSnapshot?: string | null

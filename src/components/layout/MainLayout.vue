@@ -13,6 +13,7 @@ import PanelResizer from './PanelResizer.vue'
 import WelcomePage from './WelcomePage.vue'
 import { PlanModePanel } from '@/components/plan'
 import { MemoryModePanel } from '@/components/memory'
+import { SoloModePanel } from '@/components/solo'
 import { FileEditorWorkspace } from '@/modules/file-editor'
 
 const layoutStore = useLayoutStore()
@@ -84,26 +85,34 @@ watch(
 
       <!-- 主体区域 -->
       <div class="main-layout__body">
-        <!-- 计划模式：全屏显示计划面板 -->
-        <template v-if="uiStore.appMode === 'plan'">
-          <SideNavRail />
-          <PlanModePanel class="main-layout__plan-panel" />
-        </template>
+        <SideNavRail />
 
-        <!-- 记忆模式：全屏显示记忆面板 -->
-        <template v-else-if="uiStore.appMode === 'memory'">
-          <SideNavRail />
-          <MemoryModePanel class="main-layout__memory-panel" />
-        </template>
+        <div
+          v-show="uiStore.appMode === 'plan'"
+          class="main-layout__plan-panel"
+        >
+          <PlanModePanel />
+        </div>
 
-        <!-- 普通会话模式 -->
-        <template v-else>
-          <!-- 左侧导航栏 -->
-          <SideNavRail />
+        <div
+          v-show="uiStore.appMode === 'solo'"
+          class="main-layout__solo-panel"
+        >
+          <SoloModePanel />
+        </div>
 
-          <!-- 左侧面板区域（条件渲染） -->
+        <div
+          v-show="uiStore.appMode === 'memory'"
+          class="main-layout__memory-panel"
+        >
+          <MemoryModePanel />
+        </div>
+
+        <div
+          v-show="uiStore.appMode === 'chat'"
+          class="main-layout__chat-shell"
+        >
           <template v-if="layoutStore.isPanelOpen">
-            <!-- 面板容器 -->
             <div
               class="main-layout__panel"
               :style="{ width: `${layoutStore.panelWidth}px` }"
@@ -111,7 +120,6 @@ watch(
               <PanelContainer />
             </div>
 
-            <!-- 面板拖拽器 -->
             <PanelResizer
               direction="right"
               :min-width="PANEL_LIMITS.panel.minWidth"
@@ -122,7 +130,6 @@ watch(
             />
           </template>
 
-          <!-- 消息区域 -->
           <div class="main-layout__main">
             <template v-if="uiStore.mainContentMode === 'chat'">
               <SessionTabs />
@@ -133,7 +140,7 @@ watch(
               class="main-layout__file-editor"
             />
           </div>
-        </template>
+        </div>
       </div>
 
       <BottomTerminalPanel />
@@ -162,6 +169,14 @@ watch(
   overflow: hidden;
 }
 
+.main-layout__chat-shell {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .main-layout__panel {
   flex-shrink: 0;
   min-width: 0;
@@ -186,10 +201,18 @@ watch(
 .main-layout__plan-panel {
   flex: 1;
   min-width: 0;
+  min-height: 0;
 }
 
 .main-layout__memory-panel {
   flex: 1;
   min-width: 0;
+  min-height: 0;
+}
+
+.main-layout__solo-panel {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
 }
 </style>

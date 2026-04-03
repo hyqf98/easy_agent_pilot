@@ -120,7 +120,7 @@ const handleSearchInput = (value: string) => {
 // 手动刷新会话列表
 const handleRefreshSessions = () => {
   if (projectStore.currentProjectId) {
-    sessionStore.loadSessions(projectStore.currentProjectId)
+    sessionStore.loadSessions(projectStore.currentProjectId, { force: true })
   }
 }
 
@@ -132,11 +132,13 @@ watch(() => projectStore.currentProjectId, async (projectId, oldProjectId) => {
   }
 
   if (projectId) {
-    await sessionStore.loadSessions(projectId)
+    await sessionStore.loadSessions(projectId, { force: true })
     // 自动选中第一个会话（添加到打开列表）
     const sessions = sessionStore.sessionsByProject(projectId)
     if (sessions.length > 0) {
-      sessionStore.openSession(sessions[0].id)
+      uiStore.setAppMode('chat')
+      uiStore.setMainContentMode('chat')
+      await sessionStore.openSession(sessions[0].id)
     }
   }
 }, { immediate: true })
@@ -147,7 +149,7 @@ onMounted(() => {
   searchInput.value = sessionStore.searchQuery
 
   if (projectStore.currentProjectId) {
-    sessionStore.loadSessions(projectStore.currentProjectId)
+    sessionStore.loadSessions(projectStore.currentProjectId, { force: true })
   }
   // 添加 ESC 键关闭模态框
   document.addEventListener('keydown', handleModalKeydown)
@@ -207,7 +209,9 @@ const handleAdd = async () => {
     })
     projectStore.incrementSessionCount(projectStore.currentProjectId)
     // 自动选中新创建的会话（添加到打开列表）
-    sessionStore.openSession(newSession.id)
+    uiStore.setAppMode('chat')
+    uiStore.setMainContentMode('chat')
+    await sessionStore.openSession(newSession.id)
   } catch (error) {
     // 错误已在 sessionStore.createSession 中处理并显示通知
     console.error('Session creation failed in component:', error)
@@ -267,7 +271,9 @@ const handleCreateSession = async (name: string) => {
     newSessionName.value = ''
     uiStore.closeSessionCreateModal()
     // 自动选中新创建的会话（添加到打开列表）
-    sessionStore.openSession(newSession.id)
+    uiStore.setAppMode('chat')
+    uiStore.setMainContentMode('chat')
+    await sessionStore.openSession(newSession.id)
   } catch (error) {
     // 错误已在 sessionStore.createSession 中处理并显示通知
     // 这里只需阻止错误继续传播，避免未处理的 Promise rejection

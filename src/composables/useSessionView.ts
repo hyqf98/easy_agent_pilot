@@ -27,7 +27,7 @@ export function useSessionView() {
       projectStore.setCurrentProject(session.projectId)
       projectStore.expandProject(session.projectId)
       layoutStore.setProjectTab(session.projectId, 'sessions')
-      await sessionStore.loadSessions(session.projectId)
+      await sessionStore.loadSessions(session.projectId, { force: true })
     }
 
     if (session?.agentType === 'planner') {
@@ -49,7 +49,9 @@ export function useSessionView() {
       return
     }
 
-    sessionStore.openSession(id)
+    uiStore.setAppMode('chat')
+    uiStore.setMainContentMode('chat')
+    await sessionStore.openSession(id)
   }
 
   function getStatusIcon(status: SessionStatus) {

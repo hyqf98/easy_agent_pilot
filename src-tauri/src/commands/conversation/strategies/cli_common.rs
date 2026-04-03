@@ -133,6 +133,8 @@ pub fn timeout_config_for_execution_mode(execution_mode: Option<&str>) -> CliTim
         Some("task_split") => CliTimeoutConfig::from_secs(600, 1_800, 14_400),
         // 计划任务执行经常伴随大规模读写、构建和测试，保留更长的 idle/hard 窗口。
         Some("task_execution") => CliTimeoutConfig::from_secs(600, 3_600, 28_800),
+        // SOLO 协调执行会在结构化调度和真实执行间循环切换，按任务执行级别保留最长预算。
+        Some("solo_execution") => CliTimeoutConfig::from_secs(600, 3_600, 28_800),
         _ => CliTimeoutConfig::default(),
     }
 }

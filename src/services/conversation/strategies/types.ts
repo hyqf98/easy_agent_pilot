@@ -53,7 +53,7 @@ export interface ConversationContext {
   /** 工作目录 */
   workingDirectory?: string
   mcpServers?: McpServerConfig[]
-  executionMode?: 'chat' | 'task_split' | 'task_execution'
+  executionMode?: 'chat' | 'task_split' | 'task_execution' | 'solo_execution'
   responseMode?: 'stream_text' | 'json_once'
   cliOutputFormat?: 'text' | 'json' | 'stream-json'
   jsonSchema?: string
@@ -197,7 +197,7 @@ export interface ExecutionRequest {
   jsonSchema?: string
   extraCliArgs?: string[]
   mcpServers?: McpServerConfig[]
-  executionMode?: 'chat' | 'task_split' | 'task_execution'
+  executionMode?: 'chat' | 'task_split' | 'task_execution' | 'solo_execution'
   responseMode?: 'stream_text' | 'json_once'
   resumeSessionId?: string
 }

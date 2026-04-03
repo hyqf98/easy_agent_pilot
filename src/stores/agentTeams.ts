@@ -91,6 +91,9 @@ export const useAgentTeamsStore = defineStore('agentTeams', () => {
   const builtinGeneralExpert = computed(() =>
     experts.value.find(expert => expert.builtinCode === 'builtin-general') || null
   )
+  const builtinSoloCoordinatorExpert = computed(() =>
+    experts.value.find(expert => expert.builtinCode === 'builtin-solo-coordinator') || null
+  )
   const builtinPlannerExpert = computed(() =>
     experts.value.find(expert => expert.builtinCode === 'builtin-planner') || null
   )
@@ -239,6 +242,7 @@ export const useAgentTeamsStore = defineStore('agentTeams', () => {
     selectedExpertId,
     selectedExpert,
     builtinGeneralExpert,
+    builtinSoloCoordinatorExpert,
     builtinPlannerExpert,
     builtinDeveloperExpert,
     builtinArchitectExpert,

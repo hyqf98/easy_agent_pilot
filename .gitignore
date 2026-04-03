@@ -27,3 +27,4 @@ dist-ssr
 .tmp/
 .local/
 .codex-temp/
+.playwright-mcp/

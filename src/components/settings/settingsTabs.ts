@@ -20,7 +20,7 @@ export interface SettingsTabDescriptor {
   labelKey: string
   icon: string
   component: Component
-  layout: 'default' | 'full'
+  layout: 'default' | 'wide' | 'full'
 }
 
 export const SETTINGS_TAB_DESCRIPTORS: SettingsTabDescriptor[] = [
@@ -29,14 +29,14 @@ export const SETTINGS_TAB_DESCRIPTORS: SettingsTabDescriptor[] = [
     labelKey: 'settings.nav.general',
     icon: 'settings',
     component: markRaw(GeneralSettings),
-    layout: 'default'
+    layout: 'wide'
   },
   {
     id: 'agents',
     labelKey: 'settings.nav.agents',
     icon: 'bot',
     component: markRaw(AgentSettings),
-    layout: 'default'
+    layout: 'wide'
   },
   {
     id: 'agentTeams',
@@ -71,35 +71,35 @@ export const SETTINGS_TAB_DESCRIPTORS: SettingsTabDescriptor[] = [
     labelKey: 'settings.nav.providerSwitch',
     icon: 'repeat',
     component: markRaw(ProviderSwitch),
-    layout: 'default'
+    layout: 'wide'
   },
   {
     id: 'sessions',
     labelKey: 'settings.nav.sessions',
     icon: 'history',
     component: markRaw(SessionManagementSettings),
-    layout: 'default'
+    layout: 'wide'
   },
   {
     id: 'theme',
     labelKey: 'settings.nav.theme',
     icon: 'palette',
     component: markRaw(ThemeSettings),
-    layout: 'default'
+    layout: 'wide'
   },
   {
     id: 'lsp',
     labelKey: 'settings.nav.lsp',
     icon: 'languages',
     component: markRaw(LspSettings),
-    layout: 'default'
+    layout: 'wide'
   },
   {
     id: 'data',
     labelKey: 'settings.nav.data',
     icon: 'database',
     component: markRaw(DataSettings),
-    layout: 'default'
+    layout: 'wide'
   },
   {
     id: 'logs',
@@ -113,7 +113,7 @@ export const SETTINGS_TAB_DESCRIPTORS: SettingsTabDescriptor[] = [
     labelKey: 'settings.nav.appUpdate',
     icon: 'download',
     component: markRaw(AppUpdateSettings),
-    layout: 'default'
+    layout: 'wide'
   },
   {
     id: 'usageStats',

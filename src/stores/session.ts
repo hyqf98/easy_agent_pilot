@@ -459,6 +459,19 @@ export const useSessionStore = defineStore('session', () => {
 
   // 打开会话（添加到标签栏）
   async function openSession(sessionId: string): Promise<boolean> {
+    const targetSession = sessions.value.find(session => session.id === sessionId)
+    if (!targetSession || !shouldDisplaySession(targetSession)) {
+      openSessionIds.value = openSessionIds.value.filter(id => id !== sessionId)
+
+      if (currentSessionId.value === sessionId) {
+        currentSessionId.value = openSessionIds.value[0] ?? null
+      }
+
+      const appStateStore = useAppStateStore()
+      appStateStore.setLastSessions([...openSessionIds.value])
+      return false
+    }
+
     // 检查会话是否在其他窗口中打开
     const windowManager = useWindowManagerStore()
     const lockedBy = await windowManager.isSessionLocked(sessionId)

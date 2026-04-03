@@ -272,7 +272,13 @@ function toResultBlock(value: Record<string, unknown>): StructuredContentBlock |
   const modifiedFiles = normalizeStringArray(value.modified_files)
   const changedFiles = normalizeStringArray(value.changed_files)
   const deletedFiles = normalizeStringArray(value.deleted_files)
-  const summary = typeof value.result_summary === 'string' ? value.result_summary.trim() : ''
+  const taskOverview = typeof value.task_overview === 'string' ? value.task_overview.trim() : ''
+  const completedPoints = normalizeStringArray(value.completed_points)
+  const summary = typeof value.result_summary === 'string' && value.result_summary.trim()
+    ? value.result_summary.trim()
+    : [taskOverview, completedPoints.length > 0 ? `完成项: ${completedPoints.join('；')}` : '']
+        .filter(Boolean)
+        .join('\n')
 
   if (!summary && !generatedFiles.length && !modifiedFiles.length && !changedFiles.length && !deletedFiles.length) {
     return null
