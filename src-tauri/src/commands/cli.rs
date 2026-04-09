@@ -133,7 +133,7 @@ fn detect_cli(cli_name: &str) -> CliTool {
 /// 检测所有 CLI 工具 (Tauri 命令)
 #[tauri::command]
 pub fn detect_cli_tools() -> Result<DetectionResult, String> {
-    let cli_names = vec!["claude", "codex"];
+    let cli_names = vec!["claude", "codex", "opencode"];
     let mut tools = Vec::new();
 
     for cli_name in cli_names {

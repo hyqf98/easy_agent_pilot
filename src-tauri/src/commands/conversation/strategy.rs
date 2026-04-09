@@ -8,6 +8,7 @@ use super::types::ExecutionRequest;
 pub enum AgentRuntimeKind {
     ClaudeCli,
     CodexCli,
+    OpenCodeCli,
     ClaudeSdk,
     CodexSdk,
 }
@@ -17,6 +18,7 @@ impl AgentRuntimeKind {
         match (agent_type, provider) {
             ("cli", "claude") => Some(Self::ClaudeCli),
             ("cli", "codex") => Some(Self::CodexCli),
+            ("cli", "opencode") => Some(Self::OpenCodeCli),
             ("sdk", "claude") => Some(Self::ClaudeSdk),
             ("sdk", "codex") => Some(Self::CodexSdk),
             _ => None,
@@ -27,6 +29,7 @@ impl AgentRuntimeKind {
         match self {
             Self::ClaudeCli => format!("claude-stream-{}", session_id),
             Self::CodexCli => format!("codex-stream-{}", session_id),
+            Self::OpenCodeCli => format!("opencode-stream-{}", session_id),
             Self::ClaudeSdk => format!("sdk-stream-{}", session_id),
             Self::CodexSdk => format!("codex-sdk-stream-{}", session_id),
         }

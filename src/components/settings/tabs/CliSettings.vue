@@ -25,9 +25,11 @@ const isCheckingUpdate = ref<string | null>(null)
 const isUpgrading = ref<string | null>(null)
 const claudeVersionInfo = ref<VersionInfo | null>(null)
 const codexVersionInfo = ref<VersionInfo | null>(null)
+const opencodeVersionInfo = ref<VersionInfo | null>(null)
 
 const claudeInstallInfo = ref<CliInstallerInfo | null>(null)
 const codexInstallInfo = ref<CliInstallerInfo | null>(null)
+const opencodeInstallInfo = ref<CliInstallerInfo | null>(null)
 
 let unlistenLog: (() => void) | null = null
 let unlistenComplete: (() => void) | null = null
@@ -44,6 +46,12 @@ const installerCards = computed(() => [
     label: 'Codex CLI',
     info: codexInstallInfo.value,
     versionInfo: codexVersionInfo.value
+  },
+  {
+    key: 'opencode',
+    label: 'OpenCode CLI',
+    info: opencodeInstallInfo.value,
+    versionInfo: opencodeVersionInfo.value
   }
 ])
 
@@ -51,6 +59,7 @@ async function loadInstallOptions() {
   try {
     claudeInstallInfo.value = await invoke<CliInstallerInfo>('get_cli_install_options', { cliName: 'claude' })
     codexInstallInfo.value = await invoke<CliInstallerInfo>('get_cli_install_options', { cliName: 'codex' })
+    opencodeInstallInfo.value = await invoke<CliInstallerInfo>('get_cli_install_options', { cliName: 'opencode' })
   } catch (error) {
     console.error('Failed to load install options:', error)
   }
@@ -72,6 +81,14 @@ async function checkAllUpdates() {
       console.error('Failed to check codex update:', error)
     }
   }
+
+  if (opencodeInstallInfo.value?.installed) {
+    try {
+      opencodeVersionInfo.value = await invoke<VersionInfo>('check_cli_update', { cliName: 'opencode' })
+    } catch (error) {
+      console.error('Failed to check opencode update:', error)
+    }
+  }
 }
 
 async function handleCheckUpdate(cliName: string) {
@@ -80,8 +97,10 @@ async function handleCheckUpdate(cliName: string) {
     const info = await invoke<VersionInfo>('check_cli_update', { cliName })
     if (cliName === 'claude') {
       claudeVersionInfo.value = info
-    } else {
+    } else if (cliName === 'codex') {
       codexVersionInfo.value = info
+    } else {
+      opencodeVersionInfo.value = info
     }
   } finally {
     isCheckingUpdate.value = null

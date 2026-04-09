@@ -78,7 +78,7 @@ function buildUsagePayload(
   input: Omit<RecordAgentCliUsageInput, 'provider' | 'agentId' | 'agentNameSnapshot'>
 ): RecordAgentCliUsageInput | null {
   const provider = inferAgentProvider(agent)
-  if (provider !== 'claude' && provider !== 'codex') {
+  if (provider !== 'claude' && provider !== 'codex' && provider !== 'opencode') {
     return null
   }
 

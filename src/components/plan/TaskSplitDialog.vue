@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import TaskSplitPreview from './TaskSplitPreview.vue'
-import TaskListOptimizeModal from './TaskListOptimizeModal.vue'
 import ExecutionTimeline from '@/components/message/ExecutionTimeline.vue'
 import { useTaskSplitDialog } from './taskSplitDialog/useTaskSplitDialog'
 const { t } = useI18n()
@@ -17,11 +16,9 @@ const {
   showMentionSuggestions,
   mentionSuggestions,
   selectedMentionOptionIndex,
-  optimizeListModalVisible,
   showPreview,
   refinementMode,
   hasPendingRefinement,
-  isListOptimizePending,
   isSubSplitActive,
   subSplitTargetTitle,
   previewActionsDisabled,
@@ -38,14 +35,11 @@ const {
   timelineEntries,
   restartSplit,
   handleTimelineFormSubmit,
-  handleOptimizeList,
-  handleOptimizeListConfirm,
   confirmSplit,
   closeDialog,
   stopSplitTask,
   retrySplitTask,
   continueSplitTask,
-  handleUserInstruction,
   handleInstructionInput,
   handleInstructionKeydown,
   handleInstructionCaretChange,
@@ -120,6 +114,52 @@ const {
                   </div>
                 </div>
               </div>
+
+              <div
+                v-if="showPreview"
+                class="conversation-input-area"
+              >
+                <div
+                  v-if="isSubSplitActive && isSessionRunning"
+                  class="footer-resplit-hint"
+                >
+                  <span class="resplit-hint-spinner" />
+                  <span>{{ t('taskSplit.resplitInProgressHint', { title: subSplitTargetTitle }) }}</span>
+                </div>
+                <div class="pane-input-bar">
+                  <div class="input-wrapper">
+                    <textarea
+                      ref="instructionInputRef"
+                      v-model="userInstruction"
+                      class="instruction-input"
+                      :disabled="isSessionRunning || isConfirming"
+                      :placeholder="t('taskSplit.instructionPlaceholder')"
+                      rows="1"
+                      @keydown="handleInstructionKeydown"
+                      @input="handleInstructionInput"
+                      @click="handleInstructionCaretChange"
+                      @keyup="handleInstructionCaretChange"
+                      @select="handleInstructionCaretChange"
+                    />
+                    <div
+                      v-if="showMentionSuggestions"
+                      class="instruction-mentions"
+                    >
+                      <button
+                        v-for="(option, index) in mentionSuggestions"
+                        :key="option.index"
+                        type="button"
+                        class="instruction-mentions__item"
+                        :class="{ 'instruction-mentions__item--active': index === selectedMentionOptionIndex }"
+                        @mousedown.prevent="applyMentionSuggestion(index)"
+                      >
+                        <span class="instruction-mentions__badge">@{{ option.index + 1 }}</span>
+                        <span class="instruction-mentions__title">{{ option.title || t('taskBoard.emptyNoTasks') }}</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div
@@ -136,75 +176,16 @@ const {
               <TaskSplitPreview
                 :tasks="taskSplitStore.splitResult!"
                 :disable-actions="previewActionsDisabled"
-                :is-optimizing-list="isListOptimizePending && isSessionRunning"
                 @update="taskSplitStore.updateSplitTask"
                 @remove="taskSplitStore.removeSplitTask"
                 @add="taskSplitStore.addSplitTask"
-                @optimize-list="handleOptimizeList"
               />
             </div>
           </div>
         </div>
 
         <div class="dialog-footer">
-          <!-- 有预览时：输入栏 + 操作按钮 -->
           <template v-if="showPreview">
-            <div
-              v-if="isSubSplitActive && isSessionRunning"
-              class="footer-resplit-hint"
-            >
-              <span class="resplit-hint-spinner" />
-              <span>{{ t('taskSplit.resplitInProgressHint', { title: subSplitTargetTitle }) }}</span>
-            </div>
-            <div class="footer-input-bar">
-              <div class="input-wrapper">
-                <textarea
-                  ref="instructionInputRef"
-                  v-model="userInstruction"
-                  class="instruction-input"
-                  :disabled="isSessionRunning || isConfirming"
-                  :placeholder="t('taskSplit.instructionPlaceholder')"
-                  rows="1"
-                  @keydown="handleInstructionKeydown"
-                  @input="handleInstructionInput"
-                  @click="handleInstructionCaretChange"
-                  @keyup="handleInstructionCaretChange"
-                  @select="handleInstructionCaretChange"
-                />
-                <div
-                  v-if="showMentionSuggestions"
-                  class="instruction-mentions"
-                >
-                  <button
-                    v-for="(option, index) in mentionSuggestions"
-                    :key="option.index"
-                    type="button"
-                    class="instruction-mentions__item"
-                    :class="{ 'instruction-mentions__item--active': index === selectedMentionOptionIndex }"
-                    @mousedown.prevent="applyMentionSuggestion(index)"
-                  >
-                    <span class="instruction-mentions__badge">@{{ option.index + 1 }}</span>
-                    <span class="instruction-mentions__title">{{ option.title || t('taskBoard.emptyNoTasks') }}</span>
-                  </button>
-                </div>
-              </div>
-              <button
-                class="btn btn-send"
-                :disabled="isSessionRunning || isConfirming || !userInstruction.trim()"
-                @click="handleUserInstruction"
-              >
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                >
-                  <path d="M22 2L11 13" /><path d="M22 2L15 22L11 13L2 9L22 2Z" />
-                </svg>
-              </button>
-            </div>
             <div class="footer-actions footer-actions--confirm">
               <button
                 v-if="hasPendingRefinement"
@@ -258,7 +239,6 @@ const {
             </div>
           </template>
 
-          <!-- 无预览时：提示 + 操作按钮（保持原有行为） -->
           <template v-else>
             <div class="footer-bar">
               <span
@@ -301,14 +281,6 @@ const {
         </div>
       </div>
     </div>
-
-    <TaskListOptimizeModal
-      v-model:visible="optimizeListModalVisible"
-      :task-count="taskSplitStore.splitResult?.length || 0"
-      :default-expert-id="taskSplitStore.context?.expertId"
-      :default-model-id="taskSplitStore.context?.modelId"
-      @confirm="handleOptimizeListConfirm"
-    />
   </Teleport>
 </template>
 

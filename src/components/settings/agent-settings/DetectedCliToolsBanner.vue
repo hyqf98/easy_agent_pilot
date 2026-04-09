@@ -41,13 +41,13 @@ const { t } = useI18n()
         >
           <div class="detected-tool__info">
             <EaIcon
-              :name="tool.name === 'claude' ? 'bot' : 'code'"
+              :name="tool.name === 'claude' ? 'bot' : tool.name === 'opencode' ? 'terminal' : 'code'"
               :size="16"
               class="detected-tool__icon"
             />
             <div class="detected-tool__details">
               <span class="detected-tool__name">
-                {{ tool.name === 'claude' ? 'Claude CLI' : 'Codex CLI' }}
+                {{ tool.name === 'claude' ? 'Claude CLI' : tool.name === 'opencode' ? 'OpenCode CLI' : 'Codex CLI' }}
               </span>
               <span class="detected-tool__path">{{ tool.path }}</span>
             </div>

@@ -79,11 +79,13 @@ lazy_static::lazy_static! {
 pub async fn init_registry() {
     use super::strategies::{
         ClaudeCliStrategy, ClaudeSdkStrategy, CodexCliStrategy, CodexSdkStrategy,
+        OpenCodeCliStrategy,
     };
 
     let mut registry = REGISTRY.write().await;
     registry.register(Arc::new(ClaudeCliStrategy));
     registry.register(Arc::new(CodexCliStrategy));
+    registry.register(Arc::new(OpenCodeCliStrategy));
     registry.register(Arc::new(ClaudeSdkStrategy));
     registry.register(Arc::new(CodexSdkStrategy));
 }

@@ -261,7 +261,7 @@ fn build_toml_mcp_servers(
 }
 
 fn is_supported_sync_cli(cli_type: &str) -> bool {
-    matches!(cli_type, "claude" | "codex")
+    matches!(cli_type, "claude" | "codex" | "opencode")
 }
 
 fn validate_sync_cli_paths(
@@ -276,11 +276,11 @@ fn validate_sync_cli_paths(
     if !is_supported_sync_cli(&source_paths.cli_type)
         || !is_supported_sync_cli(&target_paths.cli_type)
     {
-        return Err("Only Claude CLI and Codex CLI are supported for sync".to_string());
+        return Err("Only Claude CLI, Codex CLI and OpenCode CLI are supported for sync".to_string());
     }
 
     if source_paths.cli_type == target_paths.cli_type {
-        return Err("Sync only supports Claude CLI <-> Codex CLI".to_string());
+        return Err("Source CLI and target CLI must be different".to_string());
     }
 
     if source_paths.config_file == target_paths.config_file {
@@ -546,6 +546,18 @@ pub(crate) fn get_cli_config_paths_internal(
                 skills_dir: config_dir.join("skills").to_string_lossy().to_string(),
             })
         }
+        "opencode" => {
+            let config_dir = dirs::home_dir()
+                .map(|h| h.join(".config").join("opencode"))
+                .ok_or_else(|| "Cannot determine home directory".to_string())?;
+            let config_file = config_dir.join("opencode.json");
+            Ok(CliConfigPaths {
+                config_dir: config_dir.to_string_lossy().to_string(),
+                config_file: config_file.to_string_lossy().to_string(),
+                cli_type: "opencode".to_string(),
+                skills_dir: config_dir.join("skills").to_string_lossy().to_string(),
+            })
+        }
         "qwen" | "qwen-code" => {
             let config_dir = home_dir.join(".qwen");
             let config_file = home_dir.join(".qwen").join("settings.json");
@@ -587,11 +599,13 @@ fn read_cli_config_internal(
     let config_file = PathBuf::from(&paths.config_file);
 
     if !config_file.exists() {
-        // 返回空配置而不是错误
         return Ok(ClaudeCliConfig::default());
     }
 
-    // 根据文件类型读取
+    if paths.cli_type == "opencode" {
+        return read_opencode_config(&config_file);
+    }
+
     if paths.cli_type == "codex" {
         // Codex 使用 TOML 格式
         let content = fs::read_to_string(&config_file)
@@ -625,6 +639,144 @@ fn read_cli_config_internal(
     }
 }
 
+fn read_opencode_config(config_file: &Path) -> Result<ClaudeCliConfig, String> {
+    let content = fs::read_to_string(config_file)
+        .map_err(|e| format!("Failed to read opencode config: {}", e))?;
+    let json: serde_json::Value =
+        serde_json::from_str(&content).unwrap_or(serde_json::json!({}));
+
+    let mut mcp_servers = HashMap::new();
+
+    if let Some(mcp_obj) = json.get("mcp").and_then(|m| m.as_object()) {
+        for (name, val) in mcp_obj {
+            let server_type = val.get("type").and_then(|t| t.as_str()).unwrap_or("local");
+
+            let (command, args, env, url, headers, disabled) = if server_type == "remote" {
+                let url = val.get("url").and_then(|u| u.as_str()).map(|s| s.to_string());
+                let headers = val
+                    .get("headers")
+                    .and_then(|h| h.as_object())
+                    .map(|obj| {
+                        obj.iter()
+                            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                            .collect()
+                    });
+                (None, None, None, url, headers, false)
+            } else {
+                let cmd_array = val.get("command").and_then(|c| c.as_array());
+                let command = cmd_array
+                    .and_then(|arr| arr.first())
+                    .and_then(|c| c.as_str())
+                    .map(|s| s.to_string());
+                let args = cmd_array.map(|arr| {
+                    arr.iter()
+                        .skip(1)
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                });
+                let env = val
+                    .get("environment")
+                    .and_then(|e| e.as_object())
+                    .map(|obj| {
+                        obj.iter()
+                            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                            .collect()
+                    });
+                let enabled = val.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true);
+                (command, args, env, None, None, !enabled)
+            };
+
+            mcp_servers.insert(
+                name.clone(),
+                McpServerConfig {
+                    command,
+                    args,
+                    env,
+                    url,
+                    headers,
+                    disabled,
+                },
+            );
+        }
+    }
+
+    let mut other = BTreeMap::new();
+    if let Some(obj) = json.as_object() {
+        for (key, val) in obj {
+            if key != "mcp" {
+                other.insert(key.clone(), val.clone());
+            }
+        }
+    }
+
+    Ok(ClaudeCliConfig {
+        mcpServers: if mcp_servers.is_empty() {
+            None
+        } else {
+            Some(mcp_servers)
+        },
+        other,
+    })
+}
+
+fn write_opencode_config(
+    config_file: &Path,
+    config: ClaudeCliConfig,
+) -> Result<(), String> {
+    let mut json = if config_file.exists() {
+        let content = fs::read_to_string(config_file)
+            .map_err(|e| format!("Failed to read opencode config: {}", e))?;
+        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    let mcp_servers = config.mcpServers.unwrap_or_default();
+    if !mcp_servers.is_empty() {
+        let mut mcp_obj: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+        for (name, server) in &mcp_servers {
+            let mut entry = serde_json::Map::new();
+            if let Some(url) = &server.url {
+                entry.insert("type".to_string(), serde_json::json!("remote"));
+                entry.insert("url".to_string(), serde_json::json!(url));
+                if let Some(headers) = &server.headers {
+                    entry.insert("headers".to_string(), serde_json::json!(headers));
+                }
+            } else {
+                entry.insert("type".to_string(), serde_json::json!("local"));
+                let mut cmd_array = vec![];
+                if let Some(cmd) = &server.command {
+                    cmd_array.push(serde_json::json!(cmd));
+                }
+                if let Some(args) = &server.args {
+                    for arg in args {
+                        cmd_array.push(serde_json::json!(arg));
+                    }
+                }
+                entry.insert("command".to_string(), serde_json::json!(cmd_array));
+                if let Some(env) = &server.env {
+                    entry.insert("environment".to_string(), serde_json::json!(env));
+                }
+            }
+            entry.insert(
+                "enabled".to_string(),
+                serde_json::json!(!server.disabled),
+            );
+            mcp_obj.insert(name.clone(), serde_json::Value::Object(entry));
+        }
+        json.as_object_mut()
+            .map(|obj| obj.insert("mcp".to_string(), serde_json::Value::Object(mcp_obj)));
+    } else {
+        json.as_object_mut().map(|obj| obj.remove("mcp"));
+    }
+
+    let content = serde_json::to_string_pretty(&json)
+        .map_err(|e| format!("Failed to serialize opencode config: {}", e))?;
+    fs::write(config_file, content)
+        .map_err(|e| format!("Failed to write opencode config: {}", e))?;
+
+    Ok(())
+}
 /// 读取 CLI 配置文件 (Tauri 命令)
 #[tauri::command]
 pub fn read_cli_config(
@@ -646,6 +798,10 @@ fn write_cli_config_internal(
     if let Some(parent) = config_file.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    }
+
+    if paths.cli_type == "opencode" {
+        return write_opencode_config(&config_file, config);
     }
 
     if paths.cli_type == "codex" {
@@ -788,8 +944,14 @@ pub fn get_cli_capabilities(
         "codex" => CliCapabilities {
             supports_mcp: true,
             supports_skills: true,
-            supports_plugins: false, // Codex CLI 不支持 Plugins
+            supports_plugins: false,
             mcp_add_command: Some("codex mcp add".to_string()),
+        },
+        "opencode" => CliCapabilities {
+            supports_mcp: true,
+            supports_skills: true,
+            supports_plugins: false,
+            mcp_add_command: Some("opencode mcp add".to_string()),
         },
         "qwen" | "qwen-code" => CliCapabilities {
             supports_mcp: true,

@@ -575,6 +575,7 @@ fn get_cli_plugins_dir(cli_type: &str) -> Result<PathBuf, String> {
     match cli_type.to_lowercase().as_str() {
         "claude" => Ok(home_dir.join(".claude").join("plugins")),
         "codex" => Ok(home_dir.join(".codex").join("plugins")),
+        "opencode" => Ok(home_dir.join(".config").join("opencode").join("plugins")),
         other => Err(format!("Unsupported CLI type for plugins: {}", other)),
     }
 }

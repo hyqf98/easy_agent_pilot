@@ -123,6 +123,7 @@
 }
 
 .message-bubble--user .message-bubble__content {
+  min-width: unset;
   background-color: var(--color-primary-light);
   color: var(--color-primary-dark);
   border-radius: var(--radius-lg) var(--radius-sm) var(--radius-lg) var(--radius-lg);

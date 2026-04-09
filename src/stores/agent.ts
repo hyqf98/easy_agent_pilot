@@ -7,7 +7,7 @@ import { getErrorMessage } from '@/utils/api'
 // 智能体类型：cli 或 sdk
 export type AgentType = 'cli' | 'sdk'
 // 提供方：claude 或 codex
-export type AgentProvider = 'claude' | 'codex'
+export type AgentProvider = 'claude' | 'codex' | 'opencode'
 // 智能体状态
 export type AgentStatus = 'online' | 'offline' | 'error' | 'testing'
 
@@ -47,7 +47,7 @@ export function inferAgentProvider(
     return undefined
   }
 
-  if (agent.provider === 'claude' || agent.provider === 'codex') {
+  if (agent.provider === 'claude' || agent.provider === 'codex' || agent.provider === 'opencode') {
     return agent.provider
   }
 
@@ -57,6 +57,9 @@ export function inferAgentProvider(
   }
   if (hint.includes('codex')) {
     return 'codex'
+  }
+  if (hint.includes('opencode')) {
+    return 'opencode'
   }
 
   return undefined
@@ -352,11 +355,13 @@ export const useAgentStore = defineStore('agent', () => {
   // 快速添加检测到的 CLI 工具
   async function addDetectedTool(tool: CliTool) {
     const provider = tool.name.toLowerCase().includes('claude') ? 'claude' as AgentProvider
-                  : tool.name.toLowerCase().includes('codex') ? 'codex' as AgentProvider
-                  : undefined
+                   : tool.name.toLowerCase().includes('codex') ? 'codex' as AgentProvider
+                   : tool.name.toLowerCase().includes('opencode') ? 'opencode' as AgentProvider
+                   : undefined
 
     const name = tool.name === 'claude' ? 'Claude CLI'
                : tool.name === 'codex' ? 'Codex CLI'
+               : tool.name === 'opencode' ? 'OpenCode CLI'
                : tool.name
 
     return await createAgent({

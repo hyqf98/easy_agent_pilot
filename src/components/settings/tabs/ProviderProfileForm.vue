@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { ProviderProfile, CliType, CreateProviderProfileInput, UpdateProviderProfileInput } from '@/stores/providerProfile'
 import { EaButton, EaIcon } from '@/components/common'
 import { useOverlayDismiss } from '@/composables/useOverlayDismiss'
+import { invoke } from '@tauri-apps/api/core'
 
 const props = defineProps<{
   visible: boolean
@@ -100,6 +101,117 @@ function handleClose() {
 }
 
 const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(handleClose)
+
+interface AuthProvider {
+  id: string
+  displayName: string
+  hasKey: boolean
+}
+
+const opencodeProviders = ref<AuthProvider[]>([])
+const opencodeProvidersLoaded = ref(false)
+const opencodeModels = ref<string[]>([])
+const opencodeModelsLoading = ref(false)
+const opencodeModelDropdownOpen = ref(false)
+const opencodeModelSearch = ref('')
+const comboboxInputRef = ref<HTMLElement | null>(null)
+const comboboxDropdownStyle = ref<Record<string, string>>({})
+
+async function loadOpenCodeProviders() {
+  if (opencodeProvidersLoaded.value) return
+  try {
+    const result = await invoke<AuthProvider[]>('read_opencode_auth_providers')
+    opencodeProviders.value = result
+    opencodeProvidersLoaded.value = true
+  } catch {
+    opencodeProviders.value = []
+  }
+}
+
+async function loadOpenCodeModels(autoOpen = true) {
+  const provider = form.value.providerName
+  if (!provider) return
+  opencodeModelsLoading.value = true
+  opencodeModels.value = []
+  opencodeModelSearch.value = ''
+  try {
+    const result = await invoke<string[]>('list_opencode_models', { provider })
+    opencodeModels.value = result
+    if (autoOpen && result.length > 0) {
+      updateDropdownPosition()
+      opencodeModelDropdownOpen.value = true
+    }
+  } catch {
+    opencodeModels.value = []
+  } finally {
+    opencodeModelsLoading.value = false
+  }
+}
+
+function selectOpenCodeModel(model: string) {
+  form.value.mainModel = model
+  opencodeModelDropdownOpen.value = false
+  opencodeModelSearch.value = ''
+}
+
+function onModelInput(e: Event) {
+  const val = (e.target as HTMLInputElement).value
+  form.value.mainModel = val
+  opencodeModelSearch.value = val
+  if (opencodeModels.value.length > 0) {
+    updateDropdownPosition()
+    opencodeModelDropdownOpen.value = true
+  }
+}
+
+function onModelFocus() {
+  opencodeModelSearch.value = ''
+  if (opencodeModels.value.length > 0) {
+    updateDropdownPosition()
+    opencodeModelDropdownOpen.value = true
+  }
+}
+
+function toggleModelDropdown() {
+  if (opencodeModelDropdownOpen.value) {
+    opencodeModelDropdownOpen.value = false
+  } else {
+    updateDropdownPosition()
+    opencodeModelDropdownOpen.value = true
+  }
+}
+
+function updateDropdownPosition() {
+  if (!comboboxInputRef.value) return
+  const rect = comboboxInputRef.value.getBoundingClientRect()
+  comboboxDropdownStyle.value = {
+    position: 'fixed',
+    top: `${rect.bottom + 4}px`,
+    left: `${rect.left}px`,
+    width: `${rect.width}px`,
+    zIndex: '9999',
+  }
+}
+
+const filteredModels = computed(() => {
+  const q = opencodeModelSearch.value.toLowerCase()
+  if (!q) return opencodeModels.value
+  return opencodeModels.value.filter(m => m.toLowerCase().includes(q))
+})
+
+watch(
+  () => props.visible,
+  (v) => {
+    if (v && props.cliType === 'opencode') {
+      opencodeProvidersLoaded.value = false
+      loadOpenCodeProviders()
+      if (form.value.providerName) {
+        nextTick(() => loadOpenCodeModels(false))
+      }
+    }
+  },
+  { immediate: true }
+)
 
 // 提交表单
 async function handleSubmit() {
@@ -323,6 +435,130 @@ async function handleSubmit() {
               </div>
             </div>
           </template>
+
+          <!-- OpenCode CLI 配置 -->
+          <template v-if="cliType === 'opencode'">
+            <div class="form-section">
+              <h4 class="section-title">
+                {{ t('settings.providerSwitch.form.opencodeConfig') }}
+              </h4>
+
+              <div class="form-group">
+                <label class="form-label">{{ t('settings.providerSwitch.form.providerName') }}</label>
+                <select
+                  v-model="form.providerName"
+                  class="form-input form-select"
+                  @change="loadOpenCodeModels(false)"
+                >
+                  <option
+                    value=""
+                    disabled
+                  >
+                    {{ t('settings.providerSwitch.form.opencodeProviderPlaceholder') }}
+                  </option>
+                  <template v-if="opencodeProviders.length">
+                    <optgroup
+                      v-if="opencodeProviders.some(p => p.hasKey)"
+                      :label="t('settings.providerSwitch.form.connected')"
+                    >
+                      <option
+                        v-for="p in opencodeProviders.filter(p => p.hasKey)"
+                        :key="p.id"
+                        :value="p.id"
+                      >
+                        {{ p.displayName }}
+                      </option>
+                    </optgroup>
+                    <optgroup
+                      v-if="opencodeProviders.some(p => !p.hasKey)"
+                      :label="t('settings.providerSwitch.form.other')"
+                    >
+                      <option
+                        v-for="p in opencodeProviders.filter(p => !p.hasKey)"
+                        :key="p.id"
+                        :value="p.id"
+                      >
+                        {{ p.displayName }}
+                      </option>
+                    </optgroup>
+                  </template>
+                  <option
+                    v-else
+                    disabled
+                  >
+                    {{ t('common.loading') }}
+                  </option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">{{ t('settings.providerSwitch.form.apiKey') }}</label>
+                <input
+                  v-model="form.apiKey"
+                  type="password"
+                  class="form-input"
+                  :placeholder="t('settings.providerSwitch.form.apiKeyPlaceholder')"
+                >
+              </div>
+
+              <div class="form-group model-combobox">
+                <label class="form-label">{{ t('settings.providerSwitch.form.mainModel') }}</label>
+                <div class="combobox-wrapper">
+                  <input
+                    ref="comboboxInputRef"
+                    :value="form.mainModel"
+                    type="text"
+                    class="form-input combobox-input"
+                    :placeholder="t('settings.providerSwitch.form.opencodeModelPlaceholder')"
+                    @focus="onModelFocus"
+                    @input="onModelInput"
+                    @blur="opencodeModelDropdownOpen = false"
+                  >
+                  <button
+                    v-if="opencodeModels.length > 0"
+                    type="button"
+                    class="combobox-toggle"
+                    @mousedown.prevent="toggleModelDropdown"
+                  >
+                    <EaIcon
+                      name="chevron-down"
+                      :size="14"
+                    />
+                  </button>
+                </div>
+                <Teleport to="body">
+                  <div
+                    v-if="opencodeModelDropdownOpen && filteredModels.length > 0"
+                    class="combobox-dropdown"
+                    :style="comboboxDropdownStyle"
+                    @mousedown.prevent
+                  >
+                    <div
+                      v-for="model in filteredModels"
+                      :key="model"
+                      class="combobox-option"
+                      :class="{ active: model === form.mainModel }"
+                      @mousedown.prevent="selectOpenCodeModel(model)"
+                    >
+                      {{ model }}
+                    </div>
+                  </div>
+                </Teleport>
+                <div
+                  v-if="opencodeModelsLoading"
+                  class="model-loading"
+                >
+                  {{ t('settings.providerSwitch.form.loadingModels') }}
+                </div>
+                <div
+                  v-else-if="form.providerName && opencodeModels.length === 0"
+                  class="model-hint"
+                >
+                  {{ t('settings.providerSwitch.form.modelHint') }}
+                </div>
+              </div>
+            </div>
+          </template>
         </form>
 
         <div class="modal-footer">
@@ -467,6 +703,78 @@ async function handleSubmit() {
 
 .form-input::placeholder {
   color: var(--color-text-tertiary, #999);
+}
+
+.form-select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236b7280' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 32px;
+  cursor: pointer;
+}
+
+.model-combobox {
+  position: relative;
+}
+
+.combobox-wrapper {
+  position: relative;
+}
+
+.combobox-input {
+  padding-right: 32px !important;
+}
+
+.combobox-toggle {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  color: var(--color-text-tertiary, #999);
+  display: flex;
+  align-items: center;
+}
+
+.combobox-toggle:hover {
+  color: var(--color-text-secondary, #555);
+}
+
+.combobox-dropdown {
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--color-bg-primary, #fff);
+  border: 1px solid var(--color-border, #e0e0e0);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+.combobox-option {
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--color-text-primary, #1a1a1a);
+}
+
+.combobox-option:hover {
+  background: var(--color-bg-secondary, #f5f5f5);
+}
+
+.combobox-option.active {
+  background: color-mix(in srgb, var(--color-primary, #7c3aed) 12%, transparent);
+  color: var(--color-primary, #7c3aed);
+  font-weight: 500;
+}
+
+.model-loading,
+.model-hint {
+  font-size: 12px;
+  color: var(--color-text-tertiary, #999);
+  margin-top: 4px;
 }
 
 .form-row {

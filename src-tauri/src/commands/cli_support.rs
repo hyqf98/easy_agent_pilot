@@ -49,6 +49,7 @@ pub fn normalize_cli_identifier(value: &str) -> Option<String> {
     let canonical = match normalized {
         "claude" | "claude-code" => "claude",
         "codex" => "codex",
+        "opencode" => "opencode",
         "qwen" | "qwen-code" => "qwen",
         other => other,
     };
@@ -334,7 +335,10 @@ pub fn build_cli_launch_error_message(
     }
 
     segments.push(format!("cli_path={cli_path}"));
-    if let Some(cwd) = working_directory.map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(cwd) = working_directory
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         segments.push(format!("cwd={cwd}"));
     }
     segments.push(format!("arg_count={arg_count}"));
@@ -357,8 +361,7 @@ pub fn build_cli_launch_error_message(
 
         if matches!(extension.as_str(), "cmd" | "bat") {
             segments.push(
-                "当前 CLI 通过 cmd/bat 启动，Windows 命令行长度限制会比 .exe 更严格"
-                    .to_string(),
+                "当前 CLI 通过 cmd/bat 启动，Windows 命令行长度限制会比 .exe 更严格".to_string(),
             );
         }
 

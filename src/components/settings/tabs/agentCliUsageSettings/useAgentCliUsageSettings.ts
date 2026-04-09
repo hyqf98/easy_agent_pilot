@@ -44,7 +44,8 @@ export function useAgentCliUsageSettings() {
   const cliTypeOptions = computed<SelectOption[]>(() => [
     { value: 'all', label: t('settings.usageStats.providerAll') },
     { value: 'claude', label: 'Claude CLI' },
-    { value: 'codex', label: 'Codex CLI' }
+    { value: 'codex', label: 'Codex CLI' },
+    { value: 'opencode', label: 'OpenCode CLI' }
   ])
 
   const dateRangePresets = computed(() => [

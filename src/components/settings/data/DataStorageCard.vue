@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
+import { open } from '@tauri-apps/plugin-dialog'
 import { EaButton, EaIcon, EaStateBlock } from '@/components/common'
 import SettingsSectionCard from '@/components/settings/common/SettingsSectionCard.vue'
 import { useI18n } from 'vue-i18n'
@@ -18,6 +20,51 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+
+const isMigrating = ref(false)
+const migrationMessage = ref('')
+const migrationSuccess = ref(false)
+
+const isDev = import.meta.env.DEV
+
+async function handleChangePath() {
+  if (isMigrating.value) return
+
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: t('settings.data.selectDataPath')
+  })
+
+  if (!selected) return
+
+  isMigrating.value = true
+  migrationMessage.value = ''
+  migrationSuccess.value = false
+
+  try {
+    const result = await invoke<{
+      success: boolean
+      old_path: string
+      new_path: string
+      migrated_files: number
+      message: string
+    }>('migrate_persistence_path', { newPath: selected })
+
+    migrationSuccess.value = true
+    migrationMessage.value = result.message
+    emit('refresh')
+
+    setTimeout(() => {
+      migrationMessage.value = ''
+    }, 5000)
+  } catch (error) {
+    migrationSuccess.value = false
+    migrationMessage.value = String(error)
+  } finally {
+    isMigrating.value = false
+  }
+}
 
 function formatSize(bytes: number): string {
   const mb = bytes / (1024 * 1024)
@@ -194,6 +241,32 @@ const countItems = computed(() => {
           <div class="storage-overview__meta-item">
             <span class="storage-overview__meta-label">{{ t('settings.data.dataLocation') }}</span>
             <span class="storage-overview__meta-value">{{ stats.storage_path || '~/.easy-agent' }}</span>
+            <div
+              v-if="!isDev"
+              class="storage-overview__path-actions"
+            >
+              <EaButton
+                type="ghost"
+                size="small"
+                :disabled="isMigrating"
+                @click="handleChangePath"
+              >
+                {{ isMigrating ? t('settings.data.migrating') : t('settings.data.changePath') }}
+              </EaButton>
+            </div>
+            <div
+              v-if="isDev"
+              class="storage-overview__dev-badge"
+            >
+              {{ t('settings.data.devMode') }}
+            </div>
+          </div>
+          <div
+            v-if="migrationMessage"
+            class="storage-overview__migration-msg"
+            :class="{ 'storage-overview__migration-msg--error': !migrationSuccess }"
+          >
+            {{ migrationMessage }}
           </div>
           <div class="storage-overview__meta-item">
             <span class="storage-overview__meta-label">{{ t('settings.data.databaseFile') }}</span>
@@ -429,6 +502,36 @@ const countItems = computed(() => {
 
 .storage-overview__meta-value--break {
   word-break: break-all;
+}
+
+.storage-overview__path-actions {
+  margin-top: var(--spacing-1);
+}
+
+.storage-overview__dev-badge {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: var(--spacing-1);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-warning) 16%, transparent);
+  color: var(--color-warning);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+.storage-overview__migration-msg {
+  margin-top: var(--spacing-1);
+  padding: var(--spacing-1) var(--spacing-2);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-success) 12%, transparent);
+  color: var(--color-success);
+  font-size: var(--font-size-xs);
+}
+
+.storage-overview__migration-msg--error {
+  background: color-mix(in srgb, var(--color-error) 12%, transparent);
+  color: var(--color-error);
 }
 
 .storage-sections {

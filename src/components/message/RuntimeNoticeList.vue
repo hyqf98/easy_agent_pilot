@@ -66,20 +66,25 @@ function usageSummary(notice: RuntimeNotice) {
       return null
     }
 
+    const hasFallbackInput = typeof fallback.inputTokens === 'number' && fallback.inputTokens > 0
+    const hasFallbackOutput = typeof fallback.outputTokens === 'number' && fallback.outputTokens > 0
+
     return {
       model: fallback.model || null,
-      input: typeof fallback.inputTokens === 'number' ? String(fallback.inputTokens) : null,
-      output: typeof fallback.outputTokens === 'number' ? String(fallback.outputTokens) : null
+      input: hasFallbackInput ? String(fallback.inputTokens) : null,
+      output: hasFallbackOutput ? String(fallback.outputTokens) : null
     }
   }
 
-  const fallbackInput = typeof fallback?.inputTokens === 'number' ? String(fallback.inputTokens) : null
-  const fallbackOutput = typeof fallback?.outputTokens === 'number' ? String(fallback.outputTokens) : null
+  const hasRealInput = Boolean(summary.input && summary.input !== '0')
+  const hasRealOutput = Boolean(summary.output && summary.output !== '0')
+  const fallbackInput = typeof fallback?.inputTokens === 'number' && fallback.inputTokens > 0 ? String(fallback.inputTokens) : null
+  const fallbackOutput = typeof fallback?.outputTokens === 'number' && fallback.outputTokens > 0 ? String(fallback.outputTokens) : null
 
   return {
     model: summary.model || fallback?.model || null,
-    input: !summary.input || summary.input === '0' ? fallbackInput || summary.input : summary.input,
-    output: !summary.output || summary.output === '0' ? fallbackOutput || summary.output : summary.output
+    input: hasRealInput ? summary.input : (fallbackInput || null),
+    output: hasRealOutput ? summary.output : (fallbackOutput || null)
   }
 }
 
@@ -140,10 +145,10 @@ function formatChipLabel(notice: RuntimeNotice, chip: string) {
           </div>
           <div class="runtime-notice__usage-stats">
             <span class="runtime-notice__usage-chip runtime-notice__usage-chip--input">
-              In {{ usageSummary(primaryUsageNotice)?.input || '0' }}
+              In {{ usageSummary(primaryUsageNotice)?.input || '—' }}
             </span>
             <span class="runtime-notice__usage-chip runtime-notice__usage-chip--output">
-              Out {{ usageSummary(primaryUsageNotice)?.output || '0' }}
+              Out {{ usageSummary(primaryUsageNotice)?.output || '—' }}
             </span>
           </div>
         </div>
@@ -216,10 +221,10 @@ function formatChipLabel(notice: RuntimeNotice, chip: string) {
           </div>
           <div class="runtime-notice__usage-stats">
             <span class="runtime-notice__usage-chip runtime-notice__usage-chip--input">
-              In {{ usageSummary(notice)?.input || '0' }}
+              In {{ usageSummary(notice)?.input || '—' }}
             </span>
             <span class="runtime-notice__usage-chip runtime-notice__usage-chip--output">
-              Out {{ usageSummary(notice)?.output || '0' }}
+              Out {{ usageSummary(notice)?.output || '—' }}
             </span>
           </div>
         </div>
@@ -248,10 +253,10 @@ function formatChipLabel(notice: RuntimeNotice, chip: string) {
           </div>
           <div class="runtime-notice__usage-stats">
             <span class="runtime-notice__usage-chip runtime-notice__usage-chip--input">
-              In {{ usageSummary(notice)?.input || '0' }}
+              In {{ usageSummary(notice)?.input || '—' }}
             </span>
             <span class="runtime-notice__usage-chip runtime-notice__usage-chip--output">
-              Out {{ usageSummary(notice)?.output || '0' }}
+              Out {{ usageSummary(notice)?.output || '—' }}
             </span>
           </div>
         </div>

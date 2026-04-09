@@ -1,0 +1,951 @@
+use std::process::Stdio;
+use std::time::{Duration, Instant};
+
+use anyhow::Result;
+use async_trait::async_trait;
+use tauri::AppHandle;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+use tokio::time::sleep;
+
+use super::cli_common::{
+    build_content_event, build_error_event, build_execution_summary, build_system_event,
+    build_timeout_error_message, describe_timeout_config, detect_cli_timeout, emit_cli_event,
+    extract_image_paths, preview_text, render_cli_message, shell_escape,
+    timeout_config_for_execution_mode, CliExecutionMonitor,
+};
+use crate::commands::cli_support::{build_cli_launch_error_message, build_tokio_cli_command};
+use crate::commands::conversation::abort::{
+    clear_abort_flag, register_session_pid, set_abort_flag, should_abort, unregister_session_pid,
+};
+use crate::commands::conversation::strategy::{AgentExecutionStrategy, AgentRuntimeKind};
+use crate::commands::conversation::types::{CliStreamEvent, ExecutionRequest, McpServerConfig};
+use crate::commands::mcp_shared::parse_args_string;
+
+pub struct OpenCodeCliStrategy;
+
+macro_rules! log_info {
+    ($($arg:tt)*) => {
+        {
+            let message = format!($($arg)*);
+            crate::logging::write_log("INFO", "opencode-cli", &message);
+            println!("[INFO][opencode-cli] {}", message)
+        }
+    };
+}
+
+macro_rules! log_error {
+    ($($arg:tt)*) => {
+        {
+            let message = format!($($arg)*);
+            crate::logging::write_log("ERROR", "opencode-cli", &message);
+            eprintln!("[ERROR][opencode-cli] {}", message)
+        }
+    };
+}
+
+struct StdoutReadOutcome {
+    emitted_content: bool,
+    emitted_error: bool,
+    emitted_non_error_event: bool,
+}
+
+impl StdoutReadOutcome {
+    fn none() -> Self {
+        Self {
+            emitted_content: false,
+            emitted_error: false,
+            emitted_non_error_event: false,
+        }
+    }
+}
+
+struct StderrReadOutcome {
+    emitted_error: bool,
+}
+
+impl StderrReadOutcome {
+    fn none() -> Self {
+        Self {
+            emitted_error: false,
+        }
+    }
+}
+
+fn is_successful_event_type(event_type: &str) -> bool {
+    !matches!(event_type, "error" | "usage" | "message_start")
+}
+
+fn is_meaningful_event_type(event_type: &str) -> bool {
+    matches!(
+        event_type,
+        "content"
+            | "thinking"
+            | "thinking_start"
+            | "tool_use"
+            | "tool_input_delta"
+            | "tool_result"
+            | "file_edit"
+            | "system"
+    )
+}
+
+fn should_treat_process_failure_as_success(
+    stdout_outcome: &StdoutReadOutcome,
+    stderr_outcome: &StderrReadOutcome,
+) -> bool {
+    (stdout_outcome.emitted_content || stdout_outcome.emitted_non_error_event)
+        && !stdout_outcome.emitted_error
+        && !stderr_outcome.emitted_error
+}
+
+fn build_opencode_mcp_config_env(servers: &[McpServerConfig]) -> String {
+    let mut mcp_map = serde_json::Map::new();
+
+    for server in servers {
+        let server_name = &server.name;
+
+        match server.transport_type.as_str() {
+            "stdio" => {
+                let mut args_list = Vec::new();
+                if let Some(args_str) = &server.args {
+                    args_list.extend(parse_args_string(Some(args_str)));
+                }
+
+                let mut env_map = serde_json::Map::new();
+                if let Some(env_str) = &server.env {
+                    if let Ok(env_obj) = serde_json::from_str::<serde_json::Value>(env_str) {
+                        if let Some(obj) = env_obj.as_object() {
+                            for (key, value) in obj {
+                                env_map.insert(key.clone(), value.clone());
+                            }
+                        }
+                    }
+                }
+
+                mcp_map.insert(
+                    server_name.clone(),
+                    serde_json::json!({
+                        "type": "local",
+                        "command": if args_list.is_empty() {
+                            vec![server.command.clone().unwrap_or_default()]
+                        } else {
+                            let mut cmd = vec![server.command.clone().unwrap_or_default()];
+                            cmd.extend(args_list);
+                            cmd
+                        },
+                        "enabled": true,
+                        "environment": env_map
+                    }),
+                );
+            }
+            "http" | "sse" => {
+                let mut headers_map = serde_json::Map::new();
+                if let Some(headers_str) = &server.headers {
+                    if let Ok(headers_obj) = serde_json::from_str::<serde_json::Value>(headers_str) {
+                        if let Some(obj) = headers_obj.as_object() {
+                            for (key, value) in obj {
+                                headers_map.insert(key.clone(), value.clone());
+                            }
+                        }
+                    }
+                }
+
+                mcp_map.insert(
+                    server_name.clone(),
+                    serde_json::json!({
+                        "type": "remote",
+                        "url": server.url.clone().unwrap_or_default(),
+                        "enabled": true,
+                        "headers": headers_map
+                    }),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    let full_config = serde_json::json!({
+        "mcp": mcp_map
+    });
+
+    serde_json::to_string(&full_config).unwrap_or_else(|_| "{}".to_string())
+}
+
+fn extract_external_session_id(json: &serde_json::Value) -> Option<String> {
+    [
+        json.get("session_id"),
+        json.get("sessionID"),
+        json.pointer("/session/id"),
+        json.pointer("/payload/id"),
+        json.pointer("/properties/id"),
+        json.pointer("/properties/sessionID"),
+        json.pointer("/result/session_id"),
+        json.pointer("/part/sessionID"),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|value| value.as_str())
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
+}
+
+fn attach_external_session_id(
+    mut event: CliStreamEvent,
+    json: &serde_json::Value,
+) -> CliStreamEvent {
+    if event.external_session_id.is_none() {
+        event.external_session_id = extract_external_session_id(json);
+    }
+    event
+}
+
+#[async_trait]
+impl AgentExecutionStrategy for OpenCodeCliStrategy {
+    fn kind(&self) -> AgentRuntimeKind {
+        AgentRuntimeKind::OpenCodeCli
+    }
+
+    async fn execute(&self, app: AppHandle, request: ExecutionRequest) -> Result<()> {
+        let session_id = request.session_id.clone();
+        let event_name = self.kind().event_name(&session_id);
+
+        set_abort_flag(&session_id, false).await;
+
+        let cli_path = request
+            .cli_path
+            .clone()
+            .unwrap_or_else(|| "opencode".to_string());
+        let model_id = request.model_id.clone();
+        let working_directory = request.working_directory.clone();
+        let mcp_servers = request.mcp_servers.clone();
+        let messages = request.messages.clone();
+        let extra_cli_args = request.extra_cli_args.clone();
+        let plan_id = request.plan_id.clone();
+        let resume_session_id = request
+            .resume_session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+
+        let input_text = messages
+            .iter()
+            .map(render_cli_message)
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        let mut args = vec!["run".to_string()];
+        args.push("--format".to_string());
+        args.push("json".to_string());
+
+        if let Some(model_id) = &model_id {
+            let trimmed = model_id.trim();
+            if !trimmed.is_empty() && trimmed != "default" {
+                args.push("--model".to_string());
+                args.push(trimmed.to_string());
+            }
+        }
+
+        if let Some(resume_id) = &resume_session_id {
+            args.push("--session".to_string());
+            args.push(resume_id.clone());
+        }
+
+        if let Some(custom_args) = &extra_cli_args {
+            if !custom_args.is_empty() {
+                args.extend(custom_args.iter().cloned());
+            }
+        }
+
+        let image_paths = extract_image_paths(&messages);
+        if !image_paths.is_empty() {
+            for path in &image_paths {
+                args.push("-f".to_string());
+                args.push(path.clone());
+            }
+            log_info!("追加 OpenCode CLI 图片参数: -f x{}", image_paths.len());
+        }
+
+        let resolved_working_dir: Option<String> = working_directory
+            .as_ref()
+            .map(|w| w.trim().to_string())
+            .filter(|w| !w.is_empty());
+
+        let command_args = args.clone();
+        let mut cmd = build_tokio_cli_command(&cli_path, &command_args);
+
+        if let Some(ref work_dir) = resolved_working_dir {
+            cmd.current_dir(work_dir);
+            log_info!("设置工作目录: {}", work_dir);
+        }
+
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        if let Some(servers) = &mcp_servers {
+            if !servers.is_empty() {
+                let mcp_config_env = build_opencode_mcp_config_env(servers);
+                log_info!("OpenCode MCP 配置 (通过 OPENCODE_CONFIG_CONTENT): {}", mcp_config_env);
+                cmd.env("OPENCODE_CONFIG_CONTENT", mcp_config_env);
+            }
+        }
+
+        let full_command = build_full_opencode_command(&cli_path, &args, &input_text);
+        log_info!("OpenCode CLI command: {}", full_command);
+
+        let execution_started_at = Instant::now();
+        let monitor = CliExecutionMonitor::new();
+        let timeout_config = timeout_config_for_execution_mode(request.execution_mode.as_deref());
+        log_info!(
+            "OpenCode CLI timeout config: mode={}, {}",
+            request.execution_mode.as_deref().unwrap_or("chat"),
+            describe_timeout_config(timeout_config)
+        );
+
+        let mut child = cmd.spawn().map_err(|error| {
+            anyhow::anyhow!(build_cli_launch_error_message(
+                "OpenCode",
+                &cli_path,
+                &error,
+                resolved_working_dir.as_deref(),
+                command_args.len(),
+                input_text.chars().count(),
+                true,
+            ))
+        })?;
+
+        let stdin_write_handle = {
+            let stdin_payload = input_text.clone();
+            let mut stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| anyhow::anyhow!("failed to acquire stdin"))?;
+
+            Some(tokio::spawn(async move {
+                if let Err(error) = stdin.write_all(stdin_payload.as_bytes()).await {
+                    log_error!("[stdin] failed to write prompt: {}", error);
+                    return;
+                }
+
+                if let Err(error) = stdin.shutdown().await {
+                    log_error!("[stdin] failed to close stdin: {}", error);
+                }
+            }))
+        };
+
+        if let Some(pid) = child.id() {
+            register_session_pid(&session_id, pid).await;
+        }
+
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("无法获取标准输出"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("无法获取标准错误"))?;
+
+        let session_id_clone = session_id.clone();
+        let app_clone = app.clone();
+        let event_name_clone = event_name.clone();
+        let plan_id_clone = plan_id.clone();
+        let stdout_monitor = monitor.clone();
+
+        let stdout_handle = tokio::spawn(async move {
+            let reader = tokio::io::BufReader::new(stdout);
+            let mut lines = reader.lines();
+            let mut outcome = StdoutReadOutcome::none();
+
+            while let Ok(Some(line)) = lines.next_line().await {
+                log_info!("[stdout] 原始行: {}", line);
+
+                if should_abort(&session_id_clone).await {
+                    break;
+                }
+
+                match serde_json::from_str::<serde_json::Value>(&line) {
+                    Ok(json_value) => {
+                        if let Some(event) = parse_opencode_json_output(&session_id_clone, &json_value) {
+                            outcome.emitted_non_error_event |=
+                                is_successful_event_type(&event.event_type);
+                            outcome.emitted_content |= event.event_type == "content";
+                            outcome.emitted_error |= event.event_type == "error";
+                            stdout_monitor
+                                .note_activity(is_meaningful_event_type(&event.event_type));
+                            log_info!(
+                                "[stdout] 发送事件: type={}, content_len={:?}",
+                                event.event_type,
+                                event.content.as_ref().map(|c| c.len())
+                            );
+                            emit_cli_event(
+                                &app_clone,
+                                &event_name_clone,
+                                plan_id_clone.as_ref(),
+                                &event,
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        log_error!("[stdout] JSON 解析失败: {:?} | line: {}", e, preview_text(&line, 200));
+                    }
+                }
+            }
+
+            outcome
+        });
+
+        let session_id_clone = session_id.clone();
+        let app_clone = app.clone();
+        let event_name_clone = event_name.clone();
+        let plan_id_clone = plan_id.clone();
+        let stderr_monitor = monitor.clone();
+
+        let stderr_handle = tokio::spawn(async move {
+            let mut reader = tokio::io::BufReader::new(stderr);
+            let mut error_output = String::new();
+            if reader.read_to_string(&mut error_output).await.is_err() {
+                return StderrReadOutcome::none();
+            }
+
+            if error_output.is_empty() {
+                return StderrReadOutcome::none();
+            }
+
+            log_error!("[stderr] {}", error_output);
+
+            let error_lines: Vec<&str> = error_output
+                .lines()
+                .filter(|line| {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        return false;
+                    }
+                    stderr_monitor.note_activity(false);
+                    let line_lower = line.to_lowercase();
+                    line_lower.contains("error")
+                        || line_lower.contains("failed")
+                        || line_lower.contains("fatal")
+                })
+                .collect();
+
+            if !error_lines.is_empty() {
+                let error_msg = error_lines.join("\n");
+                let event = build_error_event(&session_id_clone, error_msg);
+                emit_cli_event(
+                    &app_clone,
+                    &event_name_clone,
+                    plan_id_clone.as_ref(),
+                    &event,
+                );
+                return StderrReadOutcome {
+                    emitted_error: true,
+                };
+            }
+
+            StderrReadOutcome::none()
+        });
+
+        let mut timeout_error_message: Option<String> = None;
+
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(exit_status)) => {
+                    monitor.note_process_exit(exit_status.code());
+                    break exit_status;
+                }
+                Ok(None) => {}
+                Err(error) => return Err(error.into()),
+            }
+
+            let snapshot = monitor.snapshot();
+            let now = Instant::now();
+            if let Some(timeout_kind) = detect_cli_timeout(&snapshot, timeout_config, now) {
+                let error_message =
+                    build_timeout_error_message("OpenCode", timeout_kind, &snapshot, now);
+                log_error!("{}", error_message);
+                let error_event = build_error_event(&session_id, error_message.clone());
+                emit_cli_event(&app, &event_name, plan_id.as_ref(), &error_event);
+                timeout_error_message = Some(error_message);
+
+                if let Err(error) = child.kill().await {
+                    log_error!("终止超时的 OpenCode CLI 进程失败: {}", error);
+                }
+
+                let exit_status = child.wait().await?;
+                monitor.note_process_exit(exit_status.code());
+                break exit_status;
+            }
+
+            sleep(Duration::from_millis(250)).await;
+        };
+        let elapsed = execution_started_at.elapsed();
+        log_info!(
+            "OpenCode CLI 执行完成，退出码: {:?}, 耗时: {:.2}s",
+            status.code(),
+            elapsed.as_secs_f64()
+        );
+
+        let stdout_outcome = stdout_handle.await?;
+        let stderr_outcome = match stderr_handle.await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                log_error!("[stderr] 任务等待失败: {}", error);
+                StderrReadOutcome::none()
+            }
+        };
+        if let Some(handle) = stdin_write_handle {
+            if let Err(error) = handle.await {
+                log_error!("[stdin] task join failed: {}", error);
+            }
+        }
+
+        let finished_at = Instant::now();
+        let summary = build_execution_summary(&monitor.snapshot(), finished_at);
+        log_info!("OpenCode CLI 执行摘要: {}", summary);
+
+        unregister_session_pid(&session_id).await;
+
+        let should_treat_failure_as_success =
+            should_treat_process_failure_as_success(&stdout_outcome, &stderr_outcome);
+        let execution_succeeded = status.success() || should_treat_failure_as_success;
+
+        if timeout_error_message.is_none() && execution_succeeded {
+            let done_event = CliStreamEvent {
+                event_type: "done".to_string(),
+                session_id: session_id.clone(),
+                content: None,
+                tool_name: None,
+                tool_call_id: None,
+                tool_input: None,
+                tool_result: None,
+                error: None,
+                input_tokens: None,
+                output_tokens: None,
+                model: None,
+                external_session_id: None,
+            };
+            emit_cli_event(&app, &event_name, plan_id.as_ref(), &done_event);
+        }
+
+        clear_abort_flag(&session_id).await;
+
+        if let Some(error_message) = timeout_error_message {
+            return Err(anyhow::anyhow!(error_message));
+        }
+
+        if !status.success() {
+            if should_treat_failure_as_success {
+                log_info!(
+                    "忽略 OpenCode CLI 非零/空退出码：已收到有效输出，exit_code={:?}, {}",
+                    status.code(),
+                    summary
+                );
+                return Ok(());
+            }
+            return Err(anyhow::anyhow!(
+                "OpenCode CLI 执行失败，退出码: {:?}, {}",
+                status.code(),
+                summary
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+fn build_full_opencode_command(cli_path: &str, args: &[String], stdin_payload: &str) -> String {
+    let mut cmd_parts = Vec::new();
+    cmd_parts.push(shell_escape(cli_path));
+    cmd_parts.extend(args.iter().map(|arg| shell_escape(arg)));
+    cmd_parts.push(format!("<stdin, {} chars>", stdin_payload.len()));
+    cmd_parts.join(" ")
+}
+
+/// 解析 `opencode run --format json` 的每行 JSON 输出。
+///
+/// OpenCode 的 JSON 事件格式与 Claude CLI 类似但字段名不同。
+/// 初期实现基于实际运行样本迭代，支持基本事件类型。
+fn parse_opencode_json_output(session_id: &str, json: &serde_json::Value) -> Option<CliStreamEvent> {
+    let event_type = json
+        .get("type")
+        .and_then(|t| t.as_str())
+        .unwrap_or("unknown");
+
+    let event = match event_type {
+        // 文本内容增量（流式）/ OpenCode text 事件
+        "content_block_delta" | "text_delta" | "delta" | "text" => {
+            let text = json
+                .get("text")
+                .or_else(|| json.pointer("/part/text"))
+                .or_else(|| json.pointer("/delta/text"))
+                .or_else(|| json.pointer("/properties/text"))
+                .and_then(|t| t.as_str())?;
+            Some(build_content_event(session_id, text.to_string()))
+        }
+        // thinking 内容
+        "thinking_delta" | "thinking" => {
+            let text = json
+                .get("thinking")
+                .or_else(|| json.pointer("/delta/thinking"))
+                .and_then(|t| t.as_str())?;
+            Some(CliStreamEvent {
+                event_type: "thinking".to_string(),
+                session_id: session_id.to_string(),
+                content: Some(text.to_string()),
+                tool_name: None,
+                tool_call_id: None,
+                tool_input: None,
+                tool_result: None,
+                error: None,
+                input_tokens: None,
+                output_tokens: None,
+                model: None,
+                external_session_id: None,
+            })
+        }
+        // 工具调用开始
+        "tool_use" | "content_block_start" => {
+            let tool_name = json
+                .get("name")
+                .or_else(|| json.pointer("/content_block/name"))
+                .or_else(|| json.pointer("/properties/name"))
+                .and_then(|n| n.as_str())?;
+            let tool_id = json
+                .get("id")
+                .or_else(|| json.pointer("/content_block/id"))
+                .and_then(|i| i.as_str())
+                .map(|i| i.to_string());
+            let tool_input = json
+                .get("input")
+                .and_then(|i| serde_json::to_string(i).ok());
+            Some(CliStreamEvent {
+                event_type: "tool_use".to_string(),
+                session_id: session_id.to_string(),
+                content: None,
+                tool_name: Some(tool_name.to_string()),
+                tool_call_id: tool_id,
+                tool_input,
+                tool_result: None,
+                error: None,
+                input_tokens: None,
+                output_tokens: None,
+                model: None,
+                external_session_id: None,
+            })
+        }
+        // 工具输入增量
+        "tool_input_delta" | "input_json_delta" => {
+            let partial_json = json
+                .get("partial_json")
+                .or_else(|| json.pointer("/delta/partial_json"))
+                .and_then(|j| j.as_str())
+                .unwrap_or("");
+            let tool_call_id = json
+                .get("id")
+                .and_then(|i| i.as_str())
+                .map(|i| i.to_string());
+            Some(CliStreamEvent {
+                event_type: "tool_input_delta".to_string(),
+                session_id: session_id.to_string(),
+                content: None,
+                tool_name: None,
+                tool_call_id,
+                tool_input: Some(partial_json.to_string()),
+                tool_result: None,
+                error: None,
+                input_tokens: None,
+                output_tokens: None,
+                model: None,
+                external_session_id: None,
+            })
+        }
+        // 工具结果
+        "tool_result" => {
+            let tool_id = json
+                .get("tool_use_id")
+                .and_then(|i| i.as_str())
+                .map(|i| i.to_string());
+            let result_content = json
+                .get("content")
+                .and_then(|c| c.as_str())
+                .map(|c| c.to_string());
+            Some(CliStreamEvent {
+                event_type: "tool_result".to_string(),
+                session_id: session_id.to_string(),
+                content: None,
+                tool_name: None,
+                tool_call_id: tool_id,
+                tool_input: None,
+                tool_result: result_content,
+                error: None,
+                input_tokens: None,
+                output_tokens: None,
+                model: None,
+                external_session_id: None,
+            })
+        }
+        // 完整 assistant 消息（非流式）
+        "assistant" | "message" => {
+            let content: Option<&str> = json
+                .get("content")
+                .and_then(|c| c.as_str())
+                .or_else(|| json.pointer("/message/content").and_then(|c| c.as_str()));
+            if let Some(text) = content {
+                let (input_tokens, output_tokens) = extract_usage_counts(json.get("usage"));
+                let model = json
+                    .get("model")
+                    .and_then(|m| m.as_str())
+                    .map(|m| m.to_string());
+                Some(CliStreamEvent {
+                    event_type: "content".to_string(),
+                    session_id: session_id.to_string(),
+                    content: Some(text.to_string()),
+                    tool_name: None,
+                    tool_call_id: None,
+                    tool_input: None,
+                    tool_result: None,
+                    error: None,
+                    input_tokens,
+                    output_tokens,
+                    model,
+                    external_session_id: None,
+                })
+            } else {
+                None
+            }
+        }
+        // 错误
+        "error" => {
+            let error_msg: &str = json
+                .get("error")
+                .and_then(|e| e.as_str())
+                .or_else(|| json.get("message").and_then(|m| m.as_str()))
+                .or_else(|| json.pointer("/properties/error").and_then(|e| e.as_str()))
+                .unwrap_or("Unknown error");
+            Some(build_error_event(session_id, error_msg.to_string()))
+        }
+        // 用量统计
+        "usage" | "message_start" | "message_delta" | "message_stop" | "turn.failed" | "session_meta" => {
+            let (input_tokens, output_tokens) = extract_usage_counts(json.get("usage"));
+            let model = json
+                .get("model")
+                .and_then(|m| m.as_str())
+                .map(|m| m.to_string());
+
+            if input_tokens.is_some() || output_tokens.is_some() || model.is_some() {
+                Some(CliStreamEvent {
+                    event_type: "usage".to_string(),
+                    session_id: session_id.to_string(),
+                    content: None,
+                    tool_name: None,
+                    tool_call_id: None,
+                    tool_input: None,
+                    tool_result: None,
+                    error: None,
+                    input_tokens,
+                    output_tokens,
+                    model,
+                    external_session_id: None,
+                })
+            } else {
+                extract_external_session_id(json).map(|sid| CliStreamEvent {
+                    event_type: "usage".to_string(),
+                    session_id: session_id.to_string(),
+                    content: None,
+                    tool_name: None,
+                    tool_call_id: None,
+                    tool_input: None,
+                    tool_result: None,
+                    error: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    model: None,
+                    external_session_id: Some(sid),
+                })
+            }
+        }
+        // 系统通知 / step 开始
+        "system" | "step_start" => {
+            let content = json
+                .get("content")
+                .and_then(|c| c.as_str())
+                .or_else(|| json.get("message").and_then(|m| m.as_str()));
+            if let Some(text) = content {
+                Some(build_system_event(session_id, text.to_string()))
+            } else {
+                extract_external_session_id(json).map(|sid| CliStreamEvent {
+                    event_type: "system".to_string(),
+                    session_id: session_id.to_string(),
+                    content: None,
+                    tool_name: None,
+                    tool_call_id: None,
+                    tool_input: None,
+                    tool_result: None,
+                    error: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    model: None,
+                    external_session_id: Some(sid),
+                })
+            }
+        }
+        // item 事件（OpenCode 特有）
+        "item.started" | "item.completed" | "item.delta" => {
+            let item_type = json
+                .get("item_type")
+                .or_else(|| json.pointer("/properties/type"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+
+            match item_type {
+                "tool_use" | "tool" => {
+                    let tool_name = json
+                        .get("name")
+                        .or_else(|| json.pointer("/properties/name"))
+                        .and_then(|n| n.as_str());
+                    let tool_input = json
+                        .get("input")
+                        .or_else(|| json.pointer("/properties/input"))
+                        .and_then(|i| serde_json::to_string(i).ok());
+                    if let Some(name) = tool_name {
+                        Some(CliStreamEvent {
+                            event_type: "tool_use".to_string(),
+                            session_id: session_id.to_string(),
+                            content: None,
+                            tool_name: Some(name.to_string()),
+                            tool_call_id: json.get("id").and_then(|i| i.as_str()).map(|i| i.to_string()),
+                            tool_input,
+                            tool_result: None,
+                            error: None,
+                            input_tokens: None,
+                            output_tokens: None,
+                            model: None,
+                            external_session_id: None,
+                        })
+                    } else {
+                        None
+                    }
+                }
+                "tool_result" => {
+                    let tool_id = json
+                        .get("tool_use_id")
+                        .and_then(|i| i.as_str())
+                        .map(|i| i.to_string());
+                    let result = json
+                        .get("content")
+                        .and_then(|c| serde_json::to_string(c).ok())
+                        .or_else(|| json.get("content").and_then(|c| c.as_str()).map(|s| s.to_string()));
+                    Some(CliStreamEvent {
+                        event_type: "tool_result".to_string(),
+                        session_id: session_id.to_string(),
+                        content: None,
+                        tool_name: None,
+                        tool_call_id: tool_id,
+                        tool_input: None,
+                        tool_result: result,
+                        error: None,
+                        input_tokens: None,
+                        output_tokens: None,
+                        model: None,
+                        external_session_id: None,
+                    })
+                }
+                "text" | "message" => {
+                    let text = json
+                        .get("text")
+                        .or_else(|| json.get("content"))
+                        .and_then(|t| t.as_str());
+                    text.map(|t| build_content_event(session_id, t.to_string()))
+                }
+                _ => {
+                    // 尝试从 delta 中提取文本
+                    let text = json
+                        .get("text")
+                        .or_else(|| json.pointer("/properties/text"))
+                        .or_else(|| json.pointer("/delta/text"))
+                        .and_then(|t| t.as_str());
+                    text.map(|t| build_content_event(session_id, t.to_string()))
+                }
+            }
+        }
+        // turn / session / step 元信息
+        "turn.completed" | "result" | "step_finish" => {
+            let (input_tokens, output_tokens) = extract_usage_counts(
+                json.get("usage").or_else(|| json.pointer("/part/tokens"))
+            );
+            let model = json
+                .get("model")
+                .and_then(|m| m.as_str())
+                .map(|m| m.to_string());
+
+            if input_tokens.is_some() || output_tokens.is_some() || model.is_some() {
+                Some(CliStreamEvent {
+                    event_type: "usage".to_string(),
+                    session_id: session_id.to_string(),
+                    content: None,
+                    tool_name: None,
+                    tool_call_id: None,
+                    tool_input: None,
+                    tool_result: None,
+                    error: None,
+                    input_tokens,
+                    output_tokens,
+                    model,
+                    external_session_id: None,
+                })
+            } else {
+                extract_external_session_id(json).map(|sid| CliStreamEvent {
+                    event_type: "usage".to_string(),
+                    session_id: session_id.to_string(),
+                    content: None,
+                    tool_name: None,
+                    tool_call_id: None,
+                    tool_input: None,
+                    tool_result: None,
+                    error: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    model: None,
+                    external_session_id: Some(sid),
+                })
+            }
+        }
+        // 未知事件：尝试提取文本内容，否则跳过
+        _ => {
+            let text = json.get("text").and_then(|t| t.as_str());
+            text.map(|t| build_content_event(session_id, t.to_string()))
+        }
+    };
+
+    event.map(|event| attach_external_session_id(event, json))
+}
+
+fn extract_usage_counts(usage: Option<&serde_json::Value>) -> (Option<u32>, Option<u32>) {
+    let raw_input_tokens = usage
+        .and_then(|u| {
+            u.get("input_tokens")
+                .or_else(|| u.get("inputTokens"))
+                .or_else(|| u.get("input"))
+                .or_else(|| u.get("cache_read_input_tokens"))
+        })
+        .and_then(|t| t.as_u64())
+        .map(|t| t as u32);
+    let raw_output_tokens = usage
+        .and_then(|u| {
+            u.get("output_tokens")
+                .or_else(|| u.get("outputTokens"))
+                .or_else(|| u.get("output"))
+        })
+        .and_then(|t| t.as_u64())
+        .map(|t| t as u32);
+
+    let has_non_zero_usage =
+        raw_input_tokens.unwrap_or(0) > 0 || raw_output_tokens.unwrap_or(0) > 0;
+    if !has_non_zero_usage {
+        return (None, None);
+    }
+
+    (raw_input_tokens.or(Some(0)), raw_output_tokens.or(Some(0)))
+}

@@ -24,7 +24,7 @@ const draft = ref<AITaskItem>({
   title: '',
   description: '',
   priority: 'medium',
-  expertId: undefined,
+  expertId: '',
   implementationSteps: [],
   testSteps: [],
   acceptanceCriteria: [],
@@ -51,11 +51,12 @@ const depDropdownDisplay = computed(() => {
 })
 
 function resetDraft() {
+  const rawExpertId = props.task.expertId
   draft.value = {
     title: props.task.title || '',
     description: props.task.description || '',
     priority: props.task.priority || 'medium',
-    expertId: props.task.expertId,
+    expertId: rawExpertId || '',
     implementationSteps: [...(props.task.implementationSteps || [])],
     testSteps: [...(props.task.testSteps || [])],
     acceptanceCriteria: [...(props.task.acceptanceCriteria || [])],
@@ -91,13 +92,15 @@ function removeDependency(dependencyTitle: string) {
 }
 
 function save() {
-  emit('save', {
+  const updates = {
     ...draft.value,
+    expertId: draft.value.expertId || undefined,
     implementationSteps: [...draft.value.implementationSteps],
     testSteps: [...draft.value.testSteps],
     acceptanceCriteria: [...draft.value.acceptanceCriteria],
     dependsOn: [...(draft.value.dependsOn || [])]
-  })
+  }
+  emit('save', updates)
 }
 
 watch(() => [props.task, props.index], resetDraft, { immediate: true })
@@ -108,6 +111,8 @@ useSafeOutsideClick(
     isDepDropdownOpen.value = false
   }
 )
+
+defineExpose({ triggerSave: save })
 </script>
 
 <template>
@@ -177,6 +182,89 @@ useSafeOutsideClick(
             {{ expert.name }}
           </option>
         </select>
+      </div>
+    </div>
+
+    <div
+      ref="depDropdownRef"
+      class="form-row dep-dropdown"
+    >
+      <label>{{ t('task.dependencies') }}</label>
+      <div
+        v-if="availableDependencyTitles.length > 0"
+        class="dep-dropdown__body"
+      >
+        <button
+          type="button"
+          class="dep-trigger"
+          :class="{ open: isDepDropdownOpen }"
+          @click.stop="toggleDepDropdown"
+        >
+          <span
+            class="dep-display"
+            :class="{ placeholder: !(draft.dependsOn?.length || 0) }"
+          >
+            {{ depDropdownDisplay }}
+          </span>
+          <svg
+            class="dep-arrow"
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M6 9l6 6 6-6" />
+          </svg>
+        </button>
+
+        <div
+          v-if="draft.dependsOn?.length"
+          class="dep-selected-tags"
+        >
+          <span
+            v-for="title in draft.dependsOn"
+            :key="title"
+            class="dep-tag"
+          >
+            {{ title }}
+            <button
+              type="button"
+              class="dep-tag-remove"
+              @click="removeDependency(title)"
+            >
+              ×
+            </button>
+          </span>
+        </div>
+
+        <div
+          v-if="isDepDropdownOpen"
+          class="dep-menu"
+        >
+          <label
+            v-for="title in availableDependencyTitles"
+            :key="title"
+            class="dep-option"
+            :class="{ selected: isDependencySelected(title) }"
+          >
+            <input
+              type="checkbox"
+              :checked="isDependencySelected(title)"
+              @change="handleDependencyToggle(title)"
+            >
+            <span class="dep-checkbox" />
+            <span class="dep-option-label">{{ title }}</span>
+          </label>
+        </div>
+      </div>
+
+      <div
+        v-else
+        class="no-tasks-hint"
+      >
+        {{ t('task.noTasksAvailable') }}
       </div>
     </div>
 
@@ -275,106 +363,6 @@ useSafeOutsideClick(
         </div>
       </div>
     </div>
-
-    <div
-      ref="depDropdownRef"
-      class="form-row dep-dropdown"
-    >
-      <label>{{ t('task.dependencies') }}</label>
-      <div
-        v-if="availableDependencyTitles.length > 0"
-        class="dep-dropdown__body"
-      >
-        <button
-          type="button"
-          class="dep-trigger"
-          :class="{ open: isDepDropdownOpen }"
-          @click.stop="toggleDepDropdown"
-        >
-          <span
-            class="dep-display"
-            :class="{ placeholder: !(draft.dependsOn?.length || 0) }"
-          >
-            {{ depDropdownDisplay }}
-          </span>
-          <svg
-            class="dep-arrow"
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <path d="M6 9l6 6 6-6" />
-          </svg>
-        </button>
-
-        <div
-          v-if="draft.dependsOn?.length"
-          class="dep-selected-tags"
-        >
-          <span
-            v-for="title in draft.dependsOn"
-            :key="title"
-            class="dep-tag"
-          >
-            {{ title }}
-            <button
-              type="button"
-              class="dep-tag-remove"
-              @click="removeDependency(title)"
-            >
-              ×
-            </button>
-          </span>
-        </div>
-
-        <div
-          v-if="isDepDropdownOpen"
-          class="dep-menu"
-        >
-          <label
-            v-for="title in availableDependencyTitles"
-            :key="title"
-            class="dep-option"
-            :class="{ selected: isDependencySelected(title) }"
-          >
-            <input
-              type="checkbox"
-              :checked="isDependencySelected(title)"
-              @change="handleDependencyToggle(title)"
-            >
-            <span class="dep-checkbox" />
-            <span class="dep-option-label">{{ title }}</span>
-          </label>
-        </div>
-      </div>
-
-      <div
-        v-else
-        class="no-tasks-hint"
-      >
-        {{ t('task.noTasksAvailable') }}
-      </div>
-    </div>
-
-    <div class="edit-actions">
-      <button
-        type="button"
-        class="btn btn-secondary"
-        @click="emit('cancel')"
-      >
-        {{ t('common.cancel') }}
-      </button>
-      <button
-        type="button"
-        class="btn btn-primary"
-        @click="save"
-      >
-        {{ t('common.save') }}
-      </button>
-    </div>
   </div>
 </template>
 
@@ -382,41 +370,55 @@ useSafeOutsideClick(
 .task-editor {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-3, 0.75rem);
+  gap: var(--spacing-4, 1rem);
 }
 
 .form-row {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-1, 0.25rem);
+  gap: var(--spacing-1, 0.375rem);
 }
 
 .form-row label {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: var(--font-size-xs, 12px);
-  font-weight: var(--font-weight-medium, 500);
+  font-size: var(--font-size-xs, 11px);
+  font-weight: var(--font-weight-semibold, 600);
   color: var(--color-text-secondary, #64748b);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
-.form-row input,
-.form-row textarea,
-.form-row select {
-  padding: var(--spacing-2, 0.5rem);
+.form-row input[type="text"],
+.form-row textarea {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
   border: 1px solid var(--color-border, #e2e8f0);
   border-radius: var(--radius-md, 8px);
   font-size: var(--font-size-sm, 13px);
-  background-color: var(--color-surface, #fff);
+  line-height: 1.5;
+  background-color: var(--color-bg-secondary, #f8fafc);
   color: var(--color-text-primary, #1e293b);
-  transition: border-color var(--transition-fast, 150ms), box-shadow var(--transition-fast, 150ms);
+  transition: border-color var(--transition-fast, 150ms), box-shadow var(--transition-fast, 150ms), background-color var(--transition-fast, 150ms);
 }
 
-.form-row input:focus,
-.form-row textarea:focus,
-.form-row select:focus {
+.form-row input[type="text"]:focus,
+.form-row textarea:focus {
   outline: none;
-  border-color: var(--color-primary, #60a5fa);
+  border-color: var(--color-primary, #3b82f6);
+  box-shadow: 0 0 0 3px rgb(59 130 246 / 12%);
+  background-color: var(--color-bg-tertiary, #f1f5f9);
+}
+
+.form-row input[type="text"]:hover:not(:focus),
+.form-row textarea:hover:not(:focus) {
+  border-color: var(--color-border-hover, #cbd5e1);
+}
+
+.form-row textarea {
+  resize: vertical;
+  min-height: 60px;
 }
 
 .priority-select-wrap {
@@ -430,12 +432,13 @@ useSafeOutsideClick(
   -moz-appearance: none;
   cursor: pointer;
   padding-right: 2rem;
-  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  background: var(--color-bg-secondary, #f8fafc);
+  color: var(--color-text-primary, #1e293b);
 }
 
 .priority-select:hover {
-  border-color: #cbd5e1;
-  background: linear-gradient(180deg, #ffffff 0%, #f1f5f9 100%);
+  border-color: var(--color-border-hover, #cbd5e1);
+  background: var(--color-bg-secondary, #f1f5f9);
 }
 
 .priority-select:focus {
@@ -447,39 +450,43 @@ useSafeOutsideClick(
   right: 0.625rem;
   top: 50%;
   transform: translateY(-50%);
-  color: #64748b;
+  color: var(--color-text-tertiary, #64748b);
   pointer-events: none;
   transition: transform var(--transition-fast, 150ms), color var(--transition-fast, 150ms);
 }
 
 .priority-select-wrap:focus-within .select-arrow {
-  color: #3b82f6;
+  color: var(--color-primary, #3b82f6);
   transform: translateY(-50%) rotate(180deg);
 }
 
 .btn-add-step {
-  padding: 0 var(--spacing-2, 0.5rem);
-  border: none;
+  padding: 0.125rem 0.5rem;
+  border: 1px dashed var(--color-border, #e2e8f0);
   border-radius: var(--radius-sm, 4px);
   background: transparent;
   color: var(--color-primary, #3b82f6);
-  font-size: var(--font-size-xs, 12px);
+  font-size: var(--font-size-xs, 11px);
+  font-weight: var(--font-weight-medium, 500);
   cursor: pointer;
+  transition: all var(--transition-fast, 150ms);
 }
 
 .btn-add-step:hover {
+  border-color: var(--color-primary, #3b82f6);
   background-color: var(--color-primary-light, #dbeafe);
 }
 
 .steps-list {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-1, 0.25rem);
+  gap: var(--spacing-1, 0.375rem);
 }
 
 .step-item {
   display: flex;
-  gap: var(--spacing-1, 0.25rem);
+  align-items: center;
+  gap: var(--spacing-2, 0.5rem);
 }
 
 .step-item input {
@@ -487,12 +494,15 @@ useSafeOutsideClick(
 }
 
 .btn-remove-step {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
   border: none;
   border-radius: var(--radius-sm, 4px);
-  background-color: var(--color-bg-secondary, #f1f5f9);
+  background-color: transparent;
   color: var(--color-text-tertiary, #94a3b8);
+  font-size: 14px;
+  line-height: 1;
   cursor: pointer;
   transition: all var(--transition-fast, 150ms);
 }
@@ -521,7 +531,7 @@ useSafeOutsideClick(
   padding: var(--spacing-2, 0.5rem);
   border: 1px solid var(--color-border, #e2e8f0);
   border-radius: var(--radius-md, 8px);
-  background: var(--color-surface, #fff);
+  background: var(--color-bg-secondary, #f8fafc);
   cursor: pointer;
   transition: all var(--transition-fast, 150ms);
 }
@@ -568,12 +578,14 @@ useSafeOutsideClick(
 .dep-tag {
   display: inline-flex;
   align-items: center;
-  gap: var(--spacing-1, 0.25rem);
-  padding: 2px var(--spacing-2, 0.5rem);
+  gap: 4px;
+  padding: 2px 0.5rem;
   background: var(--color-primary-light, #dbeafe);
   border-radius: var(--radius-full, 9999px);
-  font-size: var(--font-size-xs, 12px);
+  font-size: var(--font-size-xs, 11px);
+  font-weight: var(--font-weight-medium, 500);
   color: var(--color-primary, #3b82f6);
+  line-height: 1.4;
 }
 
 .dep-tag-remove {
@@ -597,7 +609,7 @@ useSafeOutsideClick(
 
 .dep-menu {
   position: absolute;
-  top: 100%;
+  bottom: calc(100% + 0.5rem);
   left: 0;
   right: 0;
   max-height: 200px;
@@ -605,7 +617,7 @@ useSafeOutsideClick(
   background: var(--color-surface, #fff);
   border: 1px solid var(--color-border, #e2e8f0);
   border-radius: var(--radius-md, 8px);
-  box-shadow: var(--shadow-lg, 0 10px 15px -3px rgba(0, 0, 0, 0.1));
+  box-shadow: var(--shadow-lg, 0 -10px 15px -3px rgba(0, 0, 0, 0.1));
   z-index: 100;
 }
 
@@ -667,39 +679,5 @@ useSafeOutsideClick(
   font-style: italic;
 }
 
-.edit-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--spacing-2, 0.5rem);
-  margin-top: var(--spacing-2, 0.5rem);
-}
 
-.btn {
-  padding: var(--spacing-1, 0.25rem) var(--spacing-3, 0.75rem);
-  border-radius: var(--radius-sm, 4px);
-  font-size: var(--font-size-xs, 12px);
-  font-weight: var(--font-weight-medium, 500);
-  cursor: pointer;
-  transition: all var(--transition-fast, 150ms);
-}
-
-.btn-primary {
-  background-color: var(--color-primary, #3b82f6);
-  color: white;
-  border: none;
-}
-
-.btn-primary:hover {
-  background-color: var(--color-primary-hover, #2563eb);
-}
-
-.btn-secondary {
-  background-color: var(--color-surface, #fff);
-  color: var(--color-text-primary, #1e293b);
-  border: 1px solid var(--color-border, #e2e8f0);
-}
-
-.btn-secondary:hover {
-  background-color: var(--color-surface-hover, #f8fafc);
-}
 </style>

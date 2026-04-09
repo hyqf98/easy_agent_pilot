@@ -50,7 +50,7 @@ export interface InstalledMcp {
 export interface SkillInstallInput {
   skill_id: string
   skill_name: string
-  cli_type: 'claude' | 'codex'
+  cli_type: 'claude' | 'codex' | 'opencode'
   scope: 'global' | 'project'
   project_path: string | null
   source_market?: MarketplaceSourceId | null
@@ -60,7 +60,7 @@ export interface GitSkillInstallInput {
   repository_url: string
   git_ref?: string | null
   skill_name: string
-  cli_type: 'claude' | 'codex'
+  cli_type: 'claude' | 'codex' | 'opencode'
 }
 
 interface MarketPagination {
@@ -104,7 +104,7 @@ export interface GitPluginInstallInput {
   repository_url: string
   git_ref?: string | null
   plugin_name: string
-  cli_type: 'claude' | 'codex'
+  cli_type: 'claude' | 'codex' | 'opencode'
   cli_path: string
 }
 

@@ -210,9 +210,10 @@ function handleKeydown(event: KeyboardEvent) {
 
   event.preventDefault()
   event.stopPropagation()
+  event.stopImmediatePropagation()
 
   if (event.key === 'Escape') {
-    suppressNextToggleUntil.value = Date.now() + 160
+    suppressNextToggleUntil.value = Date.now() + 300
     stopRecording()
     return
   }
@@ -221,6 +222,7 @@ function handleKeydown(event: KeyboardEvent) {
 
   const result = buildShortcutFromKeyboardEvent(event)
   if (result.accelerator) {
+    suppressNextToggleUntil.value = Date.now() + 500
     applyCapturedShortcut(result.accelerator)
     return
   }
@@ -240,16 +242,32 @@ function handleKeyup(event: KeyboardEvent) {
 
   event.preventDefault()
   event.stopPropagation()
+  event.stopImmediatePropagation()
   recordingPreview.value = formatShortcutPreviewFromKeyboardEvent(event)
 }
 
-function swallowDisplayKeyEvent(event: KeyboardEvent) {
+function handleButtonKeydown(event: KeyboardEvent) {
   if (!isRecording.value) {
     return
   }
-
   event.preventDefault()
   event.stopPropagation()
+}
+
+function handleButtonKeyup(event: KeyboardEvent) {
+  if (!isRecording.value) {
+    return
+  }
+  event.preventDefault()
+  event.stopPropagation()
+}
+
+function handleButtonClick(event: MouseEvent) {
+  if (isRecording.value) {
+    event.preventDefault()
+    return
+  }
+  toggleRecording()
 }
 
 function enableWindowsOverride() {
@@ -290,9 +308,9 @@ onUnmounted(() => {
           'shortcut-display--disabled': disabled
         }"
         :disabled="disabled"
-        @click="toggleRecording"
-        @keydown="swallowDisplayKeyEvent"
-        @keyup="swallowDisplayKeyEvent"
+        @click="handleButtonClick"
+        @keydown="handleButtonKeydown"
+        @keyup="handleButtonKeyup"
       >
         <span class="shortcut-display__value">
           {{ isRecording ? recordingDisplayValue : displayValue }}

@@ -830,17 +830,21 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       }
     ]
 
-    const uiMessages: SplitMessage[] = [{
-      id: crypto.randomUUID(),
-      role: 'user',
-      content: [
-        `继续拆分任务：${targetTask.title}`,
-        `原任务描述：${targetTask.description || '（无）'}`,
-        `拆分颗粒度：至少 ${config.granularity} 个子任务`,
-        config.customPrompt ? `额外要求：${config.customPrompt}` : ''
-      ].filter(Boolean).join('\n'),
-      timestamp: new Date().toISOString()
-    }]
+    const preservedMessages = messages.value.filter(m => m.content.trim())
+    const uiMessages: SplitMessage[] = [
+      ...preservedMessages,
+      {
+        id: crypto.randomUUID(),
+        role: 'user',
+        content: [
+          `继续拆分任务：${targetTask.title}`,
+          `原任务描述：${targetTask.description || '（无）'}`,
+          `拆分颗粒度：至少 ${config.granularity} 个子任务`,
+          config.customPrompt ? `额外要求：${config.customPrompt}` : ''
+        ].filter(Boolean).join('\n'),
+        timestamp: new Date().toISOString()
+      }
+    ]
 
     const selectedAgent = useAgentStore().agents.find(agent => agent.id === nextContext.agentId)
     if (selectedAgent) {
@@ -898,21 +902,29 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
           planName: nextContext.planName,
           planDescription: nextContext.planDescription,
           tasks: originalTasks,
-          userPrompt: config.customPrompt
+          userPrompt: config.customPrompt,
+          targetIndex: config.targetIndex
         })
       }
     ]
 
-    const uiMessages: SplitMessage[] = [{
-      id: crypto.randomUUID(),
-      role: 'user',
-      content: [
-        `整体优化任务列表：共 ${originalTasks.length} 个任务`,
-        '约束：保持任务数量不变，可重排顺序并修正依赖关系',
-        config.customPrompt ? `额外要求：${config.customPrompt}` : ''
-      ].filter(Boolean).join('\n'),
-      timestamp: new Date().toISOString()
-    }]
+    const preservedMessages = messages.value.filter(m => m.content.trim())
+    const targetLabel = config.targetIndex !== undefined && config.targetIndex >= 0 && config.targetIndex < originalTasks.length
+      ? `优化任务 ${config.targetIndex + 1}《${originalTasks[config.targetIndex].title}》`
+      : `整体优化任务列表：共 ${originalTasks.length} 个任务`
+    const uiMessages: SplitMessage[] = [
+      ...preservedMessages,
+      {
+        id: crypto.randomUUID(),
+        role: 'user',
+        content: [
+          targetLabel,
+          '约束：保持任务数量不变',
+          config.customPrompt ? `额外要求：${config.customPrompt}` : ''
+        ].filter(Boolean).join('\n'),
+        timestamp: new Date().toISOString()
+      }
+    ]
 
     const selectedAgent = useAgentStore().agents.find(agent => agent.id === nextContext.agentId)
     if (selectedAgent) {

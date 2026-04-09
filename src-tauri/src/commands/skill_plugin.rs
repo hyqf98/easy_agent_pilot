@@ -680,10 +680,12 @@ pub fn delete_skill_directory(skill_path: String) -> Result<(), String> {
     let skills_dir = home_dir.join(".claude").join("skills");
     let codex_skills_dir = home_dir.join(".codex").join("skills");
     let qwen_skills_dir = home_dir.join(".qwen").join("skills");
+    let opencode_skills_dir = home_dir.join(".config").join("opencode").join("skills");
 
     let is_valid_path = skill_dir.starts_with(&skills_dir)
         || skill_dir.starts_with(&codex_skills_dir)
-        || skill_dir.starts_with(&qwen_skills_dir);
+        || skill_dir.starts_with(&qwen_skills_dir)
+        || skill_dir.starts_with(&opencode_skills_dir);
 
     if !is_valid_path {
         return Err(
@@ -712,10 +714,12 @@ pub fn delete_plugin_directory(plugin_path: String) -> Result<(), String> {
     let plugins_dir = home_dir.join(".claude").join("plugins");
     let codex_plugins_dir = home_dir.join(".codex").join("plugins");
     let qwen_plugins_dir = home_dir.join(".qwen").join("plugins");
+    let opencode_plugins_dir = home_dir.join(".config").join("opencode").join("plugins");
 
     let is_valid_path = plugin_dir.starts_with(&plugins_dir)
         || plugin_dir.starts_with(&codex_plugins_dir)
-        || plugin_dir.starts_with(&qwen_plugins_dir);
+        || plugin_dir.starts_with(&qwen_plugins_dir)
+        || plugin_dir.starts_with(&opencode_plugins_dir);
 
     if !is_valid_path {
         return Err(
@@ -775,10 +779,12 @@ pub fn write_file_content(file_path: String, content: String) -> Result<(), Stri
     let claude_dir = home_dir.join(".claude");
     let codex_dir = home_dir.join(".codex");
     let qwen_dir = home_dir.join(".qwen");
+    let opencode_dir = home_dir.join(".config").join("opencode");
 
     let is_valid_path = path.starts_with(&claude_dir)
         || path.starts_with(&codex_dir)
-        || path.starts_with(&qwen_dir);
+        || path.starts_with(&qwen_dir)
+        || path.starts_with(&opencode_dir);
 
     if !is_valid_path {
         return Err("Invalid file path: file must be in a valid CLI directory".to_string());

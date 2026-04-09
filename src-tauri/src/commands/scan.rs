@@ -159,6 +159,12 @@ fn get_cli_config_dir(
             let config_file = home_dir.join(".codex").join("config.toml");
             Ok((config_dir, config_file, "codex".to_string()))
         }
+        "opencode" => {
+            // OpenCode CLI: 配置在 ~/.config/opencode/opencode.json
+            let config_dir = home_dir.join(".config").join("opencode");
+            let config_file = config_dir.join("opencode.json");
+            Ok((config_dir, config_file, "opencode".to_string()))
+        }
         "qwen" | "qwen-code" => {
             // Qwen Code: 配置在 ~/.qwen/settings.json
             let config_dir = home_dir.join(".qwen");

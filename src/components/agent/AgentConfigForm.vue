@@ -132,7 +132,8 @@ const providerOptions = computed(() => {
   if (form.value.type === 'cli') {
     return [
       { value: 'claude', label: t('settings.agent.providerClaudeCli') },
-      { value: 'codex', label: t('settings.agent.providerCodexCli') }
+      { value: 'codex', label: t('settings.agent.providerCodexCli') },
+      { value: 'opencode', label: t('settings.agent.providerOpencodeCli') }
     ]
   } else {
     return [
@@ -167,21 +168,18 @@ function detectPlatform(): RuntimePlatform {
 const runtimePlatform = detectPlatform()
 
 const cliPathPlaceholder = computed(() => {
-  const executableName = form.value.provider === 'codex' ? 'codex' : 'claude'
+  const providerMap: Record<string, string> = { claude: 'claude', codex: 'codex', opencode: 'opencode' }
+  const executableName = providerMap[form.value.provider || ''] || 'claude'
 
   if (runtimePlatform === 'windows') {
     return `%USERPROFILE%\\\\AppData\\\\Roaming\\\\npm\\\\${executableName}.cmd`
   }
 
   if (runtimePlatform === 'macos') {
-    return executableName === 'codex'
-      ? '/opt/homebrew/bin/codex'
-      : '/opt/homebrew/bin/claude'
+    return `/opt/homebrew/bin/${executableName}`
   }
 
-  return executableName === 'codex'
-    ? '/home/your-user/.local/bin/codex'
-    : '/home/your-user/.local/bin/claude'
+  return `/home/your-user/.local/bin/${executableName}`
 })
 
 // 验证 URL 格式（即时验证）

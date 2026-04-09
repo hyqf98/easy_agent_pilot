@@ -256,6 +256,37 @@ pub fn get_cli_install_options(cli_name: String) -> Result<CliInstallerInfo, Str
                 });
             }
         }
+        "opencode" => {
+            #[cfg(not(windows))]
+            {
+                options.push(InstallOption {
+                    method: "native".to_string(),
+                    command: "curl -fsSL https://opencode.ai/install | bash".to_string(),
+                    recommended: true,
+                    available: *manager_map.get("curl").unwrap_or(&false),
+                    display_name: "Native Install".to_string(),
+                });
+            }
+
+            #[cfg(target_os = "macos")]
+            {
+                options.push(InstallOption {
+                    method: "homebrew".to_string(),
+                    command: "brew install anomalyco/tap/opencode".to_string(),
+                    recommended: false,
+                    available: *manager_map.get("homebrew").unwrap_or(&false),
+                    display_name: "Homebrew".to_string(),
+                });
+            }
+
+            options.push(InstallOption {
+                method: "npm".to_string(),
+                command: "npm install -g opencode-ai@latest".to_string(),
+                recommended: false,
+                available: *manager_map.get("npm").unwrap_or(&false),
+                display_name: "npm".to_string(),
+            });
+        }
         _ => {
             return Err(format!("Unsupported CLI: {}", cli_name));
         }
@@ -274,6 +305,7 @@ fn get_npm_package(cli_name: &str) -> &'static str {
     match cli_name {
         "claude" => "@anthropic-ai/claude-code",
         "codex" => "@openai/codex",
+        "opencode" => "opencode-ai",
         _ => "",
     }
 }
@@ -283,6 +315,7 @@ fn get_brew_package(cli_name: &str) -> &'static str {
     match cli_name {
         "claude" => "claude-code",
         "codex" => "codex",
+        "opencode" => "anomalyco/tap/opencode",
         _ => "",
     }
 }

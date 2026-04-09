@@ -12,6 +12,20 @@ import RuntimeNoticeList from './RuntimeNoticeList.vue'
 import { buildRuntimeNoticeFromSystemContent } from '@/utils/runtimeNotice'
 import type { ToolCall } from '@/stores/message'
 
+import type { DynamicFormSchema } from '@/types/plan'
+
+function buildSubmittedFormSummary(schema?: DynamicFormSchema, values?: Record<string, unknown>): string {
+  if (!schema || !values) return ''
+  return schema.fields
+    .map(field => {
+      const raw = values[field.name]
+      const matched = field.options?.find(opt => opt.value === raw)
+      const display = matched ? matched.label : String(raw ?? '')
+      return `${field.label}: ${display}`
+    })
+    .join('\n')
+}
+
 const props = withDefaults(defineProps<{
   entries: TimelineEntry[]
   groupToolCalls?: boolean
@@ -135,8 +149,7 @@ function buildMergedThinkingEntry(entries: TimelineEntry[]): TimelineEntry | nul
 
 function getAssistantTurnKey(entries: TimelineEntry[]) {
   const firstId = entries[0]?.id ?? 'start'
-  const lastId = entries[entries.length - 1]?.id ?? 'end'
-  return `assistant-turn:${firstId}:${lastId}:${entries.length}`
+  return `assistant-turn:${firstId}`
 }
 
 function toTimestampMs(value?: string) {
@@ -476,9 +489,27 @@ function getEntryElapsedLabel(entry: TimelineEntry) {
         <div
           v-else-if="block.entry.type === 'form' && block.entry.formSchema"
           class="timeline-form"
-          :class="`timeline-form--${block.entry.formVariant || 'active'}`"
+          :class="[
+            `timeline-form--${block.entry.formVariant || 'active'}`,
+            { 'timeline-form--user': block.entry.role === 'user' }
+          ]"
         >
           <div
+            v-if="block.entry.role === 'user' && block.entry.formVariant === 'submitted'"
+            class="timeline-form__content timeline-form__submitted-summary"
+          >
+            <div
+              v-if="getEntryElapsedLabel(block.entry)"
+              class="timeline-entry__meta"
+            >
+              用时 {{ getEntryElapsedLabel(block.entry) }}
+            </div>
+            <p class="submitted-summary__text">
+              {{ buildSubmittedFormSummary(block.entry.formSchema, block.entry.formInitialValues) }}
+            </p>
+          </div>
+          <div
+            v-else
             class="timeline-form__content"
             :class="{
               'timeline-form__content--disabled': block.entry.formDisabled,
@@ -748,6 +779,38 @@ function getEntryElapsedLabel(entry: TimelineEntry) {
 .timeline-form {
   display: flex;
   justify-content: flex-start;
+}
+
+.timeline-form--user {
+  justify-content: flex-end;
+}
+
+.timeline-form--user .timeline-form__content {
+  background: var(--timeline-user-bubble-bg);
+  border-color: var(--timeline-user-bubble-border);
+  border-radius: 1rem 1rem 0.38rem 1rem;
+}
+
+.timeline-form__submitted-summary {
+  width: fit-content;
+  max-width: var(--timeline-content-max-width);
+  border-radius: 1rem 1rem 0.38rem 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--timeline-user-bubble-bg);
+  border: 1px solid var(--timeline-user-bubble-border);
+}
+
+.submitted-summary__text {
+  margin: 0;
+  font-size: var(--font-size-sm, 13px);
+  line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--color-text-primary);
+}
+
+.timeline-form--user .submitted-summary__text {
+  color: var(--color-text-primary);
 }
 
 .timeline-runtime {

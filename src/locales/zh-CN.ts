@@ -689,6 +689,7 @@ const zhCN = {
       modeApi: 'SDK',
       providerClaudeCli: 'Claude CLI',
       providerCodexCli: 'Codex CLI',
+      providerOpencodeCli: 'OpenCode CLI',
       providerClaudeSdk: 'Claude SDK',
       providerCodexSdk: 'Codex SDK',
       provider: '提供商',
@@ -1070,10 +1071,11 @@ const zhCN = {
       defaultConfigName: '默认配置',
       defaultConfigTag: '默认',
       title: '配置快速切换',
-      description: '管理多个 API Provider 配置，快速切换 Claude CLI 和 Codex API 设置',
+      description: '管理多个 API Provider 配置，快速切换 Claude CLI、Codex CLI 和 OpenCode CLI API 设置',
       cliType: {
         claude: 'Claude CLI',
-        codex: 'Codex CLI'
+        codex: 'Codex CLI',
+        opencode: 'OpenCode CLI'
       },
       currentConfig: '当前激活配置',
       noActiveConfig: '暂无激活配置',
@@ -1114,7 +1116,15 @@ const zhCN = {
         opusDefault: 'Opus 默认',
         codexConfig: 'Codex CLI 配置',
         codexModel: '模型名称',
-        codexModelPlaceholder: '输入模型名称'
+        codexModelPlaceholder: '输入模型名称',
+        opencodeConfig: 'OpenCode CLI 配置',
+        providerName: 'Provider',
+        opencodeProviderPlaceholder: '选择供应商',
+        opencodeModelPlaceholder: 'provider/model-id (如 anthropic/claude-sonnet-4-5)',
+        connected: '已连接',
+        other: '其他',
+        loadingModels: '加载模型中...',
+        modelHint: '请先输入 API Key 并保存，或直接输入模型名称'
       },
       messages: {
         switchSuccess: '配置切换成功',
@@ -1153,6 +1163,10 @@ const zhCN = {
       dataPath: '数据路径',
       dataLocation: '数据存储位置',
       change: '更改',
+      changePath: '更改路径',
+      migrating: '迁移中...',
+      selectDataPath: '选择新的数据存储目录',
+      devMode: '开发模式（默认当前项目 data 目录）',
       exportImport: '导出与导入',
       exportData: '导出数据',
       exportDataDesc: '导出所有项目、会话、消息和配置',

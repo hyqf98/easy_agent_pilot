@@ -88,6 +88,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_persistence_dir,
             commands::check_database_exists,
+            commands::migrate_persistence_path,
             commands::cli::detect_cli_tools,
             commands::cli::verify_cli_path,
             commands::cli::list_cli_paths,
@@ -303,6 +304,8 @@ pub fn run() {
             commands::provider_profile::read_current_cli_config,
             commands::provider_profile::read_cli_connection_info,
             commands::provider_profile::read_all_cli_connections,
+            commands::provider_profile::read_opencode_auth_providers,
+            commands::provider_profile::list_opencode_models,
             // Skill Plugin commands
             commands::skill_plugin::read_skill_file,
             commands::skill_plugin::list_skill_references,

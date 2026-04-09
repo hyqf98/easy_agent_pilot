@@ -776,6 +776,7 @@ export default {
       // Provider options
       providerClaudeCli: 'Claude CLI',
       providerCodexCli: 'Codex CLI',
+      providerOpencodeCli: 'OpenCode CLI',
       providerClaudeSdk: 'Claude SDK',
       providerCodexSdk: 'Codex SDK',
       provider: 'Provider',
@@ -1319,6 +1320,10 @@ export default {
       dataPath: 'Data Path',
       dataLocation: 'Data Location',
       change: 'Change',
+      changePath: 'Change Path',
+      migrating: 'Migrating...',
+      selectDataPath: 'Select new data storage directory',
+      devMode: 'Dev mode (defaults to project data/ directory)',
       exportImport: 'Export & Import',
       exportData: 'Export Data',
       exportDataDesc: 'Export all projects, sessions, messages and configurations',
@@ -1594,11 +1599,12 @@ export default {
     },
     providerSwitch: {
       title: 'Config Quick Switch',
-      description: 'Manage multiple API Provider configurations, quickly switch Claude CLI and Codex API settings',
+      description: 'Manage multiple API Provider configurations, quickly switch Claude CLI, Codex CLI and OpenCode CLI API settings',
       // CLI Type
       cliType: {
         claude: 'Claude CLI',
-        codex: 'Codex CLI'
+        codex: 'Codex CLI',
+        opencode: 'OpenCode CLI'
       },
       // Current Config
       currentConfig: 'Active Configuration',
@@ -1648,7 +1654,16 @@ export default {
         // Codex Config
         codexConfig: 'Codex CLI Configuration',
         codexModel: 'Model Name',
-        codexModelPlaceholder: 'Enter model name'
+        codexModelPlaceholder: 'Enter model name',
+        // OpenCode Config
+        opencodeConfig: 'OpenCode CLI Configuration',
+        providerName: 'Provider',
+        opencodeProviderPlaceholder: 'Select provider',
+        opencodeModelPlaceholder: 'provider/model-id (e.g., anthropic/claude-sonnet-4-5)',
+        connected: 'Connected',
+        other: 'Other',
+        loadingModels: 'Loading models...',
+        modelHint: 'Enter API Key and save first, or type model name directly'
       },
       // Messages
       messages: {

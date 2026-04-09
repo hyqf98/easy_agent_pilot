@@ -47,7 +47,7 @@ export function useCliConfigSyncModal(
       (agent) =>
         agent.type === 'cli'
         && !!agent.cliPath
-        && (agent.provider === 'claude' || agent.provider === 'codex')
+        && (agent.provider === 'claude' || agent.provider === 'codex' || agent.provider === 'opencode')
     )
   )
 
@@ -120,7 +120,7 @@ export function useCliConfigSyncModal(
   )
 
   function getProviderLabel(agent: AgentConfig) {
-    return agent.provider === 'claude' ? 'Claude CLI' : 'Codex CLI'
+    return agent.provider === 'claude' ? 'Claude CLI' : agent.provider === 'codex' ? 'Codex CLI' : 'OpenCode CLI'
   }
 
   function isItemExisting(name: string) {

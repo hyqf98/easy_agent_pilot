@@ -3,7 +3,7 @@ import { inferAgentProvider } from '@/stores/agent'
 import { appendClaudeMcpAllowedTools } from '@/utils/mcpServerConfig'
 import type { ConversationContext, ExecutionRequest } from './strategies/types'
 
-export type AgentRuntimeKey = 'claude-cli' | 'codex-cli' | 'claude-sdk' | 'codex-sdk'
+export type AgentRuntimeKey = 'claude-cli' | 'codex-cli' | 'opencode-cli' | 'claude-sdk' | 'codex-sdk'
 export type AbortCommand = 'abort_cli_execution' | 'abort_sdk_execution'
 
 type RuntimeResponseMode = ConversationContext['responseMode']
@@ -47,6 +47,20 @@ const runtimeProfiles: Record<AgentRuntimeKey, AgentRuntimeProfileDefinition> = 
     eventName: (sessionId) => `codex-stream-${sessionId}`,
     resolveAllowedTools: () => ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash'],
     resolveCliOutputFormat: (responseMode) => responseMode === 'json_once' ? 'json' : 'stream-json'
+  },
+  'opencode-cli': {
+    key: 'opencode-cli',
+    name: 'OpenCode CLI',
+    agentType: 'cli',
+    provider: 'opencode',
+    abortCommand: 'abort_cli_execution',
+    defaultCliPath: 'opencode',
+    eventName: (sessionId) => `opencode-stream-${sessionId}`,
+    resolveAllowedTools: (mcpServers) => appendClaudeMcpAllowedTools(
+      ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash', 'WebFetch', 'WebSearch'],
+      mcpServers
+    ),
+    resolveCliOutputFormat: () => 'json'
   },
   'claude-sdk': {
     key: 'claude-sdk',

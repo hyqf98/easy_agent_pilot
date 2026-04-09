@@ -33,7 +33,7 @@ const installSuccess = ref(false)
 
 const cliAgents = computed(() =>
   agentStore.agents.filter(
-    agent => agent.type === 'cli' && (agent.provider === 'claude' || agent.provider === 'codex')
+    agent => agent.type === 'cli' && (agent.provider === 'claude' || agent.provider === 'codex' || agent.provider === 'opencode')
   )
 )
 

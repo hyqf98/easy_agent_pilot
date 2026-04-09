@@ -24,6 +24,7 @@ export interface TaskListOptimizePromptContext {
   planDescription?: string
   tasks: AITaskItem[]
   userPrompt?: string
+  targetIndex?: number
 }
 
 function t(key: string, params?: Record<string, unknown>): string {
@@ -107,6 +108,45 @@ export function buildTaskListOptimizeKickoffPrompt(context: TaskListOptimizeProm
   const userPromptSection = context.userPrompt
     ? `\n\n${t('prompts.plan.extraRequirements')}:\n${context.userPrompt}`
     : ''
+
+  if (context.targetIndex !== undefined && context.targetIndex >= 0 && context.targetIndex < context.tasks.length) {
+    const targetTask = context.tasks[context.targetIndex]
+    const otherTasksHint = context.tasks
+      .map((task, i) => `${i + 1}. ${task.title}`)
+      .join('\n')
+    return [
+      `你将对任务列表中的指定任务（任务 ${context.targetIndex + 1}）进行优化，其他任务必须保持原样不变。`,
+      `要求：必须保留任务总数不变（${context.tasks.length} 个），仅修改目标任务的描述、实现步骤、测试步骤、验收标准。`,
+      '允许：重写目标任务的描述、实现步骤、测试步骤、验收标准；调整优先级。',
+      '禁止：新增任务、删除任务、修改其他任务的任何内容，或返回与当前任务数不一致的结果。',
+      '',
+      `${t('prompts.plan.plan')}: ${context.planName}`,
+      `${t('prompts.plan.description')}: ${context.planDescription?.trim() || t('prompts.plan.none')}`,
+      '',
+      '目标任务（仅优化此任务）：',
+      `${context.targetIndex + 1}. ${targetTask.title}`,
+      `   ${t('prompts.plan.description')}: ${targetTask.description?.trim() || t('prompts.plan.none')}`,
+      `   ${t('prompts.plan.implementationSteps')}:`,
+      ...(targetTask.implementationSteps.length > 0
+        ? targetTask.implementationSteps.map((step, i) => `     ${i + 1}. ${step}`)
+        : [`     ${t('prompts.plan.none')}`]),
+      `   ${t('prompts.plan.testSteps')}:`,
+      ...(targetTask.testSteps.length > 0
+        ? targetTask.testSteps.map((step, i) => `     ${i + 1}. ${step}`)
+        : [`     ${t('prompts.plan.none')}`]),
+      `   ${t('prompts.plan.acceptanceCriteria')}:`,
+      ...(targetTask.acceptanceCriteria.length > 0
+        ? targetTask.acceptanceCriteria.map((c, i) => `     ${i + 1}. ${c}`)
+        : [`     ${t('prompts.plan.none')}`]),
+      `   ${t('prompts.plan.dependsOnDescription')}: ${targetTask.dependsOn?.join('、') || t('prompts.plan.none')}`,
+      '',
+      '完整任务列表（参考顺序，不可修改除目标任务外的其他任务）：',
+      otherTasksHint,
+      userPromptSection,
+      '',
+      `输出 task_split（status=DONE），并保证 tasks 数量必须严格等于 ${context.tasks.length}，仅任务 ${context.targetIndex + 1} 可与原始内容不同。`
+    ].join('\n').trim()
+  }
 
   return [
     '你将对当前整份任务列表进行整体优化。',

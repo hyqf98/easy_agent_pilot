@@ -1,11 +1,11 @@
 export type AgentCliUsageGranularity = 'year' | 'month' | 'day'
 export type AgentCliUsageDimension = 'agent' | 'model'
-export type AgentCliUsageProviderFilter = 'all' | 'claude' | 'codex'
+export type AgentCliUsageProviderFilter = 'all' | 'claude' | 'codex' | 'opencode'
 
 export interface RecordAgentCliUsageInput {
   executionId: string
   executionMode: 'chat' | 'task_split' | 'task_execution' | 'solo_execution'
-  provider: 'claude' | 'codex'
+  provider: 'claude' | 'codex' | 'opencode'
   agentId?: string | null
   agentNameSnapshot?: string | null
   modelId?: string | null

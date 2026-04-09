@@ -12,9 +12,10 @@ use uuid::Uuid;
 use super::cli_common::{
     build_content_event, build_error_event, build_execution_summary, build_system_event,
     build_timeout_error_message, describe_timeout_config, detect_cli_timeout, emit_cli_event,
-    extract_error_from_json_blob, extract_result_content_from_json_blob, extract_runtime_system_notice,
-    extract_structured_output_from_json_blob, parse_json_blob_with_fallback, preview_text,
-    shell_escape, timeout_config_for_execution_mode, CliExecutionMonitor,
+    extract_error_from_json_blob, extract_image_paths, extract_result_content_from_json_blob,
+    extract_runtime_system_notice, extract_structured_output_from_json_blob,
+    parse_json_blob_with_fallback, preview_text, render_cli_message, shell_escape,
+    timeout_config_for_execution_mode, CliExecutionMonitor,
 };
 use crate::commands::cli_support::{build_cli_launch_error_message, build_tokio_cli_command};
 use crate::commands::conversation::abort::{
@@ -130,32 +131,6 @@ fn should_treat_process_failure_as_success(
         && !stderr_outcome.emitted_error
 }
 
-fn render_cli_message(message: &MessageInput) -> String {
-    let mut sections = Vec::new();
-
-    if !message.content.trim().is_empty() {
-        sections.push(message.content.clone());
-    }
-
-    if let Some(attachments) = &message.attachments {
-        if !attachments.is_empty() {
-            let attachment_list = attachments
-                .iter()
-                .map(|attachment| format!("- {} ({})", attachment.name, attachment.path))
-                .collect::<Vec<_>>()
-                .join("\n");
-            sections.push(format!("Attached images:\n{}", attachment_list));
-        }
-    }
-
-    let body = if sections.is_empty() {
-        "[Empty message]".to_string()
-    } else {
-        sections.join("\n\n")
-    };
-
-    format!("{}:\n{}", message.role, body)
-}
 
 struct TempSchemaFile {
     path: PathBuf,
@@ -304,6 +279,16 @@ impl AgentExecutionStrategy for CodexCliStrategy {
                 args.extend(custom_args.iter().cloned());
                 log_info!("追加自定义 CLI 参数: {:?}", custom_args);
             }
+        }
+
+        // 添加图片参数
+        let image_paths = extract_image_paths(&messages);
+        if !image_paths.is_empty() {
+            for path in &image_paths {
+                args.push("-i".to_string());
+                args.push(path.clone());
+            }
+            log_info!("追加 Codex CLI 图片参数: -i x{}", image_paths.len());
         }
 
         // 构建输入消息

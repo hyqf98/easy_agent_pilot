@@ -35,12 +35,12 @@ function getTypeIcon(type: AgentType): string {
 
 function getProviderIcon(provider?: AgentProvider): string {
   if (!provider) return 'bot'
-  return provider === 'claude' ? 'bot' : 'code'
+  return provider === 'claude' ? 'bot' : provider === 'opencode' ? 'terminal' : 'code'
 }
 
 function getProviderText(provider?: AgentProvider): string {
   if (!provider) return '-'
-  return provider === 'claude' ? 'Claude' : 'Codex'
+  return provider === 'claude' ? 'Claude' : provider === 'opencode' ? 'OpenCode' : 'Codex'
 }
 
 function getTypeText(type: AgentType): string {

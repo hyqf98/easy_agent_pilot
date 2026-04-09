@@ -62,8 +62,8 @@ const { t } = useI18n()
           <span class="connection-value mono">{{ connection.settingsFile }}</span>
         </div>
         <div class="connection-row">
-          <span class="connection-label">{{ t('settings.providerSwitch.form.baseUrl') }}</span>
-          <span class="connection-value mono">{{ connection.baseUrl || '-' }}</span>
+          <span class="connection-label">{{ connection.cliType === 'opencode' ? t('settings.providerSwitch.form.providerName') : t('settings.providerSwitch.form.baseUrl') }}</span>
+          <span class="connection-value mono">{{ connection.cliType === 'opencode' ? (connection.providerName || '-') : (connection.baseUrl || '-') }}</span>
         </div>
         <div
           v-if="connection.mainModel"

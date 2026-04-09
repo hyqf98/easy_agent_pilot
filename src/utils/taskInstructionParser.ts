@@ -195,6 +195,20 @@ export function parseTaskInstruction(input: string, tasks: AITaskItem[]): TaskIn
     }
   }
 
+  // --- 单任务优化（@某个具体任务 + 优化类关键词） ---
+  {
+    if (/(?:优化|改进|完善|调整|补充|细化|修改|改写)/.test(text)) {
+      const idx = extractFirstNumber(text, tasks.length)
+      if (idx !== null) {
+        return {
+          type: 'optimize',
+          targetIndex: idx,
+          customPrompt: text
+        }
+      }
+    }
+  }
+
   // --- 整体优化列表 ---
   if (/(?:优化|整理|改进|完善|调整|补充|重排|精简)/.test(text)) {
     const m = text.match(/(?:优化|整理|改进|完善|调整|补充|重排|精简)\s*(?:任务\s*)?(?:列表|清单|全部|整体|右侧任务)?[，,\s]*(.+)?/)

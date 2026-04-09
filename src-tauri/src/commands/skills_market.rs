@@ -106,6 +106,7 @@ fn get_cli_skills_dir(cli_type: &str) -> Result<PathBuf, String> {
     match cli_type.to_lowercase().as_str() {
         "claude" => Ok(home_dir.join(".claude").join("skills")),
         "codex" => Ok(home_dir.join(".codex").join("skills")),
+        "opencode" => Ok(home_dir.join(".config").join("opencode").join("skills")),
         other => Err(format!("Unsupported CLI type for skills: {}", other)),
     }
 }
@@ -609,7 +610,7 @@ pub async fn install_skill_from_git(
 #[tauri::command]
 pub async fn list_installed_skills() -> Result<Vec<InstalledSkill>, String> {
     let mut installed = Vec::new();
-    for cli_type in ["claude", "codex"] {
+    for cli_type in ["claude", "codex", "opencode"] {
         let dir = get_cli_skills_dir(cli_type)?;
         installed.extend(list_skill_dirs(&dir, cli_type)?);
     }

@@ -28,17 +28,23 @@ const switchingId = ref<string | null>(null)
 const showApiKey = ref(false)
 const isEditingCurrentConfig = ref(false)
 
-const currentProfiles = computed(() =>
-  currentCliType.value === 'claude' ? store.claudeProfiles : store.codexProfiles
-)
+const currentProfiles = computed(() => {
+  if (currentCliType.value === 'claude') return store.claudeProfiles
+  if (currentCliType.value === 'codex') return store.codexProfiles
+  return store.opencodeProfiles
+})
 
-const currentActiveProfile = computed(() =>
-  currentCliType.value === 'claude' ? store.activeClaudeProfile : store.activeCodexProfile
-)
+const currentActiveProfile = computed(() => {
+  if (currentCliType.value === 'claude') return store.activeClaudeProfile
+  if (currentCliType.value === 'codex') return store.activeCodexProfile
+  return store.activeOpencodeProfile
+})
 
-const currentConnection = computed(() =>
-  currentCliType.value === 'claude' ? store.claudeConnection : store.codexConnection
-)
+const currentConnection = computed(() => {
+  if (currentCliType.value === 'claude') return store.claudeConnection
+  if (currentCliType.value === 'codex') return store.codexConnection
+  return store.opencodeConnection
+})
 
 const currentDefaultProfile = computed<ProviderProfile | null>(() => {
   if (!store.currentConfig || store.currentConfig.cliType !== currentCliType.value) {

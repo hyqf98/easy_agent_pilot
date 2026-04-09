@@ -14,7 +14,7 @@ use super::cli_common::{
     build_timeout_error_message, describe_timeout_config, detect_cli_timeout, emit_cli_event,
     extract_error_from_json_blob, extract_result_content_from_json_blob, extract_runtime_system_notice,
     extract_structured_output_from_json_blob, parse_json_blob_with_fallback, preview_text,
-    shell_escape, timeout_config_for_execution_mode, CliExecutionMonitor,
+    render_cli_message, shell_escape, timeout_config_for_execution_mode, CliExecutionMonitor,
 };
 use crate::commands::cli_support::{build_cli_launch_error_message, build_tokio_cli_command};
 use crate::commands::conversation::abort::{
@@ -120,33 +120,6 @@ fn should_treat_process_failure_as_success(
     (stdout_outcome.emitted_content || stdout_outcome.emitted_non_error_event)
         && !stdout_outcome.emitted_error
         && !stderr_outcome.emitted_error
-}
-
-fn render_cli_message(message: &MessageInput) -> String {
-    let mut sections = Vec::new();
-
-    if !message.content.trim().is_empty() {
-        sections.push(message.content.clone());
-    }
-
-    if let Some(attachments) = &message.attachments {
-        if !attachments.is_empty() {
-            let attachment_list = attachments
-                .iter()
-                .map(|attachment| format!("- {} ({})", attachment.name, attachment.path))
-                .collect::<Vec<_>>()
-                .join("\n");
-            sections.push(format!("Attached images:\n{}", attachment_list));
-        }
-    }
-
-    let body = if sections.is_empty() {
-        "[Empty message]".to_string()
-    } else {
-        sections.join("\n\n")
-    };
-
-    format!("{}:\n{}", message.role, body)
 }
 
 fn build_mcp_config_json(servers: &[McpServerConfig]) -> String {

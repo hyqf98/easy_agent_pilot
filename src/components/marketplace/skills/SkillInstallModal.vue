@@ -28,7 +28,7 @@ const installSuccess = ref(false)
 
 const cliAgents = computed(() =>
   agentStore.agents.filter(
-    agent => agent.type === 'cli' && (agent.provider === 'claude' || agent.provider === 'codex')
+    agent => agent.type === 'cli' && (agent.provider === 'claude' || agent.provider === 'codex' || agent.provider === 'opencode')
   )
 )
 
@@ -51,7 +51,7 @@ async function handleInstall() {
     const input: SkillInstallInput = {
       skill_id: props.skillItem.slug,
       skill_name: props.skillItem.name,
-      cli_type: (selectedAgent.value.provider || 'claude') as 'claude' | 'codex',
+      cli_type: (selectedAgent.value.provider || 'claude') as 'claude' | 'codex' | 'opencode',
       scope: 'global',
       project_path: null,
       source_market: marketplaceStore.activeMarketSource

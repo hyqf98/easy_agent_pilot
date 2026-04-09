@@ -35,10 +35,18 @@ function getExpertLabel(expertId?: string): string {
   }
   return agentTeamsStore.getExpertById(expertId)?.name || expertId
 }
+
+function onCardClick() {
+  emit('edit')
+}
 </script>
 
 <template>
-  <div class="task-card">
+  <div
+    class="task-card"
+    :class="{ 'task-card--clickable': !disableActions }"
+    @click="onCardClick"
+  >
     <div class="task-header">
       <div class="task-number">
         {{ index + 1 }}
@@ -54,27 +62,10 @@ function getExpertLabel(expertId?: string): string {
       </span>
       <div class="task-actions">
         <button
-          class="btn-icon"
-          :title="t('taskSplit.edit')"
-          :disabled="disableActions"
-          @click="emit('edit')"
-        >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
-          </svg>
-        </button>
-        <button
           class="btn-icon btn-danger"
           :title="t('taskSplit.delete')"
           :disabled="disableActions"
-          @click="emit('remove')"
+          @click.stop="emit('remove')"
         >
           <svg
             width="14"
@@ -139,6 +130,15 @@ function getExpertLabel(expertId?: string): string {
 .task-card:hover {
   border-color: var(--color-border, #e2e8f0);
   box-shadow: var(--shadow-sm, 0 1px 3px 0 rgb(0 0 0 / 0.1));
+}
+
+.task-card--clickable {
+  cursor: pointer;
+}
+
+.task-card--clickable:hover {
+  border-color: rgba(99, 102, 241, 0.3);
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.08);
 }
 
 .task-header {

@@ -9,7 +9,7 @@ import { getErrorMessage } from '@/utils/api'
 // ============================================================================
 
 /** CLI 类型 */
-export type CliType = 'claude' | 'codex'
+export type CliType = 'claude' | 'codex' | 'opencode'
 
 /** CLI 连接信息 */
 export interface CliConnectionInfo {
@@ -19,6 +19,7 @@ export interface CliConnectionInfo {
   settingsFile: string
   baseUrl: string | null
   mainModel: string | null
+  providerName: string | null
   apiKeyMasked: string | null
   apiKey: string | null
   isValid: boolean
@@ -144,12 +145,20 @@ export const useProviderProfileStore = defineStore('providerProfile', () => {
     profiles.value.filter(p => p.cliType === 'codex')
   )
 
+  const opencodeProfiles = computed(() =>
+    profiles.value.filter(p => p.cliType === 'opencode')
+  )
+
   const activeClaudeProfile = computed(() =>
     claudeProfiles.value.find(p => p.isActive) || null
   )
 
   const activeCodexProfile = computed(() =>
     codexProfiles.value.find(p => p.isActive) || null
+  )
+
+  const activeOpencodeProfile = computed(() =>
+    opencodeProfiles.value.find(p => p.isActive) || null
   )
 
   // Claude CLI 连接信息
@@ -160,6 +169,11 @@ export const useProviderProfileStore = defineStore('providerProfile', () => {
   // Codex CLI 连接信息
   const codexConnection = computed(() =>
     cliConnections.value.find(c => c.cliType === 'codex') || null
+  )
+
+  // OpenCode CLI 连接信息
+  const opencodeConnection = computed(() =>
+    cliConnections.value.find(c => c.cliType === 'opencode') || null
   )
 
   // Actions
@@ -502,6 +516,7 @@ export const useProviderProfileStore = defineStore('providerProfile', () => {
           settingsFile: '',
           baseUrl: null,
           mainModel: null,
+          providerName: null,
           apiKeyMasked: null,
           apiKey: null,
           isValid: false,
@@ -514,6 +529,7 @@ export const useProviderProfileStore = defineStore('providerProfile', () => {
           settingsFile: '',
           baseUrl: null,
           mainModel: null,
+          providerName: null,
           apiKeyMasked: null,
           apiKey: null,
           isValid: false,
@@ -538,10 +554,13 @@ export const useProviderProfileStore = defineStore('providerProfile', () => {
     // Computed
     claudeProfiles,
     codexProfiles,
+    opencodeProfiles,
     activeClaudeProfile,
     activeCodexProfile,
+    activeOpencodeProfile,
     claudeConnection,
     codexConnection,
+    opencodeConnection,
     // Actions
     loadProfiles,
     getProfile,

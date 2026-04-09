@@ -4,6 +4,8 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 use crate::commands::conversation::types::CliStreamEvent;
+use crate::commands::conversation::types::MessageInput;
+use crate::commands::message::MessageAttachment;
 use crate::commands::plan_split::{record_plan_split_event, SplitStreamRecord};
 
 pub fn emit_cli_event(
@@ -291,6 +293,64 @@ pub fn shell_escape(value: &str) -> String {
     }
 
     format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+pub fn render_cli_message(message: &MessageInput) -> String {
+    let mut sections = Vec::new();
+
+    if !message.content.trim().is_empty() {
+        sections.push(message.content.clone());
+    }
+
+    if let Some(attachments) = &message.attachments {
+        if !attachments.is_empty() {
+            let image_paths: Vec<String> = attachments
+                .iter()
+                .filter(|a| a.mime_type.starts_with("image/"))
+                .filter(|a| !a.path.trim().is_empty())
+                .map(|a| a.path.clone())
+                .collect();
+            if !image_paths.is_empty() {
+                sections.push(format!(
+                    "Attached images (local file paths, please read them):\n{}",
+                    image_paths
+                        .iter()
+                        .map(|p| format!("- {}", p))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                ));
+            }
+        }
+    }
+
+    let body = if sections.is_empty() {
+        "[Empty message]".to_string()
+    } else {
+        sections.join("\n\n")
+    };
+
+    format!("{}:\n{}", message.role, body)
+}
+
+pub fn extract_image_paths(messages: &[MessageInput]) -> Vec<String> {
+    messages
+        .iter()
+        .filter(|m| m.role == "user")
+        .filter_map(|m| m.attachments.as_ref())
+        .flatten()
+        .filter(|a| a.mime_type.starts_with("image/"))
+        .filter(|a| !a.path.trim().is_empty())
+        .map(|a| a.path.clone())
+        .collect()
+}
+
+pub fn has_image_attachments(messages: &[MessageInput]) -> bool {
+    messages.iter().filter(|m| m.role == "user").any(|m| {
+        m.attachments.as_ref().map_or(false, |a| {
+            a.iter()
+                .any(|a| a.mime_type.starts_with("image/") && !a.path.trim().is_empty())
+        })
+    })
 }
 
 pub fn extract_runtime_system_notice(json: &serde_json::Value) -> Option<String> {

@@ -51,7 +51,7 @@ fn create_config_backup(config_path: &Path) -> Result<Option<String>, String> {
 }
 
 fn resolve_cli_identifier_from_config_path(config_path: &str) -> Result<String, String> {
-    for cli in ["claude", "codex"] {
+    for cli in ["claude", "codex", "opencode"] {
         let paths = get_cli_config_paths_internal(cli, None)?;
         if paths.config_file == config_path {
             return Ok(cli.to_string());
@@ -281,7 +281,7 @@ struct CliConfigInfo {
 }
 
 fn get_all_cli_configs() -> Vec<CliConfigInfo> {
-    ["claude", "codex"]
+    ["claude", "codex", "opencode"]
         .iter()
         .filter_map(|cli| {
             let paths = get_cli_config_paths_internal(cli, None).ok()?;

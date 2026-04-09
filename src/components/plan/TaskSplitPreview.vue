@@ -10,17 +10,16 @@ import TaskSplitPreviewEditor from './TaskSplitPreviewEditor.vue'
 const props = defineProps<{
   tasks: AITaskItem[]
   disableActions?: boolean
-  isOptimizingList?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'update', index: number, updates: Partial<AITaskItem>): void
   (e: 'remove', index: number): void
   (e: 'add', task: AITaskItem): void
-  (e: 'optimize-list'): void
 }>()
 
 const editingIndex = ref<number | null>(null)
+const editorRef = ref<InstanceType<typeof TaskSplitPreviewEditor> | null>(null)
 const confirmDialog = useConfirmDialog()
 const { t } = useI18n()
 
@@ -57,6 +56,10 @@ function cancelEdit() {
 function saveEdit(index: number, updates: Partial<AITaskItem>) {
   emit('update', index, updates)
   editingIndex.value = null
+}
+
+function saveEditFromModal() {
+  editorRef.value?.triggerSave()
 }
 
 async function removeTask(index: number) {
@@ -108,23 +111,6 @@ function addTask() {
         <span class="task-count">{{ t('taskSplit.taskCount', { count: tasks.length }) }}</span>
       </h4>
       <div class="preview-actions">
-        <button
-          class="btn-optimize"
-          :disabled="disableActions || tasks.length === 0"
-          @click="emit('optimize-list')"
-        >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <path d="M3 6h18M7 12h10M10 18h4" />
-          </svg>
-          {{ isOptimizingList ? t('taskSplit.optimizingList') : t('taskSplit.optimizeList') }}
-        </button>
         <button
           class="btn-add"
           :disabled="disableActions"
@@ -185,6 +171,7 @@ function addTask() {
 
       <TaskSplitPreviewEditor
         v-if="editingTask !== null && editingIndex !== null"
+        ref="editorRef"
         :task="editingTask"
         :tasks="tasks"
         :index="editingIndex"
@@ -192,6 +179,25 @@ function addTask() {
         @save="saveEdit(editingIndex, $event)"
         @cancel="cancelEdit"
       />
+
+      <template #footer>
+        <div class="editor-modal-footer">
+          <button
+            type="button"
+            class="btn btn-secondary"
+            @click="cancelEdit"
+          >
+            {{ t('common.cancel') }}
+          </button>
+          <button
+            type="button"
+            class="btn btn-primary"
+            @click="saveEditFromModal"
+          >
+            {{ t('common.save') }}
+          </button>
+        </div>
+      </template>
     </EaModal>
   </div>
 </template>
@@ -265,28 +271,7 @@ function addTask() {
   color: var(--color-primary, #3b82f6);
 }
 
-.btn-optimize {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-1, 0.25rem);
-  padding: var(--spacing-1, 0.25rem) var(--spacing-3, 0.75rem);
-  border: 1px solid rgba(15, 118, 110, 0.2);
-  border-radius: var(--radius-md, 8px);
-  background: linear-gradient(180deg, rgba(240, 253, 250, 0.98), rgba(236, 253, 245, 0.94));
-  color: #0f766e;
-  font-size: var(--font-size-xs, 12px);
-  cursor: pointer;
-  transition: all var(--transition-fast, 150ms);
-}
-
-.btn-optimize:hover:not(:disabled) {
-  border-color: rgba(13, 148, 136, 0.34);
-  background: linear-gradient(180deg, rgba(236, 253, 245, 1), rgba(204, 251, 241, 0.92));
-  color: #0f766e;
-}
-
-.btn-add:disabled,
-.btn-optimize:disabled {
+.btn-add:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
@@ -341,5 +326,40 @@ function addTask() {
 :global(.ea-modal.task-split-preview-modal) {
   width: min(720px, calc(100vw - 2rem));
   max-width: 720px;
+}
+
+.editor-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-2, 0.5rem);
+}
+
+.editor-modal-footer .btn {
+  padding: var(--spacing-2, 0.5rem) var(--spacing-4, 1rem);
+  border-radius: var(--radius-md, 8px);
+  font-size: var(--font-size-sm, 13px);
+  font-weight: var(--font-weight-medium, 500);
+  cursor: pointer;
+  transition: all var(--transition-fast, 150ms);
+}
+
+.editor-modal-footer .btn-primary {
+  background-color: var(--color-primary, #3b82f6);
+  color: white;
+  border: none;
+}
+
+.editor-modal-footer .btn-primary:hover {
+  background-color: var(--color-primary-hover, #2563eb);
+}
+
+.editor-modal-footer .btn-secondary {
+  background-color: var(--color-surface, #fff);
+  color: var(--color-text-primary, #1e293b);
+  border: 1px solid var(--color-border, #e2e8f0);
+}
+
+.editor-modal-footer .btn-secondary:hover {
+  background-color: var(--color-surface-hover, #f8fafc);
 }
 </style>

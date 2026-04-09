@@ -156,7 +156,7 @@ async function handleAddSkill() {
     return
   }
 
-  if (agent.type === 'cli' && (agent.provider === 'claude' || agent.provider === 'codex')) {
+  if (agent.type === 'cli' && (agent.provider === 'claude' || agent.provider === 'codex' || agent.provider === 'opencode')) {
     showSkillAddModeModal.value = true
     return
   }
@@ -207,7 +207,7 @@ function handleAddPlugin() {
     return
   }
 
-  if (agent.type === 'cli' && (agent.provider === 'claude' || agent.provider === 'codex')) {
+  if (agent.type === 'cli' && (agent.provider === 'claude' || agent.provider === 'codex' || agent.provider === 'opencode')) {
     showPluginAddModeModal.value = true
     return
   }
@@ -381,7 +381,7 @@ const canSyncCliConfigs = computed(() => {
     return false
   }
 
-  if (agent.provider !== 'claude' && agent.provider !== 'codex') {
+  if (agent.provider !== 'claude' && agent.provider !== 'codex' && agent.provider !== 'opencode') {
     return false
   }
 
@@ -392,7 +392,7 @@ const canSyncCliConfigs = computed(() => {
       && !!item.cliPath
       && item.provider
       && item.provider !== agent.provider
-      && (item.provider === 'claude' || item.provider === 'codex')
+      && (item.provider === 'claude' || item.provider === 'codex' || item.provider === 'opencode')
   )
 })
 

@@ -37,6 +37,16 @@ const { t } = useI18n()
         />
         <span>{{ t('settings.providerSwitch.cliType.codex') }}</span>
       </button>
+      <button
+        :class="['tab-btn', { active: currentCliType === 'opencode' }]"
+        @click="emit('change', 'opencode')"
+      >
+        <EaIcon
+          name="terminal"
+          :size="16"
+        />
+        <span>{{ t('settings.providerSwitch.cliType.opencode') }}</span>
+      </button>
     </div>
   </div>
 </template>

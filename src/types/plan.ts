@@ -462,6 +462,7 @@ export interface TaskListOptimizeConfig {
   expertId?: string
   agentId?: string
   modelId?: string
+  targetIndex?: number
 }
 
 export type TaskSplitRefinementMode = 'task_resplit' | 'list_optimize'

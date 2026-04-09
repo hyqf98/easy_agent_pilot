@@ -12,8 +12,7 @@ import type {
   AITaskItem,
   DynamicFormSchema,
   PlanSplitLogRecord,
-  SplitMessage,
-  TaskListOptimizeConfig
+  SplitMessage
 } from '@/types/plan'
 import type { TimelineEntry } from '@/types/timeline'
 import { buildToolCallMapFromLogs, extractDynamicFormSchemas } from '@/utils/toolCallLog'
@@ -52,8 +51,6 @@ export function useTaskSplitDialog() {
   const selectedMentionOptionIndex = ref(0)
   const mentionDismissKey = ref('')
 
-  // 优化列表弹框状态
-  const optimizeListModalVisible = ref(false)
 
   interface MentionOption {
     index: number
@@ -72,7 +69,6 @@ export function useTaskSplitDialog() {
   const showPreview = computed(() => taskSplitStore.splitResult !== null)
   const refinementMode = computed(() => taskSplitStore.refinementMode)
   const hasPendingRefinement = computed(() => Boolean(refinementMode.value))
-  const isListOptimizePending = computed(() => refinementMode.value === 'list_optimize')
   const isSubSplitActive = computed(() => refinementMode.value === 'task_resplit')
   const subSplitTargetTitle = computed(() => {
     if (!isSubSplitActive.value || taskSplitStore.subSplitTargetIndex === null) return ''
@@ -81,7 +77,7 @@ export function useTaskSplitDialog() {
     return originalTasks?.[idx]?.title ?? t('taskBoard.emptyNoTasks')
   })
   const previewActionsDisabled = computed(() =>
-    isSessionRunning.value || isConfirming.value || hasPendingRefinement.value
+    isSessionRunning.value || isConfirming.value
   )
   const canApplyRefinement = computed(() =>
     hasPendingRefinement.value && taskSplitStore.session?.status === 'completed'
@@ -979,8 +975,20 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
 
   for (const submittedForm of historicalSubmittedForms.value) {
     pushEntry({
+      id: `frozen-form-${submittedForm.formId}-${submittedForm.requestedAt}`,
+      type: 'form',
+      formSchema: submittedForm.schema,
+      formPrompt: submittedForm.promptText,
+      formInitialValues: submittedForm.values,
+      formDisabled: true,
+      formVariant: 'archived',
+      timestamp: submittedForm.requestedAt
+    })
+
+    pushEntry({
       id: `submitted-form-${submittedForm.formId}-${submittedForm.submittedAt}`,
       type: 'form',
+      role: 'user',
       formSchema: submittedForm.schema,
       formPrompt: submittedForm.promptText,
       formInitialValues: submittedForm.values,
@@ -1101,15 +1109,6 @@ async function handleFormSubmit(values: Record<string, any>) {
 
 function handleTimelineFormSubmit(_entryId: string, values: Record<string, unknown>) {
   void handleFormSubmit(values as Record<string, any>)
-}
-
-function handleOptimizeList() {
-  optimizeListModalVisible.value = true
-}
-
-async function handleOptimizeListConfirm(config: TaskListOptimizeConfig) {
-  optimizeListModalVisible.value = false
-  await taskSplitStore.startListOptimize(config)
 }
 
 async function confirmSplit() {
@@ -1360,7 +1359,8 @@ async function executeParsedInstruction(text: string) {
       expertId: taskSplitStore.context?.expertId,
       agentId: taskSplitStore.context?.agentId,
       modelId: taskSplitStore.context?.modelId,
-      customPrompt: instructionPrompt
+      customPrompt: instructionPrompt,
+      targetIndex: parsed.targetIndex
     })
     return true
   }
@@ -1464,11 +1464,9 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(close
     showMentionSuggestions,
     mentionSuggestions,
     selectedMentionOptionIndex,
-    optimizeListModalVisible,
     showPreview,
     refinementMode,
     hasPendingRefinement,
-    isListOptimizePending,
     isSubSplitActive,
     subSplitTargetTitle,
     previewActionsDisabled,
@@ -1521,8 +1519,6 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(close
     restartSplit,
     handleFormSubmit,
     handleTimelineFormSubmit,
-    handleOptimizeList,
-    handleOptimizeListConfirm,
     confirmSplit,
     closeDialog,
     stopSplitTask,

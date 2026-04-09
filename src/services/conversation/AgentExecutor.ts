@@ -2,6 +2,7 @@ import type { AgentConfig } from '@/stores/agent'
 import type { AgentStrategy, ConversationContext, StreamEvent } from './strategies/types'
 import { ClaudeCliStrategy } from './strategies/ClaudeCliStrategy'
 import { CodexCliStrategy } from './strategies/CodexCliStrategy'
+import { OpenCodeCliStrategy } from './strategies/OpenCodeCliStrategy'
 import { ClaudeSdkStrategy } from './strategies/ClaudeSdkStrategy'
 import { CodexSdkStrategy } from './strategies/CodexSdkStrategy'
 
@@ -17,6 +18,7 @@ export class AgentExecutor {
     // 注册默认策略
     this.registerStrategy(new ClaudeCliStrategy())
     this.registerStrategy(new CodexCliStrategy())
+    this.registerStrategy(new OpenCodeCliStrategy())
     this.registerStrategy(new ClaudeSdkStrategy())
     this.registerStrategy(new CodexSdkStrategy())
   }
