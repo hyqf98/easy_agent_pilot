@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import DynamicForm from '@/components/plan/DynamicForm.vue'
+import DynamicForm from '@/components/plan/dynamicForm/DynamicForm.vue'
 import ExecutionTimeline from '@/components/message/ExecutionTimeline.vue'
 import { useSoloExecutionStore } from '@/stores/soloExecution'
 import { useSoloRunStore } from '@/stores/soloRun'

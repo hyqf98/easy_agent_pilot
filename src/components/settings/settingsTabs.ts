@@ -12,7 +12,7 @@ import LspSettings from './tabs/LspSettings.vue'
 import SessionManagementSettings from './tabs/SessionManagementSettings.vue'
 import AppUpdateSettings from './tabs/AppUpdateSettings.vue'
 import UnattendedSettings from './tabs/UnattendedSettings.vue'
-import AgentCliUsageSettings from './tabs/AgentCliUsageSettings.vue'
+import AgentCliUsageSettings from './tabs/agentCliUsageSettings/AgentCliUsageSettings.vue'
 import MarketplacePage from '@/components/marketplace/MarketplacePage.vue'
 
 export interface SettingsTabDescriptor {

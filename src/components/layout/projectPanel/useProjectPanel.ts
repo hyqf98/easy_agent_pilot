@@ -2,7 +2,7 @@ import { onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useProjectStore, type Project } from '@/stores/project'
 import { useUIStore } from '@/stores/ui'
-import { useFileEditorStore } from '@/modules/file-editor'
+import { useFileEditorStore } from '@/modules/fileEditor'
 
 export interface ProjectPanelProps {
   collapsed?: boolean

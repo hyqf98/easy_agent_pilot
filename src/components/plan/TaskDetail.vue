@@ -9,7 +9,7 @@ import { useTaskExecutionStore } from '@/stores/taskExecution'
 import type { Task } from '@/types/plan'
 import { resolvePlanTaskAgentSelection } from '@/utils/planExecutionProgress'
 import AgentRoleBadge from './AgentRoleBadge.vue'
-import TaskEditModal from './TaskEditModal.vue'
+import TaskEditModal from './taskEditModal/TaskEditModal.vue'
 
 const agentStore = useAgentStore()
 const agentTeamsStore = useAgentTeamsStore()

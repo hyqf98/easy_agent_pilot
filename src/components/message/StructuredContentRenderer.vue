@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, toRef } from 'vue'
-import DynamicForm from '@/components/plan/DynamicForm.vue'
+import DynamicForm from '@/components/plan/dynamicForm/DynamicForm.vue'
 import { parseStructuredContent } from '@/utils/structuredContent'
 import { useTypewriterText } from '@/composables/useTypewriterText'
 import MarkdownRenderer from './MarkdownRenderer.vue'

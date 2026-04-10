@@ -7,7 +7,7 @@ import { useTypewriterText } from '@/composables/useTypewriterText'
 import { useProjectStore } from '@/stores/project'
 import { useUIStore } from '@/stores/ui'
 import { useNotificationStore } from '@/stores/notification'
-import { useFileEditorStore } from '@/modules/file-editor'
+import { useFileEditorStore } from '@/modules/fileEditor'
 
 const props = withDefaults(defineProps<{
   content: string

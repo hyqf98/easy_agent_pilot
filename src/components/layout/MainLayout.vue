@@ -8,13 +8,13 @@ import BottomTerminalPanel from './BottomTerminalPanel.vue'
 import SideNavRail from './SideNavRail.vue'
 import PanelContainer from './PanelContainer.vue'
 import SessionTabs from './SessionTabs.vue'
-import MessageArea from './MessageArea.vue'
+import MessageArea from './messageArea/MessageArea.vue'
 import PanelResizer from './PanelResizer.vue'
 import WelcomePage from './WelcomePage.vue'
 import { PlanModePanel } from '@/components/plan'
 import { MemoryModePanel } from '@/components/memory'
 import { SoloModePanel } from '@/components/solo'
-import { FileEditorWorkspace } from '@/modules/file-editor'
+import { FileEditorWorkspace } from '@/modules/fileEditor'
 
 const layoutStore = useLayoutStore()
 const uiStore = useUIStore()

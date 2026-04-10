@@ -161,3 +161,5 @@ export function useConversationComposerView(props: Readonly<ConversationComposer
     cancelQueuedMessageEdit
   }
 }
+
+export type ConversationComposerViewState = ReturnType<typeof useConversationComposerView>

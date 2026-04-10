@@ -1,2 +1,2 @@
 // 项目组件导出
-export { default as ProjectCreateModal } from './ProjectCreateModal.vue'
+export { default as ProjectCreateModal } from './projectCreateModal/ProjectCreateModal.vue'

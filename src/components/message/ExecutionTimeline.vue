@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import DynamicForm from '@/components/plan/DynamicForm.vue'
+import DynamicForm from '@/components/plan/dynamicForm/DynamicForm.vue'
 import { useThemeStore } from '@/stores/theme'
 import type { TimelineEntry } from '@/types/timeline'
 import StructuredContentRenderer from './StructuredContentRenderer.vue'

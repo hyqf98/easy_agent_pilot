@@ -29,3 +29,4 @@ dist-ssr
 .codex-temp/
 .playwright-mcp/
 screenshots/
+src-tauri/data/

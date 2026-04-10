@@ -1,4 +1,4 @@
-import { readProjectFile } from '@/modules/file-editor/services/fileEditorService'
+import { readProjectFile } from '@/modules/fileEditor/services/fileEditorService'
 import type { ToolCall } from '@/stores/message'
 import type { FileEditChangeType, FileEditRange, FileEditTrace } from '@/types/fileTrace'
 

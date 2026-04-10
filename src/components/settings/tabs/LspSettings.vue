@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { EaButton, EaIcon, EaStateBlock } from '@/components/common'
 import { useNotificationStore } from '@/stores/notification'
 import { getErrorMessage } from '@/utils/api'
-import { useFileEditorStore } from '@/modules/file-editor'
+import { useFileEditorStore } from '@/modules/fileEditor'
 import SettingsSectionCard from '@/components/settings/common/SettingsSectionCard.vue'
 import {
   downloadLspServer,
@@ -12,7 +12,7 @@ import {
   listLspServers,
   removeLspServer,
   type LspServerInfo
-} from '@/modules/file-editor/services/lspService'
+} from '@/modules/fileEditor/services/lspService'
 
 const { t } = useI18n()
 const notificationStore = useNotificationStore()

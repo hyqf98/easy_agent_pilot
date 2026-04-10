@@ -1,8 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { getLanguageStrategy } from '@/modules/file-editor/strategies/registry'
-import { readProjectFile } from '@/modules/file-editor/services/fileEditorService'
-import type { MonacoLanguageId } from '@/modules/file-editor/types'
+import { getLanguageStrategy } from '@/modules/fileEditor/strategies/registry'
+import { readProjectFile } from '@/modules/fileEditor/services/fileEditorService'
+import type { MonacoLanguageId } from '@/modules/fileEditor/types'
 import type { FileEditChangeType, FileEditRange, FileEditTrace } from '@/types/fileTrace'
 
 interface OpenTracePreviewInput {
