@@ -651,11 +651,10 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
     if (!selectedAgentId.value) return
 
     const notificationStore = useNotificationStore()
+    const config = mcpConfigs.value.find(c => c.id === id)
+    if (!config) return
 
-    if (isReadOnly.value) {
-      const config = mcpConfigs.value.find(c => c.id === id)
-      if (!config) return
-
+    if (config.source === 'file') {
       try {
         await invoke('delete_cli_mcp_config', {
           cliPath: selectedAgent.value?.cliPath,
@@ -995,6 +994,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
 
     if (skill.source === 'file') {
       try {
+        invalidateCliInventory()
         await invoke('delete_skill_directory', {
           skillPath: skill.skillPath,
         })
@@ -1031,6 +1031,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
 
     if (plugin.source === 'file') {
       try {
+        invalidateCliInventory()
         await invoke('delete_plugin_directory', {
           pluginPath: plugin.pluginPath,
         })

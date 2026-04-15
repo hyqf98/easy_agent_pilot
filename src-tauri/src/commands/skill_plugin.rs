@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -640,6 +641,99 @@ fn get_install_source(plugin_name: &str) -> Option<String> {
     })
 }
 
+fn write_json_file_pretty(path: &Path, value: &JsonValue) -> Result<(), String> {
+    let content = serde_json::to_string_pretty(value)
+        .map_err(|error| format!("Failed to serialize JSON file: {}", error))?;
+    fs::write(path, format!("{}\n", content))
+        .map_err(|error| format!("Failed to write JSON file: {}", error))
+}
+
+fn prune_cli_installed_plugins_file(plugin_dir: &Path) -> Result<(), String> {
+    let Some(plugins_dir) = plugin_dir.parent() else {
+        return Ok(());
+    };
+    let installed_plugins_path = plugins_dir.join("installed_plugins.json");
+    if !installed_plugins_path.exists() {
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&installed_plugins_path)
+        .map_err(|error| format!("Failed to read installed_plugins.json: {}", error))?;
+    let mut json = serde_json::from_str::<JsonValue>(&content)
+        .map_err(|error| format!("Failed to parse installed_plugins.json: {}", error))?;
+    let plugin_dir_str = plugin_dir.to_string_lossy().to_string();
+
+    let Some(root) = json.as_object_mut() else {
+        return Ok(());
+    };
+    let Some(plugins_obj) = root.get_mut("plugins").and_then(|value| value.as_object_mut()) else {
+        return Ok(());
+    };
+
+    let keys = plugins_obj.keys().cloned().collect::<Vec<_>>();
+    for key in keys {
+        let should_remove_key = plugins_obj
+            .get_mut(&key)
+            .and_then(|value| value.as_array_mut())
+            .map(|entries| {
+                entries.retain(|entry| {
+                    entry.get("installPath")
+                        .and_then(|value| value.as_str())
+                        .map(|path| path != plugin_dir_str)
+                        .unwrap_or(true)
+                });
+                entries.is_empty()
+            })
+            .unwrap_or(false);
+
+        if should_remove_key {
+            plugins_obj.remove(&key);
+        }
+    }
+
+    write_json_file_pretty(&installed_plugins_path, &json)
+}
+
+fn prune_app_installed_plugins_file(plugin_dir: &Path) -> Result<(), String> {
+    let persistence_dir = crate::commands::get_persistence_dir_path().map_err(|e| e.to_string())?;
+    let installed_plugins_path = persistence_dir.join("plugins.json");
+    if !installed_plugins_path.exists() {
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&installed_plugins_path)
+        .map_err(|error| format!("Failed to read plugins.json: {}", error))?;
+    let mut json = serde_json::from_str::<JsonValue>(&content)
+        .map_err(|error| format!("Failed to parse plugins.json: {}", error))?;
+
+    let Some(items) = json.as_array_mut() else {
+        return Ok(());
+    };
+
+    items.retain(|item| {
+        let matches_component = item
+            .get("components")
+            .and_then(|value| value.as_array())
+            .map(|components| {
+                components.iter().any(|component| {
+                    component
+                        .get("target_path")
+                        .and_then(|value| value.as_str())
+                        .map(|path| {
+                            let target_path = Path::new(path);
+                            target_path == plugin_dir || target_path.starts_with(plugin_dir)
+                        })
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+
+        !matches_component
+    });
+
+    write_json_file_pretty(&installed_plugins_path, &json)
+}
+
 /// 获取 Plugin 详细信息
 #[tauri::command]
 pub fn get_plugin_details(plugin_path: String) -> Result<PluginDetails, String> {
@@ -686,7 +780,7 @@ pub fn delete_skill_directory(skill_path: String) -> Result<(), String> {
     let skill_dir = PathBuf::from(&skill_path);
 
     if !skill_dir.exists() {
-        return Err(format!("Skill directory does not exist: {}", skill_path));
+        return Err(format!("Skill path does not exist: {}", skill_path));
     }
 
     // 安全检查：确保路径在 skills 目录下
@@ -708,8 +802,15 @@ pub fn delete_skill_directory(skill_path: String) -> Result<(), String> {
         );
     }
 
-    fs::remove_dir_all(&skill_dir)
-        .map_err(|e| format!("Failed to delete skill directory: {}", e))?;
+    let metadata = fs::symlink_metadata(&skill_dir)
+        .map_err(|e| format!("Failed to inspect skill path: {}", e))?;
+
+    if metadata.is_dir() {
+        fs::remove_dir_all(&skill_dir)
+            .map_err(|e| format!("Failed to delete skill directory: {}", e))?;
+    } else {
+        fs::remove_file(&skill_dir).map_err(|e| format!("Failed to delete skill file: {}", e))?;
+    }
 
     Ok(())
 }
@@ -752,9 +853,11 @@ pub fn delete_plugin_directory(plugin_path: String) -> Result<(), String> {
     fs::remove_dir_all(&plugin_dir)
         .map_err(|e| format!("Failed to delete plugin directory: {}", e))?;
 
+    prune_cli_installed_plugins_file(&plugin_dir)?;
+    prune_app_installed_plugins_file(&plugin_dir)?;
+
     if is_codex_plugin && !plugin_name.is_empty() {
-        let _ =
-            crate::commands::plugins_market::remove_codex_personal_marketplace_plugin(&plugin_name);
+        crate::commands::plugins_market::remove_codex_personal_marketplace_plugin(&plugin_name)?;
     }
 
     Ok(())
