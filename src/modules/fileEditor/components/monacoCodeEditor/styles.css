@@ -48,3 +48,15 @@
   background: linear-gradient(90deg, rgba(147, 197, 253, 0.18), rgba(147, 197, 253, 0.06));
   border-left-color: rgba(147, 197, 253, 0.82);
 }
+
+:global(.monaco-editor .ea-monaco-search-highlight) {
+  background: rgba(245, 158, 11, 0.18);
+  border-radius: 3px;
+  outline: 1px solid rgba(245, 158, 11, 0.36);
+}
+
+:global([data-theme='dark'] .monaco-editor .ea-monaco-search-highlight),
+:global(.dark .monaco-editor .ea-monaco-search-highlight) {
+  background: rgba(251, 191, 36, 0.2);
+  outline-color: rgba(251, 191, 36, 0.44);
+}

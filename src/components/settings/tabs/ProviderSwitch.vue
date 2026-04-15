@@ -9,10 +9,15 @@ import {
   type UpdateProviderProfileInput
 } from '@/stores/providerProfile'
 import ProviderConnectionInfoCard from '@/components/settings/provider-switch/ProviderConnectionInfoCard.vue'
+import ProviderConfigEditorModal from '@/components/settings/provider-switch/ProviderConfigEditorModal.vue'
 import ProviderDeleteDialog from '@/components/settings/provider-switch/ProviderDeleteDialog.vue'
 import ProviderProfilesSection from '@/components/settings/provider-switch/ProviderProfilesSection.vue'
 import ProviderSwitchTabs from '@/components/settings/provider-switch/ProviderSwitchTabs.vue'
 import { useNotificationStore } from '@/stores/notification'
+import {
+  useDefaultCliConfigEditor,
+  type DefaultCliConfigLocateTarget
+} from '@/composables/useDefaultCliConfigEditor'
 import ProviderProfileForm from './ProviderProfileForm.vue'
 
 const { t } = useI18n()
@@ -27,6 +32,23 @@ const deletingProfile = ref<ProviderProfile | null>(null)
 const switchingId = ref<string | null>(null)
 const showApiKey = ref(false)
 const isEditingCurrentConfig = ref(false)
+const {
+  configEditorContent,
+  configEditorFile,
+  configEditorLocateTarget,
+  formatConfigEditor: handleFormatConfigEditor,
+  isConfigEditorDirty,
+  isConfigEditorLoading,
+  isConfigEditorSaving,
+  openConfigEditor,
+  reloadConfigEditor,
+  saveConfigEditor: handleSaveConfigEditor,
+  showConfigEditor
+} = useDefaultCliConfigEditor({
+  onAfterSave: async (cliType) => {
+    await store.refreshCliTypeState(cliType)
+  }
+})
 
 const currentProfiles = computed(() => {
   if (currentCliType.value === 'claude') return store.claudeProfiles
@@ -144,6 +166,14 @@ function showError(message: string) {
   notificationStore.error(t('common.error'), message)
 }
 
+async function handleOpenConfigEditor(target?: DefaultCliConfigLocateTarget) {
+  await openConfigEditor(currentCliType.value, target)
+}
+
+async function handleReloadConfigEditor() {
+  await reloadConfigEditor(currentCliType.value)
+}
+
 function handleDeleteDialogVisibleChange(visible: boolean) {
   showDeleteConfirm.value = visible
   if (!visible) {
@@ -189,6 +219,7 @@ watch(showFormModal, (visible) => {
       :connection="currentConnection"
       :show-api-key="showApiKey"
       @toggle-api-key="showApiKey = !showApiKey"
+      @open-config-editor="handleOpenConfigEditor"
     />
 
     <ProviderProfilesSection
@@ -215,6 +246,20 @@ watch(showFormModal, (visible) => {
       :profile-name="deletingProfile?.name"
       @update:visible="handleDeleteDialogVisibleChange"
       @confirm="handleDelete"
+    />
+
+    <ProviderConfigEditorModal
+      v-model:visible="showConfigEditor"
+      :loading="isConfigEditorLoading"
+      :saving="isConfigEditorSaving"
+      :file="configEditorFile"
+      :content="configEditorContent"
+      :dirty="isConfigEditorDirty"
+      :locate-target="configEditorLocateTarget"
+      @update:content="configEditorContent = $event"
+      @reload="handleReloadConfigEditor"
+      @format="handleFormatConfigEditor"
+      @save="handleSaveConfigEditor"
     />
   </div>
 </template>

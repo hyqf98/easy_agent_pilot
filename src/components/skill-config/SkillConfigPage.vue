@@ -3,6 +3,10 @@ import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAgentStore, type AgentConfig } from '@/stores/agent'
 import { useSkillConfigStore, type UnifiedMcpConfig, type UnifiedSkillConfig, type UnifiedPluginConfig } from '@/stores/skillConfig'
+import type { CliType } from '@/stores/providerProfile'
+import {
+  useDefaultCliConfigEditor
+} from '@/composables/useDefaultCliConfigEditor'
 import AgentSelector from './AgentSelector.vue'
 import McpConfigTab from './tabs/McpConfigTab.vue'
 import SkillsConfigTab from './tabs/SkillsConfigTab.vue'
@@ -14,6 +18,7 @@ import PluginEditModal from './modals/PluginEditModal.vue'
 import SkillCreateView from './skills/SkillCreateView.vue'
 import SkillDetailView from './views/SkillDetailView.vue'
 import PluginDetailView from './views/PluginDetailView.vue'
+import ProviderConfigEditorModal from '@/components/settings/provider-switch/ProviderConfigEditorModal.vue'
 import SkillGitInstallModal from '@/components/marketplace/skills/SkillGitInstallModal.vue'
 import PluginGitInstallModal from '@/components/marketplace/plugins/PluginGitInstallModal.vue'
 import { EaButton, EaIcon } from '@/components/common'
@@ -43,11 +48,39 @@ const isCreatingSkill = ref(false)
 const editingSkill = ref<UnifiedSkillConfig | null>(null)
 const editingPlugin = ref<UnifiedPluginConfig | null>(null)
 const {
+  configEditorContent,
+  configEditorFile,
+  configEditorLocateTarget,
+  formatConfigEditor: handleFormatConfigEditor,
+  isConfigEditorDirty,
+  isConfigEditorLoading,
+  isConfigEditorSaving,
+  openConfigEditor,
+  reloadConfigEditor,
+  resetConfigEditor,
+  saveConfigEditor: handleSaveConfigEditor,
+  showConfigEditor
+} = useDefaultCliConfigEditor({
+  onAfterSave: async () => {
+    await skillConfigStore.refreshCliConfigs()
+  }
+})
+const {
   handleOverlayPointerDown: handleDeleteOverlayPointerDown,
   handleOverlayClick: handleDeleteOverlayClick
 } = useOverlayDismiss(() => {
   showDeleteConfirm.value = false
 })
+
+const selectedCliType = computed<CliType | null>(() => {
+  const provider = skillConfigStore.selectedAgent?.provider
+  if (provider === 'claude' || provider === 'codex' || provider === 'opencode') {
+    return provider
+  }
+  return null
+})
+
+const canOpenCliConfigEditor = computed(() => selectedCliType.value !== null)
 
 watch(activeTab, () => {
   if (activeTab.value !== 'skills') {
@@ -86,6 +119,13 @@ watch(showPluginModal, (value) => {
     editingPlugin.value = null
   }
 })
+
+watch(
+  () => skillConfigStore.selectedAgent?.id,
+  () => {
+    resetConfigEditor()
+  }
+)
 
 const showDeleteConfirm = ref(false)
 const deletingConfig = ref<{ type: 'mcp' | 'skills' | 'plugins'; config: UnifiedMcpConfig | UnifiedSkillConfig | UnifiedPluginConfig } | null>(null)
@@ -255,20 +295,29 @@ const addModeOptions = computed(() => ({
       icon: 'lucide:git-branch'
     }
   ],
-  plugins: [
-    {
-      id: 'manual',
-      label: t('settings.sdkConfig.addMode.manualPluginLabel'),
-      description: t('settings.sdkConfig.addMode.manualPluginDescription'),
-      icon: 'lucide:puzzle'
-    },
-    {
-      id: 'git',
-      label: t('settings.sdkConfig.addMode.gitPluginLabel'),
-      description: t('settings.sdkConfig.addMode.gitPluginDescription'),
-      icon: 'lucide:git-branch'
-    }
-  ]
+  plugins: selectedCliType.value
+    ? [
+        {
+          id: 'git',
+          label: t('settings.sdkConfig.addMode.gitPluginLabel'),
+          description: t('settings.sdkConfig.addMode.gitPluginDescription'),
+          icon: 'lucide:git-branch'
+        }
+      ]
+    : [
+        {
+          id: 'manual',
+          label: t('settings.sdkConfig.addMode.manualPluginLabel'),
+          description: t('settings.sdkConfig.addMode.manualPluginDescription'),
+          icon: 'lucide:puzzle'
+        },
+        {
+          id: 'git',
+          label: t('settings.sdkConfig.addMode.gitPluginLabel'),
+          description: t('settings.sdkConfig.addMode.gitPluginDescription'),
+          icon: 'lucide:git-branch'
+        }
+      ]
 }))
 
 const currentCliAgentId = computed(() =>
@@ -372,7 +421,19 @@ async function handleRefresh() {
 }
 
 async function handleOpenFile() {
-  await skillConfigStore.openConfigFile()
+  if (!selectedCliType.value) {
+    return
+  }
+
+  await openConfigEditor(selectedCliType.value)
+}
+
+async function handleReloadConfigEditor() {
+  if (!selectedCliType.value) {
+    return
+  }
+
+  await reloadConfigEditor(selectedCliType.value)
 }
 
 const canSyncCliConfigs = computed(() => {
@@ -484,6 +545,8 @@ function handleSyncCompleted(payload: { targetAgentId: string; result: CliSyncRe
           :is-read-only="skillConfigStore.isReadOnly"
           :is-loading="skillConfigStore.isLoading"
           :can-sync="canSyncCliConfigs"
+          :can-refresh="canOpenCliConfigEditor"
+          :can-open-file="canOpenCliConfigEditor"
           @refresh="handleRefresh"
           @sync="openSyncModal('mcp')"
           @open-file="handleOpenFile"
@@ -507,7 +570,11 @@ function handleSyncCompleted(payload: { targetAgentId: string; result: CliSyncRe
           :configs="skillConfigStore.pluginsConfigs"
           :is-read-only="skillConfigStore.isReadOnly"
           :is-loading="skillConfigStore.isLoading"
+          :can-refresh="canOpenCliConfigEditor"
+          :can-open-file="canOpenCliConfigEditor"
           @add="handleAddPlugin"
+          @refresh="handleRefresh"
+          @open-file="handleOpenFile"
           @detail="handleViewPluginDetail"
           @edit="handleEditPlugin"
           @delete="handleDeletePlugin"
@@ -564,6 +631,20 @@ function handleSyncCompleted(payload: { targetAgentId: string; result: CliSyncRe
       :default-agent-id="currentCliAgentId"
       @close="handleClosePluginGitInstall"
       @complete="handlePluginGitInstallComplete"
+    />
+
+    <ProviderConfigEditorModal
+      v-model:visible="showConfigEditor"
+      :loading="isConfigEditorLoading"
+      :saving="isConfigEditorSaving"
+      :file="configEditorFile"
+      :content="configEditorContent"
+      :dirty="isConfigEditorDirty"
+      :locate-target="configEditorLocateTarget"
+      @update:content="configEditorContent = $event"
+      @reload="handleReloadConfigEditor"
+      @format="handleFormatConfigEditor"
+      @save="handleSaveConfigEditor"
     />
 
     <div

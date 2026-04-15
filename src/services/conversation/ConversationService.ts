@@ -22,7 +22,8 @@ import {
   buildProcessingTimeNotice,
   buildRuntimeNoticeFromSystemContent,
   buildUsageNotice,
-  upsertRuntimeNotice
+  upsertRuntimeNotice,
+  type RuntimeNotice
 } from '@/utils/runtimeNotice'
 import { loadAgentMcpServers } from '@/utils/mcpServerConfig'
 import { mergeToolInputArguments } from '@/utils/toolInput'
@@ -30,6 +31,7 @@ import { getErrorMessage } from '@/utils/api'
 import { recordAgentCliUsageInBackground, resolveRecordedModelId } from '@/services/usage/agentCliUsageRecorder'
 import { buildExpertSystemPrompt, resolveExpertById } from '@/services/agentTeams/runtime'
 import { writeFrontendRuntimeLog } from '@/services/runtimeLog/client'
+import { useSettingsStore } from '@/stores/settings'
 import {
   deleteSessionRuntimeBinding,
   getSessionRuntimeBinding,
@@ -118,6 +120,8 @@ export class ConversationService {
   private readonly queueDrainLocks = new Set<string>()
   private readonly dedupedInjectedSystemPrompts = new Map<string, Set<string>>()
   private readonly cliRuntimeKeys = ['claude-cli', 'codex-cli', 'opencode-cli'] as const
+  private readonly conversationRetryCount = new Map<string, number>()
+  private readonly conversationRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
   private constructor() {}
 
@@ -206,6 +210,7 @@ export class ConversationService {
 
     // 开始发送状态
     sessionExecutionStore.startSending(sessionId)
+    this.clearConversationRetryState(sessionId)
 
     try {
       const existingUserMessageId = options?.existingUserMessageId?.trim()
@@ -709,6 +714,7 @@ export class ConversationService {
       startedAt: globalThis.performance?.now() ?? Date.now()
     }
     let hasError = false
+    let lastErrorMessage = ''
     let usageRecorded = false
     let pendingUiUpdate: Partial<Message> | null = null
     let scheduledUiFlushHandle: number | ReturnType<typeof setTimeout> | null = null
@@ -953,6 +959,69 @@ export class ConversationService {
       })
     }
 
+    /**
+     * 统一处理“执行过程中出现失败”的收尾逻辑，覆盖抛异常与 error 事件两种路径。
+     */
+    const handleFailure = async (errorMessage: string) => {
+      const shouldAutoRetry = this.checkConversationAutoRetry(sessionId, errorMessage)
+      if (shouldAutoRetry) {
+        clearScheduledUiFlush()
+        pendingUiUpdate = null
+        await Promise.allSettled(Array.from(pendingTraceTasks))
+        await Promise.allSettled(Array.from(pendingPersistenceTasks))
+
+        bufferMessageUpdate({
+          status: 'streaming',
+          errorMessage: '',
+          thinking: '',
+          thinkingActive: false,
+          toolCalls: [],
+          editTraces: [],
+          content: ''
+        }, { immediate: true })
+        await messageStore.flushBufferedMessageUpdate(aiMessage.id, { notifyOnFailure: true })
+
+        const settingsStore = useSettingsStore()
+        const intervalMinutes = settingsStore.settings.retryIntervalMinutes ?? 5
+        const retryCount = this.conversationRetryCount.get(sessionId) ?? 0
+        const maxRetries = settingsStore.settings.conversationMaxRetries ?? 5
+        const retryNotice: RuntimeNotice = {
+          id: 'conversation-auto-retry',
+          title: '自动重试',
+          content: `自动重试中... 第 ${retryCount}/${maxRetries} 次，${intervalMinutes} 分钟后重试\n原因: ${errorMessage.slice(0, 200)}`,
+          tone: 'warning'
+        }
+        runtimeNoticesState = upsertRuntimeNotice(runtimeNoticesState, retryNotice)
+        messageStore.updateMessageBuffered(aiMessage.id, {
+          runtimeNotices: runtimeNoticesState
+        })
+
+        this.scheduleConversationAutoRetry(
+          sessionId,
+          intervalMinutes,
+          context,
+          aiMessage,
+          projectId
+        )
+        this.finalizeSend(sessionId)
+        return
+      }
+
+      this.clearConversationRetryState(sessionId)
+      syncFinalUsageNotice()
+      syncProcessingTimeNotice()
+      bufferMessageUpdate({
+        status: 'error',
+        errorMessage,
+        thinkingActive: false
+      }, { immediate: true })
+      await messageStore.flushBufferedMessageUpdate(aiMessage.id, { notifyOnFailure: true })
+      markMetric('persistedAt')
+      recordTimingSummary()
+      recordUsageOnce(new Date().toISOString())
+      this.finalizeSend(sessionId)
+    }
+
     try {
       await agentExecutor.execute(context, (event: StreamEvent) => {
         markMetric('firstEventAt')
@@ -1095,6 +1164,7 @@ export class ConversationService {
             }
 
             hasError = true
+            lastErrorMessage = error
             bufferMessageUpdate({
               status: 'error',
               errorMessage: error,
@@ -1116,7 +1186,7 @@ export class ConversationService {
                 thinkingActive: false,
                 toolCalls: [...toolCalls]
               }, { immediate: true })
-              // 更新会话最后消息
+              this.clearConversationRetryState(sessionId)
               sessionStore.updateLastMessage(
                 sessionId,
                 accumulatedContent.slice(0, 50)
@@ -1139,6 +1209,13 @@ export class ConversationService {
       await Promise.allSettled(Array.from(pendingTraceTasks))
       await Promise.allSettled(Array.from(pendingPersistenceTasks))
       await messageStore.flushBufferedMessageUpdate(aiMessage.id, { notifyOnFailure: true })
+
+      if (hasError && !isAiMessageInterrupted()) {
+        markMetric('doneAt')
+        await handleFailure(lastErrorMessage || getCurrentAiMessage()?.errorMessage || '对话执行失败')
+        return
+      }
+
       markMetric('persistedAt')
       recordTimingSummary()
 
@@ -1157,6 +1234,7 @@ export class ConversationService {
             thinkingActive: false,
             toolCalls: [...toolCalls]
           }, { immediate: true })
+          this.clearConversationRetryState(sessionId)
           sessionStore.updateLastMessage(
             sessionId,
             accumulatedContent.slice(0, 50)
@@ -1229,22 +1307,102 @@ export class ConversationService {
         return
       }
 
-      syncFinalUsageNotice()
       markMetric('doneAt')
-      syncProcessingTimeNotice()
-      bufferMessageUpdate({
-        status: 'error',
-        errorMessage,
-        thinkingActive: false
-      }, { immediate: true })
-      await messageStore.flushBufferedMessageUpdate(aiMessage.id, { notifyOnFailure: true })
-      markMetric('persistedAt')
-      recordTimingSummary()
-      recordUsageOnce(new Date().toISOString())
-      this.finalizeSend(sessionId)
+      await handleFailure(errorMessage)
     } finally {
       clearScheduledUiFlush()
     }
+  }
+
+  /**
+   * 检查主会话是否应自动重试。返回 true 表示应继续等待重试。
+   */
+  private checkConversationAutoRetry(sessionId: string, errorMessage: string): boolean {
+    const settingsStore = useSettingsStore()
+    const maxRetries = settingsStore.settings.conversationMaxRetries ?? 5
+    if (maxRetries <= 0) {
+      return false
+    }
+
+    const currentCount = this.conversationRetryCount.get(sessionId) ?? 0
+    if (currentCount >= maxRetries) {
+      return false
+    }
+
+    this.conversationRetryCount.set(sessionId, currentCount + 1)
+    void writeFrontendRuntimeLog(
+      'INFO',
+      'conversation-service',
+      `auto-retry scheduled | sessionId=${sessionId} | retry=${currentCount + 1}/${maxRetries} | originalError=${errorMessage.slice(0, 200)}`
+    )
+    return true
+  }
+
+  private scheduleConversationAutoRetry(
+    sessionId: string,
+    intervalMinutes: number,
+    context: ConversationContext,
+    aiMessage: Message,
+    projectId?: string
+  ): void {
+    this.cancelConversationAutoRetry(sessionId)
+
+    const timer = setTimeout(async () => {
+      this.conversationRetryTimers.delete(sessionId)
+
+      const messageStore = useMessageStore()
+      const currentMessage = messageStore.messagesBySession(sessionId)
+        .find(message => message.id === aiMessage.id)
+      if (!currentMessage || currentMessage.status === 'interrupted') {
+        this.clearConversationRetryState(sessionId)
+        return
+      }
+
+      try {
+        await messageStore.updateMessage(aiMessage.id, {
+          content: '',
+          thinking: '',
+          thinkingActive: false,
+          toolCalls: [],
+          editTraces: [],
+          errorMessage: '',
+          status: 'streaming'
+        })
+        const sessionExecutionStore = useSessionExecutionStore()
+        sessionExecutionStore.startSending(sessionId)
+        await this.executeConversation(context, aiMessage, sessionId, projectId)
+      } catch (retryError) {
+        void writeFrontendRuntimeLog(
+          'ERROR',
+          'conversation-service',
+          `auto-retry execute failed | sessionId=${sessionId} | error=${getErrorMessage(retryError, '重试执行失败')}`,
+          retryError
+        )
+      }
+    }, intervalMinutes * 60 * 1000)
+
+    this.conversationRetryTimers.set(sessionId, timer)
+  }
+
+  private cancelConversationAutoRetry(sessionId: string): void {
+    const existingTimer = this.conversationRetryTimers.get(sessionId)
+    if (existingTimer) {
+      clearTimeout(existingTimer)
+      this.conversationRetryTimers.delete(sessionId)
+    }
+  }
+
+  private clearConversationRetryState(sessionId: string): void {
+    this.cancelConversationAutoRetry(sessionId)
+    this.conversationRetryCount.delete(sessionId)
+  }
+
+  getConversationRetryCount(sessionId: string): number {
+    return this.conversationRetryCount.get(sessionId) ?? 0
+  }
+
+  isConversationRetryScheduled(sessionId: string): boolean {
+    return this.conversationRetryTimers.has(sessionId)
   }
 
   /**

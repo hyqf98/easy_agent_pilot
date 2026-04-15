@@ -6,6 +6,7 @@ import { createCompletionProvider } from './completionProvider'
 import { buildEditorOptions } from './editorOptions'
 import {
   createEditorRenderScheduler,
+  resolveEditorSearchRange,
   revealEditorFocusRange,
   updateEditorDecorations
 } from './editorPresentation'
@@ -13,7 +14,7 @@ import {
   createSelectionContextController,
   resolveModelSelectionPayload
 } from './selectionContextMenu'
-import type { MonacoCodeEditorEmits, MonacoCodeEditorProps } from './types'
+import type { EditorHighlightRange, MonacoCodeEditorEmits, MonacoCodeEditorProps } from './types'
 export type { EditorHighlightRange, MonacoCodeEditorEmits, MonacoCodeEditorProps } from './types'
 
 /**
@@ -33,6 +34,7 @@ export function useMonacoCodeEditor(
   let decorationCollection: monaco.editor.IEditorDecorationsCollection | null = null
   let sendSelectionActionDisposable: monaco.IDisposable | null = null
   let isSyncingFromOutside = false
+  let searchHighlightRange: EditorHighlightRange | null = null
 
   const resolveTheme = (): 'easy-agent-light' | 'easy-agent-dark' => {
     return themeStore.isDark ? 'easy-agent-dark' : 'easy-agent-light'
@@ -54,7 +56,11 @@ export function useMonacoCodeEditor(
       return
     }
 
-    decorationCollection = updateEditorDecorations(editor, decorationCollection, props.highlightedRanges ?? [])
+    const mergedRanges = searchHighlightRange
+      ? [...(props.highlightedRanges ?? []), searchHighlightRange]
+      : (props.highlightedRanges ?? [])
+
+    decorationCollection = updateEditorDecorations(editor, decorationCollection, mergedRanges)
   }
 
   const revealFocusRange = (): void => {
@@ -62,7 +68,23 @@ export function useMonacoCodeEditor(
       return
     }
 
-    revealEditorFocusRange(editor, props.focusRange)
+    revealEditorFocusRange(editor, searchHighlightRange ?? props.focusRange)
+  }
+
+  const syncSearchTarget = (): void => {
+    if (!model || !editor) {
+      searchHighlightRange = null
+      return
+    }
+
+    searchHighlightRange = resolveEditorSearchRange(model, props.searchTarget)
+    if (!searchHighlightRange) {
+      updateDecorations()
+      return
+    }
+
+    updateDecorations()
+    revealFocusRange()
   }
 
   const resolveSelectionPayload = () => {
@@ -141,6 +163,7 @@ export function useMonacoCodeEditor(
     })
 
     registerCompletionProvider()
+    syncSearchTarget()
     updateDecorations()
     revealFocusRange()
     renderScheduler.scheduleEditorRender()
@@ -154,6 +177,7 @@ export function useMonacoCodeEditor(
     isSyncingFromOutside = true
     model.setValue(nextValue)
     isSyncingFromOutside = false
+    syncSearchTarget()
     renderScheduler.scheduleEditorRender()
   })
 
@@ -186,6 +210,11 @@ export function useMonacoCodeEditor(
     renderScheduler.scheduleEditorRender()
   }, { deep: true })
 
+  watch(() => props.searchTarget, () => {
+    syncSearchTarget()
+    renderScheduler.scheduleEditorRender()
+  }, { deep: true })
+
   watch(
     () => [themeStore.isDark, themeStore.currentThemeColorId] as const,
     ([isDark]) => {
@@ -209,6 +238,7 @@ export function useMonacoCodeEditor(
     completionProviderDisposable = null
     sendSelectionActionDisposable?.dispose()
     sendSelectionActionDisposable = null
+    searchHighlightRange = null
 
     editor?.dispose()
     editor = null

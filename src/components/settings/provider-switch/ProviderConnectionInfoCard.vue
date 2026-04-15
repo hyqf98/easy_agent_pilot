@@ -1,9 +1,11 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { EaIcon } from '@/components/common'
 import type { CliConnectionInfo } from '@/stores/providerProfile'
 import { useI18n } from 'vue-i18n'
+import type { DefaultCliConfigLocateTarget } from '@/composables/useDefaultCliConfigEditor'
 
-defineProps<{
+const props = defineProps<{
   loading: boolean
   connection: CliConnectionInfo | null
   showApiKey: boolean
@@ -11,9 +13,43 @@ defineProps<{
 
 const emit = defineEmits<{
   toggleApiKey: []
+  openConfigEditor: [target?: DefaultCliConfigLocateTarget]
 }>()
 
 const { t } = useI18n()
+
+const locateActions = computed(() => {
+  if (!props.connection) {
+    return []
+  }
+
+  const actions: Array<DefaultCliConfigLocateTarget & { key: string }> = []
+  const providerOrBaseUrl = props.connection.cliType === 'opencode'
+    ? props.connection.providerName?.trim()
+    : props.connection.baseUrl?.trim()
+  const providerOrBaseUrlLabel = props.connection.cliType === 'opencode'
+    ? t('settings.providerSwitch.form.providerName')
+    : t('settings.providerSwitch.form.baseUrl')
+  const mainModel = props.connection.mainModel?.trim()
+
+  if (providerOrBaseUrl) {
+    actions.push({
+      key: 'provider-or-base-url',
+      label: providerOrBaseUrlLabel,
+      query: providerOrBaseUrl
+    })
+  }
+
+  if (mainModel) {
+    actions.push({
+      key: 'main-model',
+      label: t('settings.providerSwitch.form.mainModel'),
+      query: mainModel
+    })
+  }
+
+  return actions
+})
 </script>
 
 <template>
@@ -51,6 +87,30 @@ const { t } = useI18n()
         >
           {{ connection.isValid ? t('settings.providerSwitch.connectionValid') : t('settings.providerSwitch.connectionInvalid') }}
         </span>
+      </div>
+      <div class="connection-header__actions">
+        <button
+          class="connection-open-btn"
+          @click="emit('openConfigEditor')"
+        >
+          <EaIcon
+            name="file-text"
+            :size="14"
+          />
+          {{ t('settings.providerSwitch.openDefaultConfig') }}
+        </button>
+        <button
+          v-for="action in locateActions"
+          :key="action.key"
+          class="connection-open-btn connection-open-btn--secondary"
+          @click="emit('openConfigEditor', action)"
+        >
+          <EaIcon
+            name="crosshair"
+            :size="14"
+          />
+          {{ t('settings.providerSwitch.locateInConfig', { field: action.label }) }}
+        </button>
       </div>
       <div class="connection-body">
         <div class="connection-row">
@@ -163,8 +223,19 @@ const { t } = useI18n()
   background: var(--color-surface, #ffffff);
 }
 
+.connection-header__actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 16px 12px;
+  background: var(--color-surface, #ffffff);
+}
+
 :global(.dark) .connection-header {
   border-color: var(--color-border, #334155);
+  background: var(--color-bg-tertiary, #253142);
+}
+
+:global(.dark) .connection-header__actions {
   background: var(--color-bg-tertiary, #253142);
 }
 
@@ -174,6 +245,35 @@ const { t } = useI18n()
   gap: 8px;
   color: var(--color-text-primary, #1a1a1a);
   font-weight: 600;
+}
+
+.connection-open-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--color-border, #d7e1ec);
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: var(--color-surface, #ffffff);
+  color: var(--color-text-primary, #1a1a1a);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.connection-open-btn:hover {
+  border-color: #93c5fd;
+  color: var(--color-primary, #2563eb);
+}
+
+.connection-open-btn--secondary {
+  font-weight: 500;
+}
+
+:global(.dark) .connection-open-btn {
+  border-color: var(--color-border, #334155);
+  background: var(--color-bg-secondary, #1f2937);
+  color: var(--color-text-primary, #ffffff);
 }
 
 :global(.dark) .connection-name {

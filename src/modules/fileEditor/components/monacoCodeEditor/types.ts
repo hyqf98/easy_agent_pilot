@@ -9,6 +9,11 @@ export interface EditorHighlightRange {
   isWholeLine?: boolean
 }
 
+export interface EditorSearchTarget {
+  query: string
+  matchCase?: boolean
+}
+
 export interface MonacoCodeEditorProps {
   modelValue: string
   language: MonacoLanguageId
@@ -20,6 +25,7 @@ export interface MonacoCodeEditorProps {
   readOnly?: boolean
   highlightedRanges?: EditorHighlightRange[]
   focusRange?: EditorHighlightRange | null
+  searchTarget?: EditorSearchTarget | null
 }
 
 export type MonacoCodeEditorEmits = {

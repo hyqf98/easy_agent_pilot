@@ -1,5 +1,5 @@
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
-import type { EditorHighlightRange } from './types'
+import type { EditorHighlightRange, EditorSearchTarget } from './types'
 
 /**
  * 统一维护编辑器装饰、高亮跳转和延迟重绘，避免这些 UI 细节散落在主 composable 中。
@@ -54,6 +54,42 @@ export function revealEditorFocusRange(
     lineNumber: focusRange.startLine,
     column: focusRange.startColumn ?? 1
   })
+}
+
+/**
+ * 根据查询文本解析可视化定位区间，供所有复用 Monaco 的场景共享。
+ */
+export function resolveEditorSearchRange(
+  model: monaco.editor.ITextModel,
+  searchTarget: EditorSearchTarget | null | undefined
+): EditorHighlightRange | null {
+  const query = searchTarget?.query.trim()
+  if (!query) {
+    return null
+  }
+
+  const [match] = model.findMatches(
+    query,
+    false,
+    false,
+    searchTarget?.matchCase ?? false,
+    null,
+    false,
+    1
+  )
+
+  if (!match) {
+    return null
+  }
+
+  return {
+    startLine: match.range.startLineNumber,
+    endLine: match.range.endLineNumber,
+    startColumn: match.range.startColumn,
+    endColumn: match.range.endColumn,
+    className: 'ea-monaco-search-highlight',
+    isWholeLine: false
+  }
 }
 
 export function createEditorRenderScheduler(

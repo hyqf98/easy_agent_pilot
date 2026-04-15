@@ -5,6 +5,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { inferAgentProvider, useAgentStore, type AgentConfig } from './agent'
 import { useAgentTeamsStore } from './agentTeams'
 import { usePlanStore } from './plan'
+import { useSettingsStore } from './settings'
 import { logger } from '@/utils/logger'
 import { normalizeFormSchemaForRendering, normalizeFormSchemasForRendering } from '@/utils/formSchema'
 import {
@@ -159,7 +160,12 @@ function buildExecutionRequest(
   llmMessages: MessageInput[],
   mcpServers: ExecutionRequest['mcpServers']
 ): ExecutionRequest {
-  const provider = (agent.provider || 'claude').toLowerCase() === 'codex' ? 'codex' : 'claude'
+  const normalizedProvider = (agent.provider || 'claude').toLowerCase()
+  const provider = normalizedProvider === 'codex'
+    ? 'codex'
+    : normalizedProvider === 'claude'
+      ? 'claude'
+      : 'generic'
   return buildAgentExecutionRequest({
     sessionId: crypto.randomUUID(),
     planId: context.planId,
@@ -253,6 +259,9 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
   const runtimeMetrics = ref<PlanSplitRuntimeMetrics | null>(null)
   const recordedUsageSessionIds = ref<Set<string>>(new Set())
   const refinementState = ref<TaskSplitRefinementState | null>(null)
+  const autoRetryCount = ref(0)
+  const autoRetryTimer = ref<ReturnType<typeof setTimeout> | null>(null)
+  const autoRetryScheduled = ref(false)
 
   const subSplitMode = computed(() => refinementState.value?.mode === 'task_resplit')
   const subSplitTargetIndex = computed(() => refinementState.value?.targetIndex ?? null)
@@ -277,6 +286,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
   }
 
   function resetState() {
+    cancelAutoRetry()
     messages.value = []
     logs.value = []
     isProcessing.value = false
@@ -292,6 +302,58 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     runtimeMetrics.value = null
     recordedUsageSessionIds.value = new Set()
     refinementState.value = null
+    autoRetryCount.value = 0
+  }
+
+  function cancelAutoRetry() {
+    if (autoRetryTimer.value) {
+      clearTimeout(autoRetryTimer.value)
+      autoRetryTimer.value = null
+    }
+    autoRetryScheduled.value = false
+  }
+
+  function scheduleAutoRetry() {
+    if (!context.value || !session.value || session.value.status !== 'failed') {
+      return
+    }
+
+    const settingsStore = useSettingsStore()
+    const maxRetries = settingsStore.settings.planSplitMaxRetries ?? 5
+    const intervalMinutes = settingsStore.settings.retryIntervalMinutes ?? 5
+
+    if (autoRetryCount.value >= maxRetries) {
+      autoRetryScheduled.value = false
+      return
+    }
+
+    autoRetryScheduled.value = true
+    autoRetryCount.value += 1
+    const retryNumber = autoRetryCount.value
+
+    logs.value.push({
+      id: `auto-retry-${retryNumber}-${Date.now()}`,
+      planId: context.value.planId,
+      sessionId: session.value.executionSessionId || '',
+      type: 'system',
+      content: `自动重试中... 第 ${retryNumber}/${maxRetries} 次，${intervalMinutes} 分钟后重试`,
+      metadata: JSON.stringify({ retryCount: retryNumber, maxRetries, intervalMinutes }),
+      createdAt: new Date().toISOString()
+    })
+
+    autoRetryTimer.value = setTimeout(async () => {
+      autoRetryScheduled.value = false
+      if (!context.value || !session.value || session.value.status !== 'failed') {
+        return
+      }
+      try {
+        await restartFromPersistedContext(session.value, {
+          preserveAutoRetryState: true
+        })
+      } catch (error) {
+        logger.error('[TaskSplit] Auto-retry failed:', error)
+      }
+    }, intervalMinutes * 60 * 1000)
   }
 
   function applySessionSnapshot(snapshot: PlanSplitSessionRecord | null, preserveLogs: boolean = true) {
@@ -323,6 +385,15 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
 
     if (['completed', 'failed', 'stopped'].includes(snapshot.status)) {
       recordPlanSplitUsage(snapshot)
+    }
+
+    if (snapshot.status === 'completed' || snapshot.status === 'stopped') {
+      cancelAutoRetry()
+      autoRetryCount.value = 0
+    }
+
+    if (snapshot.status === 'failed' && context.value && !autoRetryScheduled.value) {
+      scheduleAutoRetry()
     }
   }
 
@@ -484,6 +555,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     uiMessages: SplitMessage[],
     options?: {
       preserveLogs?: boolean
+      preserveAutoRetryState?: boolean
     }
   ) {
     const agentStore = useAgentStore()
@@ -500,6 +572,10 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
 
     if (!options?.preserveLogs) {
       logs.value = []
+    }
+    cancelAutoRetry()
+    if (!options?.preserveAutoRetryState) {
+      autoRetryCount.value = 0
     }
     runtimeMetrics.value = {
       startedAt: performance.now()
@@ -678,7 +754,12 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
   /**
    * 基于当前会话上下文重新发起最新一轮拆分，并清理上一轮失败/停止留下的 AI 渲染痕迹。
    */
-  async function restartFromPersistedContext(snapshot: PlanSplitSessionRecord) {
+  async function restartFromPersistedContext(
+    snapshot: PlanSplitSessionRecord,
+    options?: {
+      preserveAutoRetryState?: boolean
+    }
+  ) {
     if (!context.value) {
       return
     }
@@ -700,7 +781,9 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
 
     messages.value = uiMessages
     if (latestExecutionSessionId) {
-      logs.value = logs.value.filter(log => log.sessionId !== latestExecutionSessionId)
+      logs.value = logs.value.filter(
+        log => log.sessionId !== latestExecutionSessionId || log.type === 'system'
+      )
     }
     applySessionSnapshot({
       ...resetSnapshot,
@@ -709,7 +792,8 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     }, true)
 
     await startBackgroundSession(context.value, llmMessages, uiMessages, {
-      preserveLogs: true
+      preserveLogs: true,
+      preserveAutoRetryState: options?.preserveAutoRetryState
     })
   }
 
@@ -1034,6 +1118,9 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     retry,
     continueSession,
     stop,
+    autoRetryCount,
+    autoRetryScheduled,
+    cancelAutoRetry,
     updateSplitTask,
     removeSplitTask,
     addSplitTask,

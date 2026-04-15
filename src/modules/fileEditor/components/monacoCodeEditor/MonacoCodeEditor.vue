@@ -10,7 +10,8 @@ const props = withDefaults(defineProps<MonacoCodeEditorProps>(), {
   completions: () => [],
   readOnly: false,
   highlightedRanges: () => [],
-  focusRange: null
+  focusRange: null,
+  searchTarget: null
 })
 
 const emit = defineEmits<MonacoCodeEditorEmits>()
