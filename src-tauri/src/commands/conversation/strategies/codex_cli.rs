@@ -912,7 +912,7 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
 
             match item_type {
                 "command_execution" => build_command_execution_tool_use_event(session_id, item),
-                "reasoning" => Some(build_thinking_start_event(session_id)),
+                "reasoning" | "thinking" => Some(build_thinking_start_event(session_id)),
                 _ => None,
             }
         }
@@ -925,7 +925,7 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                     let text = extract_item_text(item)?;
                     Some(build_content_event(session_id, text))
                 }
-                "reasoning" => {
+                "reasoning" | "thinking" => {
                     let text = extract_item_text(item)?;
                     Some(build_thinking_event(session_id, text))
                 }
@@ -981,13 +981,21 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
 
             match delta_type {
                 "text_delta" => {
-                    let text = delta.get("text").and_then(|t| t.as_str())?;
-                    Some(build_content_event(session_id, text.to_string()))
+                    extract_text_value(
+                        delta.get("text")
+                            .or_else(|| delta.get("content"))
+                            .or_else(|| delta.get("message")),
+                    )
+                    .map(|text| build_content_event(session_id, text))
                 }
                 "thinking_delta" => {
-                    // 处理思考增量
-                    let thinking = delta.get("thinking").and_then(|t| t.as_str())?;
-                    Some(build_thinking_event(session_id, thinking.to_string()))
+                    extract_text_value(
+                        delta.get("thinking")
+                            .or_else(|| delta.get("summary"))
+                            .or_else(|| delta.get("text"))
+                            .or_else(|| delta.get("content")),
+                    )
+                    .map(|thinking| build_thinking_event(session_id, thinking))
                 }
                 "input_json_delta" => {
                     let partial_json = delta.get("partial_json").and_then(|j| j.as_str())?;
@@ -1043,7 +1051,7 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                         external_session_id: None,
                     })
                 }
-                "thinking" => {
+                "thinking" | "reasoning" => {
                     // thinking 内容块开始
                     Some(build_thinking_start_event(session_id))
                 }
@@ -1203,16 +1211,22 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                     .unwrap_or("");
 
                 match item_type {
-                    "thinking" => {
+                    "thinking" | "reasoning" => {
                         // 处理 thinking 类型
-                        if let Some(thinking_text) =
-                            content_item.get("thinking").and_then(|t| t.as_str())
+                        if let Some(thinking_text) = extract_text_value(
+                            content_item
+                                .get("thinking")
+                                .or_else(|| content_item.get("summary"))
+                                .or_else(|| content_item.get("text"))
+                                .or_else(|| content_item.get("content"))
+                                .or_else(|| content_item.get("message")),
+                        )
                         {
                             log_debug!("[parse] 找到 thinking 内容，长度: {}", thinking_text.len());
                             return Some(CliStreamEvent {
                                 event_type: "thinking".to_string(),
                                 session_id: session_id.to_string(),
-                                content: Some(thinking_text.to_string()),
+                                content: Some(thinking_text),
                                 tool_name: None,
                                 tool_call_id: None,
                                 tool_input: None,
@@ -1226,8 +1240,13 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                         }
                     }
                     "text" => {
-                        let text = content_item.get("text").and_then(|t| t.as_str())?;
-                        return Some(build_content_event(session_id, text.to_string()));
+                        let text = extract_text_value(
+                            content_item
+                                .get("text")
+                                .or_else(|| content_item.get("content"))
+                                .or_else(|| content_item.get("message")),
+                        )?;
+                        return Some(build_content_event(session_id, text));
                     }
                     "tool_use" => {
                         let tool_name = content_item.get("name").and_then(|n| n.as_str())?;
@@ -1330,9 +1349,12 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
 }
 
 fn extract_item_text(item: &serde_json::Value) -> Option<String> {
-    extract_text_value(item.get("text"))
+    extract_text_value(item.get("thinking"))
+        .or_else(|| extract_text_value(item.get("summary")))
+        .or_else(|| extract_text_value(item.get("text")))
         .or_else(|| extract_structured_payload(item))
         .or_else(|| extract_text_value(item.get("content")))
+        .or_else(|| extract_text_value(item.get("message")))
 }
 
 fn extract_structured_payload(value: &serde_json::Value) -> Option<String> {
@@ -1397,28 +1419,18 @@ fn extract_text_value(value: Option<&serde_json::Value>) -> Option<String> {
     }
 
     if value.is_object() {
-        if let Some(text) = value
-            .get("text")
-            .and_then(|part| part.as_str())
-            .map(|part| part.trim().to_string())
-            .filter(|part| !part.is_empty())
-        {
-            return Some(text);
-        }
-
-        if let Some(content) = value.get("content") {
-            if let Some(text) = extract_text_value(Some(content)) {
+        for key in [
+            "thinking",
+            "summary",
+            "text",
+            "content",
+            "message",
+            "value",
+            "title",
+        ] {
+            if let Some(text) = extract_text_value(value.get(key)) {
                 return Some(text);
             }
-        }
-
-        if let Some(message) = value
-            .get("message")
-            .and_then(|part| part.as_str())
-            .map(|part| part.trim().to_string())
-            .filter(|part| !part.is_empty())
-        {
-            return Some(message);
         }
 
         if let Ok(serialized) = serde_json::to_string(value) {

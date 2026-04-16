@@ -7,6 +7,31 @@ function normalizeModelId(modelId?: string | null): string {
   return modelId?.trim().toLowerCase() || ''
 }
 
+function collectModelIdAliases(modelId?: string | null): string[] {
+  const normalizedModelId = normalizeModelId(modelId)
+  if (!normalizedModelId) {
+    return []
+  }
+
+  const aliases = new Set<string>([normalizedModelId])
+  const slashIndex = normalizedModelId.lastIndexOf('/')
+  if (slashIndex >= 0 && slashIndex < normalizedModelId.length - 1) {
+    aliases.add(normalizedModelId.slice(slashIndex + 1))
+  }
+
+  return Array.from(aliases)
+}
+
+function modelIdsMatch(left?: string | null, right?: string | null): boolean {
+  const leftAliases = collectModelIdAliases(left)
+  const rightAliases = collectModelIdAliases(right)
+  if (leftAliases.length === 0 || rightAliases.length === 0) {
+    return false
+  }
+
+  return leftAliases.some(alias => rightAliases.includes(alias))
+}
+
 interface ResolveConfiguredContextWindowOptions {
   runtimeModelId?: string | null
   selectedModelId?: string | null
@@ -18,14 +43,13 @@ function matchConfiguredModel(
   models: AgentModelConfig[],
   modelId?: string | null
 ): AgentModelConfig | undefined {
-  const normalizedModelId = normalizeModelId(modelId)
-  if (!normalizedModelId) {
+  if (collectModelIdAliases(modelId).length === 0) {
     return undefined
   }
 
   return models
     .filter(model => model.enabled)
-    .find(model => normalizeModelId(model.modelId) === normalizedModelId)
+    .find(model => modelIdsMatch(model.modelId, modelId))
 }
 
 export function findConfiguredModel(
@@ -37,15 +61,11 @@ export function findConfiguredModel(
     return undefined
   }
 
-  const runtimeModelId = normalizeModelId(options.runtimeModelId)
-  const selectedModelId = normalizeModelId(options.selectedModelId)
-  const agentModelId = normalizeModelId(options.agentModelId)
+  const matchById = (modelId?: string | null) => enabledModels.find(model => modelIdsMatch(model.modelId, modelId))
 
-  const matchById = (modelId: string) => enabledModels.find(model => normalizeModelId(model.modelId) === modelId)
-
-  return matchById(runtimeModelId)
-    ?? matchById(selectedModelId)
-    ?? matchById(agentModelId)
+  return matchById(options.runtimeModelId)
+    ?? matchById(options.selectedModelId)
+    ?? matchById(options.agentModelId)
     ?? enabledModels.find(model => model.isDefault)
     ?? enabledModels[0]
 }

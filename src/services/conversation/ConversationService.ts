@@ -602,11 +602,24 @@ export class ConversationService {
     return provider?.trim() || undefined
   }
 
+  /**
+   * Codex CLI 的 resume 会复用外部会话里的文件视图。
+   * 当前工作区如果在长会话期间被本地或其他工具改动，后续 apply_patch 容易基于旧上下文失败，
+   * 因此主会话对 Codex 统一退回到“全量上下文 + 新执行”的稳妥路径。
+   */
+  private shouldReuseCliSession(agent: AgentConfig): boolean {
+    if (agent.type !== 'cli') {
+      return false
+    }
+
+    return resolveRuntimeBindingKey(agent) !== 'codex-cli'
+  }
+
   private async resolveReusableCliSessionId(
     session: Session | undefined,
     agent: AgentConfig
   ): Promise<string | undefined> {
-    if (!session || agent.type !== 'cli') {
+    if (!session || !this.shouldReuseCliSession(agent)) {
       return undefined
     }
 

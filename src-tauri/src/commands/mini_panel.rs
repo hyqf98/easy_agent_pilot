@@ -338,7 +338,6 @@ fn ensure_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
     .min_inner_size(720.0, 520.0)
     .resizable(true)
     .visible(false)
-    .always_on_top(true)
     .build()
     .map_err(|e| e.to_string())
 }
@@ -499,25 +498,24 @@ pub fn show_mini_panel(app: AppHandle) -> Result<(), String> {
     window
         .emit("mini-panel:focus-input", true)
         .map_err(|e| e.to_string())?;
+
+    if let Some(main_window) = app.get_webview_window("main") {
+        let _ = main_window.minimize();
+    }
+
     Ok(())
 }
 
 #[tauri::command]
 pub fn hide_mini_panel(app: AppHandle) -> Result<(), String> {
-    let main_was_visible = app
-        .get_webview_window("main")
-        .map(|window| window.is_visible().map_err(|e| e.to_string()))
-        .transpose()?
-        .unwrap_or(false);
-
     if let Some(window) = app.get_webview_window(MINI_PANEL_WINDOW_LABEL) {
         window.hide().map_err(|e| e.to_string())?;
     }
 
-    if !main_was_visible {
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.hide();
-        }
+    if let Some(main_window) = app.get_webview_window("main") {
+        let _ = main_window.unminimize();
+        let _ = main_window.show();
+        let _ = main_window.set_focus();
     }
 
     Ok(())
@@ -529,18 +527,12 @@ pub fn toggle_mini_panel(app: AppHandle) -> Result<bool, String> {
     let visible = window.is_visible().map_err(|e| e.to_string())?;
 
     if visible {
-        let main_was_visible = app
-            .get_webview_window("main")
-            .map(|main_window| main_window.is_visible().map_err(|e| e.to_string()))
-            .transpose()?
-            .unwrap_or(false);
-
         window.hide().map_err(|e| e.to_string())?;
 
-        if !main_was_visible {
-            if let Some(main_window) = app.get_webview_window("main") {
-                let _ = main_window.hide();
-            }
+        if let Some(main_window) = app.get_webview_window("main") {
+            let _ = main_window.unminimize();
+            let _ = main_window.show();
+            let _ = main_window.set_focus();
         }
 
         return Ok(false);
@@ -552,5 +544,10 @@ pub fn toggle_mini_panel(app: AppHandle) -> Result<bool, String> {
     window
         .emit("mini-panel:focus-input", true)
         .map_err(|e| e.to_string())?;
+
+    if let Some(main_window) = app.get_webview_window("main") {
+        let _ = main_window.minimize();
+    }
+
     Ok(true)
 }

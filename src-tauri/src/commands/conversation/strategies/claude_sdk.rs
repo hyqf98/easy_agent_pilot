@@ -280,16 +280,66 @@ fn parse_anthropic_stream_event(
     session_id: &str,
     json: &serde_json::Value,
 ) -> Option<SdkStreamEvent> {
+    fn extract_textish_value(value: Option<&serde_json::Value>) -> Option<String> {
+        fn collect(value: &serde_json::Value, parts: &mut Vec<String>) {
+            match value {
+                serde_json::Value::Null => {}
+                serde_json::Value::String(text) => {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        parts.push(trimmed.to_string());
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    for item in items {
+                        collect(item, parts);
+                    }
+                }
+                serde_json::Value::Object(map) => {
+                    for key in [
+                        "thinking",
+                        "summary",
+                        "text",
+                        "content",
+                        "message",
+                        "value",
+                        "title",
+                    ] {
+                        if let Some(nested) = map.get(key) {
+                            collect(nested, parts);
+                        }
+                    }
+                }
+                serde_json::Value::Bool(flag) => parts.push(flag.to_string()),
+                serde_json::Value::Number(number) => parts.push(number.to_string()),
+            }
+        }
+
+        let value = value?;
+        let mut parts = Vec::new();
+        collect(value, &mut parts);
+
+        if parts.is_empty() {
+            return None;
+        }
+
+        Some(parts.join("\n"))
+    }
+
     let event_type = json.get("type")?.as_str()?;
 
     match event_type {
         "content_block_delta" => {
             let delta = json.get("delta")?;
-            if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
+            if let Some(text) = extract_textish_value(
+                delta.get("text")
+                    .or_else(|| delta.get("content"))
+                    .or_else(|| delta.get("message")),
+            ) {
                 Some(SdkStreamEvent {
                     event_type: "content".to_string(),
                     session_id: session_id.to_string(),
-                    content: Some(text.to_string()),
+                    content: Some(text),
                     tool_name: None,
                     tool_call_id: None,
                     tool_input: None,
@@ -301,13 +351,16 @@ fn parse_anthropic_stream_event(
                     external_session_id: None,
                 })
             } else {
-                delta
-                    .get("thinking")
-                    .and_then(|t| t.as_str())
+                extract_textish_value(
+                    delta.get("thinking")
+                        .or_else(|| delta.get("summary"))
+                        .or_else(|| delta.get("text"))
+                        .or_else(|| delta.get("content")),
+                )
                     .map(|thinking| SdkStreamEvent {
                         event_type: "thinking".to_string(),
                         session_id: session_id.to_string(),
-                        content: Some(thinking.to_string()),
+                        content: Some(thinking),
                         tool_name: None,
                         tool_call_id: None,
                         tool_input: None,
@@ -325,6 +378,20 @@ fn parse_anthropic_stream_event(
             let block_type = content_block.get("type")?.as_str()?;
 
             match block_type {
+                "thinking" | "reasoning" => Some(SdkStreamEvent {
+                    event_type: "thinking_start".to_string(),
+                    session_id: session_id.to_string(),
+                    content: None,
+                    tool_name: None,
+                    tool_call_id: None,
+                    tool_input: None,
+                    tool_result: None,
+                    error: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    model: None,
+                    external_session_id: None,
+                }),
                 "tool_use" => Some(SdkStreamEvent {
                     event_type: "tool_use".to_string(),
                     session_id: session_id.to_string(),

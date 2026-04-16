@@ -211,12 +211,14 @@ export abstract class BaseAgentStrategy implements AgentStrategy {
           ...baseEvent
         }
       case 'thinking':
+      case 'reasoning':
         return {
           type: 'thinking',
           content: event.content,
           ...baseEvent
         }
       case 'thinking_start':
+      case 'reasoning_start':
         return {
           type: 'thinking_start',
           ...baseEvent

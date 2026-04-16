@@ -120,7 +120,10 @@ const executionConfig = computed(() => {
 
   return {
     agentLabel: expert?.name || agent?.name || selection.agentId || t('taskDetail.unspecified'),
-    modelLabel: selection.modelId || t('taskDetail.useDefaultModel'),
+    modelLabel: taskExecutionStore.getExecutionState(currentTask.value.id)?.tokenUsage.model
+      || selection.modelId
+      || agent?.modelId
+      || t('taskDetail.useDefaultModel'),
     sourceLabel: selection.source === 'plan' ? t('taskDetail.executionConfigFromPlan') : ''
   }
 })

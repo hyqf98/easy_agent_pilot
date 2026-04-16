@@ -320,6 +320,53 @@ fn parse_openai_sse_event(session_id: &str, event_str: &str) -> Option<SdkStream
 
 /// 解析 OpenAI 流式事件
 fn parse_openai_stream_event(session_id: &str, json: &serde_json::Value) -> Option<SdkStreamEvent> {
+    fn extract_textish_value(value: Option<&serde_json::Value>) -> Option<String> {
+        fn collect(value: &serde_json::Value, parts: &mut Vec<String>) {
+            match value {
+                serde_json::Value::Null => {}
+                serde_json::Value::String(text) => {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        parts.push(trimmed.to_string());
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    for item in items {
+                        collect(item, parts);
+                    }
+                }
+                serde_json::Value::Object(map) => {
+                    for key in [
+                        "reasoning",
+                        "thinking",
+                        "summary",
+                        "text",
+                        "content",
+                        "message",
+                        "value",
+                        "title",
+                    ] {
+                        if let Some(nested) = map.get(key) {
+                            collect(nested, parts);
+                        }
+                    }
+                }
+                serde_json::Value::Bool(flag) => parts.push(flag.to_string()),
+                serde_json::Value::Number(number) => parts.push(number.to_string()),
+            }
+        }
+
+        let value = value?;
+        let mut parts = Vec::new();
+        collect(value, &mut parts);
+
+        if parts.is_empty() {
+            return None;
+        }
+
+        Some(parts.join("\n"))
+    }
+
     let choices = json.get("choices")?.as_array()?;
     let first_choice = choices.first()?;
 
@@ -345,7 +392,7 @@ fn parse_openai_stream_event(session_id: &str, json: &serde_json::Value) -> Opti
     }
 
     // 处理文本内容
-    if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+    if let Some(content) = extract_textish_value(delta.get("content")) {
         if !content.is_empty() {
             // 尝试获取 token 使用量
             let usage = json.get("usage");
@@ -365,7 +412,7 @@ fn parse_openai_stream_event(session_id: &str, json: &serde_json::Value) -> Opti
             return Some(SdkStreamEvent {
                 event_type: "content".to_string(),
                 session_id: session_id.to_string(),
-                content: Some(content.to_string()),
+                content: Some(content),
                 tool_name: None,
                 tool_call_id: None,
                 tool_input: None,
@@ -377,6 +424,42 @@ fn parse_openai_stream_event(session_id: &str, json: &serde_json::Value) -> Opti
                 external_session_id: None,
             });
         }
+    }
+
+    if let Some(thinking) = extract_textish_value(
+        delta.get("reasoning")
+            .or_else(|| delta.get("reasoning_content"))
+            .or_else(|| delta.get("thinking"))
+            .or_else(|| delta.get("summary")),
+    ) {
+        let usage = json.get("usage");
+        let input_tokens = usage
+            .and_then(|u| u.get("prompt_tokens"))
+            .and_then(|t| t.as_u64())
+            .map(|t| t as u32);
+        let output_tokens = usage
+            .and_then(|u| u.get("completion_tokens"))
+            .and_then(|t| t.as_u64())
+            .map(|t| t as u32);
+        let model = json
+            .get("model")
+            .and_then(|m| m.as_str())
+            .map(|s| s.to_string());
+
+        return Some(SdkStreamEvent {
+            event_type: "thinking".to_string(),
+            session_id: session_id.to_string(),
+            content: Some(thinking),
+            tool_name: None,
+            tool_call_id: None,
+            tool_input: None,
+            tool_result: None,
+            error: None,
+            input_tokens,
+            output_tokens,
+            model,
+            external_session_id: None,
+        });
     }
 
     // 处理工具调用

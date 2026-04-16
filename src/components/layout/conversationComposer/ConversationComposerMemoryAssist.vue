@@ -25,6 +25,8 @@ defineProps<{
   previewMemoryReference: (reference: MemoryReference) => void
   previewMemorySuggestion: (suggestion: MemorySuggestion) => void
   clearMemoryPreview: () => void
+  handleMemorySuggestionPointerEnter: () => void
+  handleMemorySuggestionPointerLeave: () => void
   dismissMemorySuggestion: (suggestion: MemorySuggestion) => void
   insertMemoryReference: (suggestion: MemorySuggestion) => void
   removeMemoryReferenceFromDraft: (reference: MemoryReference) => void
@@ -90,6 +92,8 @@ defineProps<{
     <div
       v-if="isMainPanel && shouldShowMemorySuggestions"
       class="conversation-composer__memory-panel conversation-composer__memory-panel--floating"
+      @mouseenter="handleMemorySuggestionPointerEnter"
+      @mouseleave="handleMemorySuggestionPointerLeave"
     >
       <div class="conversation-composer__memory-panel-header">
         <div>

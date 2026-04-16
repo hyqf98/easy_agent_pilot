@@ -81,6 +81,7 @@ import {
   upsertTaskRuntimeBinding
 } from '@/services/conversation/runtimeBindings'
 import { loadMountedMemoryPrompt } from '@/services/memory/mountedMemoryPrompt'
+import { resolveUsageModelHint } from '@/services/conversation/usageModelHint'
 
 function finalizeRunningToolCalls(toolCalls: ToolCall[]): void {
   for (const toolCall of toolCalls) {
@@ -677,9 +678,16 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
         throw new Error('未找到可用执行运行时')
       }
 
+      const usageModelHint = !baseAgent.modelId?.trim()
+        ? await resolveUsageModelHint(baseAgent).catch((error) => {
+            console.warn('[TaskExecution] Failed to resolve usage model hint:', error)
+            return undefined
+          })
+        : undefined
+
       const agent = {
         ...baseAgent,
-        modelId: runtime?.modelId || selection.modelId || baseAgent.modelId
+        modelId: runtime?.modelId || selection.modelId || baseAgent.modelId || usageModelHint
       }
       currentAgentForUsage = agent
       if (agent.modelId?.trim()) {

@@ -4,9 +4,10 @@ import type { AgentConfig } from '@/stores/agent'
 interface CliConfigModelProfile {
   main_model?: string | null
   codex_model?: string | null
+  provider_name?: string | null
 }
 
-function resolveOfficialCliDefaultModel(cliType: 'claude' | 'codex'): string | undefined {
+function resolveOfficialCliDefaultModel(cliType: 'claude' | 'codex' | 'opencode'): string | undefined {
   if (cliType === 'codex') {
     return 'gpt-5-codex'
   }
@@ -30,7 +31,7 @@ export async function resolveUsageModelHint(
     return undefined
   }
 
-  const cliType = agent.provider === 'claude' || agent.provider === 'codex'
+  const cliType = agent.provider === 'claude' || agent.provider === 'codex' || agent.provider === 'opencode'
     ? agent.provider
     : null
   if (!cliType) {
@@ -39,9 +40,27 @@ export async function resolveUsageModelHint(
 
   try {
     const profile = await invoke<CliConfigModelProfile>('read_current_cli_config', { cliType })
-    const configuredModel = cliType === 'codex'
-      ? (profile.codex_model?.trim() || undefined)
-      : (profile.main_model?.trim() || undefined)
+    const configuredModel = (() => {
+      if (cliType === 'codex') {
+        return profile.codex_model?.trim() || undefined
+      }
+
+      if (cliType === 'opencode') {
+        const provider = profile.provider_name?.trim()
+        const model = profile.main_model?.trim()
+        if (!model) {
+          return undefined
+        }
+
+        if (!provider || model.startsWith(`${provider}/`)) {
+          return model
+        }
+
+        return `${provider}/${model}`
+      }
+
+      return profile.main_model?.trim() || undefined
+    })()
     return configuredModel || resolveOfficialCliDefaultModel(cliType)
   } catch (error) {
     console.warn('[usageModelHint] Failed to resolve usage model hint:', error)

@@ -89,8 +89,10 @@ interface UseConversationComposerOptions {
 
 const MEMORY_REFERENCE_TOKEN_PATTERN = /\[\[memory-ref:(library_chunk|raw_record):([^\]]+)\]\]/g
 const MEMORY_SUGGESTION_DEBOUNCE_MS = 350
+const MEMORY_SUGGESTION_AUTO_HIDE_MS = 3000
 const MEMORY_SUGGESTION_EMPTY_STATE_DELAY_MS = 3000
 const MEMORY_SUGGESTION_EMPTY_STATE_RECHECK_MS = 240
+const MEMORY_SUGGESTION_KEYBOARD_ACTIVE_MS = 800
 
 function buildMemoryReferenceToken(sourceType: MemorySuggestionSourceType, sourceId: string): string {
   return `[[memory-ref:${sourceType}:${sourceId}]]`
@@ -258,7 +260,10 @@ export function useConversationComposer(options: UseConversationComposerOptions)
   const isMemorySuggestionPending = ref(false)
   const memorySuggestionEmptyStateVisible = ref(false)
   const memorySuggestionPendingEmptyQuery = ref('')
+  const isMemorySuggestionPointerActive = ref(false)
+  const lastMemorySuggestionKeyboardAt = ref(0)
   let memorySuggestionTimer: ReturnType<typeof setTimeout> | null = null
+  let memorySuggestionAutoHideTimer: ReturnType<typeof setTimeout> | null = null
   let memorySuggestionEmptyTimer: ReturnType<typeof setTimeout> | null = null
   let memorySuggestionRequestId = 0
 
@@ -698,6 +703,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
   const previewMemorySuggestion = (suggestion: MemorySuggestion) => {
     hoveredMemoryPreview.value = buildMemoryPreviewFromSuggestion(suggestion)
+    armMemorySuggestionAutoHide()
   }
 
   const previewMemoryReference = (reference: ComposerMemoryReference) => {
@@ -715,10 +721,75 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     }
   }
 
+  const clearMemorySuggestionAutoHideTimer = () => {
+    if (memorySuggestionAutoHideTimer) {
+      clearTimeout(memorySuggestionAutoHideTimer)
+      memorySuggestionAutoHideTimer = null
+    }
+  }
+
   const clearMemorySuggestionEmptyTimer = () => {
     if (memorySuggestionEmptyTimer) {
       clearTimeout(memorySuggestionEmptyTimer)
       memorySuggestionEmptyTimer = null
+    }
+  }
+
+  const isMemorySuggestionKeyboardActive = () => (
+    Date.now() - lastMemorySuggestionKeyboardAt.value < MEMORY_SUGGESTION_KEYBOARD_ACTIVE_MS
+  )
+
+  const hideMemorySuggestionPanel = () => {
+    clearMemorySuggestionAutoHideTimer()
+    activeMemorySuggestionIndex.value = -1
+    hoveredMemoryPreview.value = null
+    isMemorySuggestionPanelActive.value = false
+    isMemorySuggestionPending.value = false
+    memorySuggestionEmptyStateVisible.value = false
+    memorySuggestionPendingEmptyQuery.value = ''
+    isMemorySuggestionPointerActive.value = false
+    lastMemorySuggestionKeyboardAt.value = 0
+  }
+
+  const armMemorySuggestionAutoHide = () => {
+    clearMemorySuggestionAutoHideTimer()
+
+    if (!shouldShowMemorySuggestions.value) {
+      return
+    }
+
+    memorySuggestionAutoHideTimer = setTimeout(() => {
+      if (!shouldShowMemorySuggestions.value) {
+        return
+      }
+
+      if (isMemorySuggestionPointerActive.value || isMemorySuggestionKeyboardActive()) {
+        armMemorySuggestionAutoHide()
+        return
+      }
+
+      hideMemorySuggestionPanel()
+    }, MEMORY_SUGGESTION_AUTO_HIDE_MS)
+  }
+
+  const markMemorySuggestionKeyboardInteraction = () => {
+    lastMemorySuggestionKeyboardAt.value = Date.now()
+    if (shouldShowMemorySuggestions.value) {
+      armMemorySuggestionAutoHide()
+    }
+  }
+
+  const handleMemorySuggestionPointerEnter = () => {
+    isMemorySuggestionPointerActive.value = true
+    if (shouldShowMemorySuggestions.value) {
+      armMemorySuggestionAutoHide()
+    }
+  }
+
+  const handleMemorySuggestionPointerLeave = () => {
+    isMemorySuggestionPointerActive.value = false
+    if (shouldShowMemorySuggestions.value) {
+      armMemorySuggestionAutoHide()
     }
   }
 
@@ -732,6 +803,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     memorySuggestionEmptyStateVisible.value = false
     memorySuggestionPendingEmptyQuery.value = ''
     clearMemorySuggestionEmptyTimer()
+    armMemorySuggestionAutoHide()
   }
 
   const settleMemorySuggestionResults = (suggestionCount: number) => {
@@ -743,6 +815,8 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     if (suggestionCount === 0) {
       activeMemorySuggestionIndex.value = -1
     }
+
+    armMemorySuggestionAutoHide()
   }
 
   const armMemorySuggestionEmptyState = (
@@ -774,14 +848,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
         librarySuggestions: [],
         rawSuggestions: []
       }, searchText)
-      activeMemorySuggestionIndex.value = -1
-      if (hoveredMemoryPreview.value && !activeMemorySuggestion.value) {
-        hoveredMemoryPreview.value = null
-      }
-      isMemorySuggestionPanelActive.value = false
-      isMemorySuggestionPending.value = false
-      memorySuggestionEmptyStateVisible.value = false
-      memorySuggestionPendingEmptyQuery.value = ''
+      hideMemorySuggestionPanel()
     }, delay)
   }
 
@@ -792,14 +859,10 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     }
 
     clearMemorySuggestionTimer()
+    clearMemorySuggestionAutoHideTimer()
     clearMemorySuggestionEmptyTimer()
     memorySuggestionRequestId += 1
-    activeMemorySuggestionIndex.value = -1
-    hoveredMemoryPreview.value = null
-    isMemorySuggestionPanelActive.value = false
-    isMemorySuggestionPending.value = false
-    memorySuggestionEmptyStateVisible.value = false
-    memorySuggestionPendingEmptyQuery.value = ''
+    hideMemorySuggestionPanel()
     sessionExecutionStore.setIsSearchingMemory(sessionId, false)
     sessionExecutionStore.clearMemorySuggestions(sessionId)
     sessionExecutionStore.clearDismissedMemorySuggestionKeys(sessionId)
@@ -929,14 +992,10 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
   watch(currentSessionId, (sessionId) => {
     clearMemorySuggestionTimer()
+    clearMemorySuggestionAutoHideTimer()
     clearMemorySuggestionEmptyTimer()
     memorySuggestionRequestId += 1
-    activeMemorySuggestionIndex.value = -1
-    hoveredMemoryPreview.value = null
-    isMemorySuggestionPanelActive.value = false
-    isMemorySuggestionPending.value = false
-    memorySuggestionEmptyStateVisible.value = false
-    memorySuggestionPendingEmptyQuery.value = ''
+    hideMemorySuggestionPanel()
     if (sessionId) {
       focusInput()
       sessionExecutionStore.clearMemorySuggestions(sessionId)
@@ -1006,6 +1065,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
   onUnmounted(() => {
     clearMemorySuggestionTimer()
+    clearMemorySuggestionAutoHideTimer()
     clearMemorySuggestionEmptyTimer()
   })
 
@@ -1247,7 +1307,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     textarea.value = newText
     inputText.value = newText
     sessionExecutionStore.appendMemoryReference(sessionId, reference)
-    activeMemorySuggestionIndex.value = -1
+    hideMemorySuggestionPanel()
     hoveredMemoryPreview.value = buildMemoryPreviewFromReference(reference)
 
     requestAnimationFrame(() => {
@@ -1271,6 +1331,12 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       hoveredMemoryPreview.value = null
     }
     sessionExecutionStore.dismissMemorySuggestion(currentSessionId.value, suggestion)
+    if (!hasVisibleMemorySuggestions.value) {
+      hideMemorySuggestionPanel()
+      return
+    }
+
+    armMemorySuggestionAutoHide()
   }
 
   const removeMemoryReferenceFromDraft = (reference: ComposerMemoryReference) => {
@@ -1670,11 +1736,9 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     closeSlashCommand()
     closeCdPathSuggestions()
     clearMemorySuggestionTimer()
+    clearMemorySuggestionAutoHideTimer()
     clearMemorySuggestionEmptyTimer()
-    isMemorySuggestionPanelActive.value = false
-    isMemorySuggestionPending.value = false
-    memorySuggestionEmptyStateVisible.value = false
-    memorySuggestionPendingEmptyQuery.value = ''
+    hideMemorySuggestionPanel()
   }
 
   const sendWithCurrentAgent = async (
@@ -1959,20 +2023,15 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     if (shouldShowMemorySuggestions.value && flatVisibleMemorySuggestions.value.length > 0) {
       if (event.key === 'ArrowDown') {
         event.preventDefault()
+        markMemorySuggestionKeyboardInteraction()
         moveActiveMemorySuggestion(1)
         return
       }
 
       if (event.key === 'ArrowUp') {
         event.preventDefault()
+        markMemorySuggestionKeyboardInteraction()
         moveActiveMemorySuggestion(-1)
-        return
-      }
-
-      if (event.key === 'Escape' && (activeMemorySuggestionIndex.value >= 0 || hoveredMemoryPreview.value)) {
-        event.preventDefault()
-        activeMemorySuggestionIndex.value = -1
-        hoveredMemoryPreview.value = null
         return
       }
 
@@ -1981,6 +2040,12 @@ export function useConversationComposer(options: UseConversationComposerOptions)
         insertMemoryReference(activeMemorySuggestion.value)
         return
       }
+    }
+
+    if (event.key === 'Escape' && shouldShowMemorySuggestions.value) {
+      event.preventDefault()
+      hideMemorySuggestionPanel()
+      return
     }
 
     if (event.key === 'Enter') {
@@ -2077,6 +2142,8 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     handleCompositionStart,
     handleKeyDown,
     handleMessageFormSubmit,
+    handleMemorySuggestionPointerEnter,
+    handleMemorySuggestionPointerLeave,
     insertMemoryReference,
     handleOpenCompress,
     handlePaste,

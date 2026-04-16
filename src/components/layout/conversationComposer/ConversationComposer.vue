@@ -60,6 +60,8 @@ const {
   handleInput,
   handleKeyDown,
   handleMessageFormSubmit,
+  handleMemorySuggestionPointerEnter,
+  handleMemorySuggestionPointerLeave,
   handleOpenCompress,
   handlePaste,
   hasVisibleMemorySuggestions,
@@ -563,6 +565,8 @@ defineExpose({
         :preview-memory-reference="previewMemoryReference"
         :preview-memory-suggestion="previewMemorySuggestion"
         :clear-memory-preview="clearMemoryPreview"
+        :handle-memory-suggestion-pointer-enter="handleMemorySuggestionPointerEnter"
+        :handle-memory-suggestion-pointer-leave="handleMemorySuggestionPointerLeave"
         :dismiss-memory-suggestion="dismissMemorySuggestion"
         :insert-memory-reference="insertMemoryReference"
         :remove-memory-reference-from-draft="removeMemoryReferenceFromDraft"

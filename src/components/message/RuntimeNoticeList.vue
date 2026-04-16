@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 import type { RuntimeNotice } from '@/utils/runtimeNotice'
 import { getUsageNoticeSummary, summarizeRuntimeNotice } from '@/utils/runtimeNotice'
+import { resolveRecordedModelId } from '@/services/usage/agentCliUsageRecorder'
 
 interface UsageFallback {
   model?: string
@@ -30,6 +31,13 @@ const extraRegularNotices = computed(() => regularNotices.value.slice(1))
 const primaryUsageNotice = computed(() => usageNotices.value[0] ?? null)
 const extraUsageNotices = computed(() => usageNotices.value.slice(1))
 const shouldUseCombinedSummary = computed(() => Boolean(primaryRegularNotice.value && primaryUsageNotice.value))
+const requestedModelFallback = computed(() => {
+  const fromRegularNotice = regularNotices.value
+    .map(notice => extractModelFromNotice(notice))
+    .find(Boolean)
+
+  return fromRegularNotice || props.fallbackUsage?.model?.trim() || null
+})
 
 function toggleNotice(id: string) {
   const next = new Set(expandedIds.value)
@@ -60,6 +68,7 @@ function noticeChips(notice: RuntimeNotice) {
 function usageSummary(notice: RuntimeNotice) {
   const summary = getUsageNoticeSummary(notice)
   const fallback = props.fallbackUsage
+  const requestedModel = requestedModelFallback.value
 
   if (!summary) {
     if (!fallback) {
@@ -70,7 +79,10 @@ function usageSummary(notice: RuntimeNotice) {
     const hasFallbackOutput = typeof fallback.outputTokens === 'number' && fallback.outputTokens > 0
 
     return {
-      model: fallback.model || null,
+      model: resolveRecordedModelId({
+        reportedModelId: fallback.model,
+        requestedModelId: requestedModel
+      }) || requestedModel || fallback.model || null,
       input: hasFallbackInput ? String(fallback.inputTokens) : null,
       output: hasFallbackOutput ? String(fallback.outputTokens) : null
     }
@@ -82,10 +94,22 @@ function usageSummary(notice: RuntimeNotice) {
   const fallbackOutput = typeof fallback?.outputTokens === 'number' && fallback.outputTokens > 0 ? String(fallback.outputTokens) : null
 
   return {
-    model: summary.model || fallback?.model || null,
+    model: resolveRecordedModelId({
+      reportedModelId: summary.model || fallback?.model,
+      requestedModelId: requestedModel
+    }) || requestedModel || summary.model || fallback?.model || null,
     input: hasRealInput ? summary.input : (fallbackInput || null),
     output: hasRealOutput ? summary.output : (fallbackOutput || null)
   }
+}
+
+function extractModelFromNotice(notice: RuntimeNotice): string | null {
+  const match = notice.content.match(/(?:^|\n)-?\s*(?:模型|model)\s*:\s*(.+)$/im)
+  return match?.[1]?.trim() || null
+}
+
+function usageModelLabel(notice: RuntimeNotice) {
+  return usageSummary(notice)?.model || requestedModelFallback.value || '—'
 }
 
 function formatChipLabel(notice: RuntimeNotice, chip: string) {
@@ -140,7 +164,7 @@ function formatChipLabel(notice: RuntimeNotice, chip: string) {
           <div class="runtime-notice__usage-main">
             <span class="runtime-notice__usage-label">Model</span>
             <span class="runtime-notice__usage-model">
-              {{ usageSummary(primaryUsageNotice)?.model || 'Unknown' }}
+              {{ usageModelLabel(primaryUsageNotice) }}
             </span>
           </div>
           <div class="runtime-notice__usage-stats">
@@ -216,7 +240,7 @@ function formatChipLabel(notice: RuntimeNotice, chip: string) {
           <div class="runtime-notice__usage-main">
             <span class="runtime-notice__usage-label">Model</span>
             <span class="runtime-notice__usage-model">
-              {{ usageSummary(notice)?.model || 'Unknown' }}
+              {{ usageModelLabel(notice) }}
             </span>
           </div>
           <div class="runtime-notice__usage-stats">
@@ -248,7 +272,7 @@ function formatChipLabel(notice: RuntimeNotice, chip: string) {
           <div class="runtime-notice__usage-main">
             <span class="runtime-notice__usage-label">Model</span>
             <span class="runtime-notice__usage-model">
-              {{ usageSummary(notice)?.model || 'Unknown' }}
+              {{ usageModelLabel(notice) }}
             </span>
           </div>
           <div class="runtime-notice__usage-stats">

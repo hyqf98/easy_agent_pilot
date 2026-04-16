@@ -2,7 +2,7 @@ import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useTaskExecutionStore } from '@/stores/taskExecution'
 import { useTaskStore } from '@/stores/task'
 import { usePlanStore } from '@/stores/plan'
-import { useAgentStore } from '@/stores/agent'
+import { inferAgentProvider, useAgentStore } from '@/stores/agent'
 import { useAgentConfigStore } from '@/stores/agentConfig'
 import type { TimelineEntry } from '@/types/timeline'
 import { buildToolCallMapFromLogs } from '@/utils/toolCallLog'
@@ -64,12 +64,26 @@ export function useTaskExecutionLog(options: UseTaskExecutionLogOptions) {
     lastUpdatedAt: null
   })
 
+  const executionAgentId = computed(() => {
+    const currentTask = task.value
+    if (!currentTask) return null
+
+    const plan = planStore.plans.find(item => item.id === currentTask.planId)
+    return currentTask.agentId || plan?.splitAgentId || null
+  })
+
+  const executionAgent = computed(() => {
+    const agentId = executionAgentId.value
+    if (!agentId) return null
+    return agentStore.agents.find(item => item.id === agentId) || null
+  })
+
   const tokenContextLimit = computed(() => {
     const currentTask = task.value
     if (!currentTask) return DEFAULT_CONTEXT_WINDOW
 
     const plan = planStore.plans.find(item => item.id === currentTask.planId)
-    const agentId = currentTask.agentId || plan?.splitAgentId
+    const agentId = executionAgentId.value
     const modelId = currentTask.modelId || plan?.splitModelId
     const runtimeModel = tokenUsageWindow.value.model?.trim()
 
@@ -77,7 +91,7 @@ export function useTaskExecutionLog(options: UseTaskExecutionLogOptions) {
       return DEFAULT_CONTEXT_WINDOW
     }
 
-    const agent = agentStore.agents.find(item => item.id === agentId)
+    const agent = executionAgent.value
     return resolveConfiguredContextWindow(agentConfigStore.getModelsConfigs(agentId), {
       runtimeModelId: runtimeModel,
       selectedModelId: modelId,
@@ -171,6 +185,15 @@ export function useTaskExecutionLog(options: UseTaskExecutionLogOptions) {
   const statusColor = computed(() => {
     return getTaskExecutionStatusMeta(effectiveStatus.value).color
   })
+
+  async function ensureTaskModelConfigsLoaded() {
+    const agent = executionAgent.value
+    if (!agent) {
+      return
+    }
+
+    await agentConfigStore.ensureModelsConfigs(agent.id, inferAgentProvider(agent))
+  }
 
   async function handleStop() {
     const currentTask = task.value
@@ -326,11 +349,22 @@ export function useTaskExecutionLog(options: UseTaskExecutionLogOptions) {
         content: log.content,
         timestamp: log.timestamp,
         animate: isRunning.value,
-        runtimeFallbackUsage: log.metadata?.model || log.metadata?.inputTokens !== undefined || log.metadata?.outputTokens !== undefined
+        runtimeFallbackUsage: log.metadata?.model
+          || log.metadata?.inputTokens !== undefined
+          || log.metadata?.outputTokens !== undefined
+          || tokenUsageWindow.value.model
+          || tokenUsageWindow.value.inputTokens > 0
+          || tokenUsageWindow.value.outputTokens > 0
           ? {
-              model: typeof log.metadata?.model === 'string' ? log.metadata.model : undefined,
-              inputTokens: typeof log.metadata?.inputTokens === 'number' ? log.metadata.inputTokens : undefined,
-              outputTokens: typeof log.metadata?.outputTokens === 'number' ? log.metadata.outputTokens : undefined
+              model: typeof log.metadata?.model === 'string'
+                ? log.metadata.model
+                : tokenUsageWindow.value.model,
+              inputTokens: typeof log.metadata?.inputTokens === 'number'
+                ? log.metadata.inputTokens
+                : (tokenUsageWindow.value.inputTokens > 0 ? tokenUsageWindow.value.inputTokens : undefined),
+              outputTokens: typeof log.metadata?.outputTokens === 'number'
+                ? log.metadata.outputTokens
+                : (tokenUsageWindow.value.outputTokens > 0 ? tokenUsageWindow.value.outputTokens : undefined)
             }
           : undefined
       })
@@ -342,6 +376,7 @@ export function useTaskExecutionLog(options: UseTaskExecutionLogOptions) {
   let retryTimer: ReturnType<typeof setTimeout> | null = null
 
   onMounted(async () => {
+    await ensureTaskModelConfigsLoaded()
     await taskExecutionStore.loadTaskLogs(props.taskId)
     scrollToBottom()
 
@@ -368,9 +403,18 @@ export function useTaskExecutionLog(options: UseTaskExecutionLogOptions) {
         clearTimeout(retryTimer)
         retryTimer = null
       }
+      await ensureTaskModelConfigsLoaded()
       await taskExecutionStore.loadTaskLogs(taskId)
       scrollToBottom()
     }
+  )
+
+  watch(
+    () => executionAgentId.value,
+    async () => {
+      await ensureTaskModelConfigsLoaded()
+    },
+    { immediate: true }
   )
 
   watch(

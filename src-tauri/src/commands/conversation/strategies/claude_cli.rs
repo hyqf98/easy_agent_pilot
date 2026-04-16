@@ -244,6 +244,52 @@ fn build_tool_input_delta_event(
     }
 }
 
+fn extract_textish_value(value: Option<&serde_json::Value>) -> Option<String> {
+    fn collect(value: &serde_json::Value, parts: &mut Vec<String>) {
+        match value {
+            serde_json::Value::Null => {}
+            serde_json::Value::String(text) => {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    parts.push(trimmed.to_string());
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    collect(item, parts);
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for key in [
+                    "thinking",
+                    "summary",
+                    "text",
+                    "content",
+                    "message",
+                    "value",
+                    "title",
+                ] {
+                    if let Some(nested) = map.get(key) {
+                        collect(nested, parts);
+                    }
+                }
+            }
+            serde_json::Value::Bool(flag) => parts.push(flag.to_string()),
+            serde_json::Value::Number(number) => parts.push(number.to_string()),
+        }
+    }
+
+    let value = value?;
+    let mut parts = Vec::new();
+    collect(value, &mut parts);
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    Some(parts.join("\n"))
+}
+
 fn extract_external_session_id(json: &serde_json::Value) -> Option<String> {
     [
         json.get("session_id"),
@@ -943,12 +989,21 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
 
             match delta_type {
                 "thinking_delta" => {
-                    let thinking = delta.get("thinking").and_then(|t| t.as_str())?;
-                    Some(build_thinking_event(session_id, thinking.to_string()))
+                    extract_textish_value(
+                        delta.get("thinking")
+                            .or_else(|| delta.get("summary"))
+                            .or_else(|| delta.get("text"))
+                            .or_else(|| delta.get("content")),
+                    )
+                    .map(|thinking| build_thinking_event(session_id, thinking))
                 }
                 "text_delta" => {
-                    let text = delta.get("text").and_then(|t| t.as_str())?;
-                    Some(build_content_event(session_id, text.to_string()))
+                    extract_textish_value(
+                        delta.get("text")
+                            .or_else(|| delta.get("content"))
+                            .or_else(|| delta.get("message")),
+                    )
+                    .map(|text| build_content_event(session_id, text))
                 }
                 "input_json_delta" => {
                     let partial_json = delta.get("partial_json").and_then(|j| j.as_str())?;
@@ -978,7 +1033,7 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                 .unwrap_or("");
 
             match block_type {
-                "thinking" => Some(build_thinking_start_event(session_id)),
+                "thinking" | "reasoning" => Some(build_thinking_start_event(session_id)),
                 "tool_use" => {
                     let tool_name = content_block.get("name").and_then(|n| n.as_str())?;
                     let tool_id = content_block
@@ -1225,10 +1280,16 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                     .unwrap_or("");
 
                 match item_type {
-                    "thinking" => {
+                    "thinking" | "reasoning" => {
                         // 处理 thinking 类型
-                        if let Some(thinking_text) =
-                            content_item.get("thinking").and_then(|t| t.as_str())
+                        if let Some(thinking_text) = extract_textish_value(
+                            content_item
+                                .get("thinking")
+                                .or_else(|| content_item.get("summary"))
+                                .or_else(|| content_item.get("text"))
+                                .or_else(|| content_item.get("content"))
+                                .or_else(|| content_item.get("message")),
+                        )
                         {
                             log_debug!("[parse] 找到 thinking 内容，长度: {}", thinking_text.len());
                             return Some(CliStreamEvent {
@@ -1236,16 +1297,21 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                                 output_tokens,
                                 model: model.clone(),
                                 external_session_id: extract_external_session_id(json),
-                                ..build_thinking_event(session_id, thinking_text.to_string())
+                                ..build_thinking_event(session_id, thinking_text)
                             });
                         }
                     }
                     "text" => {
-                        let text = content_item.get("text").and_then(|t| t.as_str())?;
+                        let text = extract_textish_value(
+                            content_item
+                                .get("text")
+                                .or_else(|| content_item.get("content"))
+                                .or_else(|| content_item.get("message")),
+                        )?;
                         return Some(CliStreamEvent {
                             event_type: "content".to_string(),
                             session_id: session_id.to_string(),
-                            content: Some(text.to_string()),
+                            content: Some(text),
                             tool_name: None,
                             tool_call_id: None,
                             tool_input: None,

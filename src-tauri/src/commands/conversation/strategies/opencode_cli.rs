@@ -240,6 +240,8 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
         let mut args = vec!["run".to_string()];
         args.push("--format".to_string());
         args.push("json".to_string());
+        // OpenCode CLI 默认不会输出 reasoning block，需要显式开启。
+        args.push("--thinking".to_string());
 
         if let Some(model_id) = &model_id {
             let trimmed = model_id.trim();
@@ -609,6 +611,103 @@ fn stringify_json_value(value: Option<&serde_json::Value>) -> Option<String> {
     }
 }
 
+fn extract_textish_value(value: Option<&serde_json::Value>) -> Option<String> {
+    fn collect_textish_parts(value: &serde_json::Value, parts: &mut Vec<String>) {
+        match value {
+            serde_json::Value::Null => {}
+            serde_json::Value::String(text) => {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    parts.push(trimmed.to_string());
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    collect_textish_parts(item, parts);
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for key in [
+                    "thinking",
+                    "summary",
+                    "text",
+                    "content",
+                    "message",
+                    "value",
+                    "title",
+                ] {
+                    if let Some(nested) = map.get(key) {
+                        collect_textish_parts(nested, parts);
+                    }
+                }
+            }
+            serde_json::Value::Bool(flag) => parts.push(flag.to_string()),
+            serde_json::Value::Number(number) => parts.push(number.to_string()),
+        }
+    }
+
+    let value = value?;
+    let mut parts = Vec::new();
+    collect_textish_parts(value, &mut parts);
+    if parts.is_empty() {
+        return None;
+    }
+
+    Some(parts.join("\n"))
+}
+
+fn extract_model_fragment(value: Option<&serde_json::Value>) -> Option<String> {
+    let value = value?;
+
+    match value {
+        serde_json::Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        serde_json::Value::Object(map) => [
+            map.get("id"),
+            map.get("name"),
+            map.get("model"),
+            map.get("modelID"),
+            map.get("modelId"),
+        ]
+        .into_iter()
+        .flatten()
+        .find_map(|nested| nested.as_str())
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned),
+        _ => None,
+    }
+}
+
+fn extract_provider_fragment(value: Option<&serde_json::Value>) -> Option<String> {
+    let value = value?;
+
+    match value {
+        serde_json::Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        serde_json::Value::Object(map) => [map.get("id"), map.get("name"), map.get("provider")]
+            .into_iter()
+            .flatten()
+            .find_map(|nested| nested.as_str())
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(ToOwned::to_owned),
+        _ => None,
+    }
+}
+
 fn build_thinking_cli_event(session_id: &str, content: String) -> CliStreamEvent {
     CliStreamEvent {
         event_type: "thinking".to_string(),
@@ -732,16 +831,61 @@ fn extract_opencode_model_name(
     json: &serde_json::Value,
     requested_model: Option<&str>,
 ) -> Option<String> {
-    json.get("model")
-        .or_else(|| json.pointer("/part/model"))
-        .or_else(|| json.pointer("/part/modelName"))
-        .or_else(|| json.pointer("/message/model"))
-        .or_else(|| json.pointer("/message/modelName"))
-        .or_else(|| json.pointer("/payload/model"))
-        .or_else(|| json.pointer("/payload/modelName"))
-        .and_then(|value| value.as_str())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    let model = [
+        json.get("model"),
+        json.get("modelName"),
+        json.pointer("/part/model"),
+        json.pointer("/part/modelName"),
+        json.pointer("/part/data/model"),
+        json.pointer("/part/data/modelName"),
+        json.pointer("/message/model"),
+        json.pointer("/message/modelName"),
+        json.pointer("/payload/model"),
+        json.pointer("/payload/modelName"),
+        json.pointer("/payload/message/model"),
+        json.pointer("/payload/message/modelName"),
+        json.pointer("/payload/part/model"),
+        json.pointer("/payload/part/modelName"),
+        json.pointer("/data/model"),
+        json.pointer("/data/modelName"),
+        json.pointer("/metadata/model"),
+        json.pointer("/properties/model"),
+        json.pointer("/properties/modelName"),
+    ]
+    .into_iter()
+    .find_map(extract_model_fragment);
+
+    let provider = [
+        json.get("provider"),
+        json.get("providerID"),
+        json.get("providerName"),
+        json.pointer("/message/provider"),
+        json.pointer("/message/providerID"),
+        json.pointer("/message/providerName"),
+        json.pointer("/payload/provider"),
+        json.pointer("/payload/providerID"),
+        json.pointer("/payload/providerName"),
+        json.pointer("/payload/message/provider"),
+        json.pointer("/payload/message/providerID"),
+        json.pointer("/payload/message/providerName"),
+        json.pointer("/data/provider"),
+        json.pointer("/data/providerID"),
+        json.pointer("/data/providerName"),
+        json.pointer("/properties/provider"),
+        json.pointer("/properties/providerID"),
+        json.pointer("/properties/providerName"),
+    ]
+    .into_iter()
+    .find_map(extract_provider_fragment);
+
+    model
+        .map(|value| {
+            if value.contains('/') || provider.as_deref().is_none() {
+                value
+            } else {
+                format!("{}/{}", provider.as_deref().unwrap_or_default(), value)
+            }
+        })
         .or_else(|| {
             requested_model
                 .map(str::trim)
@@ -793,14 +937,16 @@ fn parse_opencode_part_event(session_id: &str, part: &serde_json::Value) -> Opti
     let data = part.get("data").unwrap_or(part);
 
     match part_type {
-        "text" | "output_text" | "input_text" | "message" => stringify_json_value(
+        "text" | "output_text" | "input_text" | "message" => extract_textish_value(
             data.get("text")
                 .or_else(|| part.get("text"))
                 .or_else(|| data.get("content"))
-                .or_else(|| part.get("content")),
+                .or_else(|| part.get("content"))
+                .or_else(|| data.get("message"))
+                .or_else(|| part.get("message")),
         )
         .map(|text| build_content_event(session_id, text)),
-        "reasoning" | "thinking" | "reasoning_content" => stringify_json_value(
+        "reasoning" | "thinking" | "reasoning_content" => extract_textish_value(
             data.get("thinking")
                 .or_else(|| part.get("thinking"))
                 .or_else(|| data.get("summary"))
@@ -808,7 +954,9 @@ fn parse_opencode_part_event(session_id: &str, part: &serde_json::Value) -> Opti
                 .or_else(|| data.get("text"))
                 .or_else(|| part.get("text"))
                 .or_else(|| data.get("content"))
-                .or_else(|| part.get("content")),
+                .or_else(|| part.get("content"))
+                .or_else(|| data.get("message"))
+                .or_else(|| part.get("message")),
         )
         .map(|text| build_thinking_cli_event(session_id, text)),
         "tool_call" | "tool_use" | "tool" | "function_call" => {
@@ -889,18 +1037,20 @@ fn parse_opencode_parts_event(
 
         match part_type {
             "text" | "output_text" | "input_text" | "message" => {
-                if let Some(text) = stringify_json_value(
+                if let Some(text) = extract_textish_value(
                     part.get("data")
                         .and_then(|value| value.get("text"))
                         .or_else(|| part.get("text"))
                         .or_else(|| part.pointer("/data/content"))
-                        .or_else(|| part.get("content")),
+                        .or_else(|| part.get("content"))
+                        .or_else(|| part.pointer("/data/message"))
+                        .or_else(|| part.get("message")),
                 ) {
                     content_text.push_str(&text);
                 }
             }
             "reasoning" | "thinking" | "reasoning_content" => {
-                if let Some(text) = stringify_json_value(
+                if let Some(text) = extract_textish_value(
                     part.get("data")
                         .and_then(|value| value.get("thinking"))
                         .or_else(|| part.get("thinking"))
@@ -909,7 +1059,9 @@ fn parse_opencode_parts_event(
                         .or_else(|| part.pointer("/data/text"))
                         .or_else(|| part.get("text"))
                         .or_else(|| part.pointer("/data/content"))
-                        .or_else(|| part.get("content")),
+                        .or_else(|| part.get("content"))
+                        .or_else(|| part.pointer("/data/message"))
+                        .or_else(|| part.get("message")),
                 ) {
                     thinking_text.push_str(&text);
                 }
@@ -983,7 +1135,12 @@ fn parse_opencode_response_item(
                 return parse_opencode_parts_event(session_id, content);
             }
 
-            stringify_json_value(payload.get("content"))
+            extract_textish_value(
+                payload
+                    .get("content")
+                    .or_else(|| payload.get("message"))
+                    .or_else(|| payload.get("text")),
+            )
                 .map(|text| build_content_event(session_id, text))
         }
         "function_call" => parse_opencode_part_event(
@@ -1003,11 +1160,12 @@ fn parse_opencode_response_item(
                 "output": payload.get("output").cloned().unwrap_or(serde_json::Value::Null)
             }),
         ),
-        "reasoning" => stringify_json_value(
+        "reasoning" => extract_textish_value(
             payload
                 .get("summary")
                 .or_else(|| payload.get("text"))
-                .or_else(|| payload.get("content")),
+                .or_else(|| payload.get("content"))
+                .or_else(|| payload.get("message")),
         )
         .map(|text| build_thinking_cli_event(session_id, text)),
         _ => None,
@@ -1022,18 +1180,19 @@ fn parse_opencode_event_msg(session_id: &str, json: &serde_json::Value) -> Optio
         .unwrap_or("");
 
     match payload_type {
-        "agent_message" => stringify_json_value(
+        "agent_message" => extract_textish_value(
             payload
                 .get("message")
                 .or_else(|| payload.get("content"))
                 .or_else(|| payload.get("text")),
         )
         .map(|text| build_content_event(session_id, text)),
-        "agent_reasoning" => stringify_json_value(
+        "agent_reasoning" => extract_textish_value(
             payload
                 .get("text")
                 .or_else(|| payload.get("content"))
-                .or_else(|| payload.get("summary")),
+                .or_else(|| payload.get("summary"))
+                .or_else(|| payload.get("message")),
         )
         .map(|text| build_thinking_cli_event(session_id, text)),
         "token_count" => {
@@ -1082,35 +1241,35 @@ fn parse_opencode_json_output(
     let event = match event_type {
         // 文本内容增量（流式）/ OpenCode text 事件
         "content_block_delta" | "text_delta" | "delta" | "text" => {
-            let text = json
+            let text = extract_textish_value(
+                json
                 .get("text")
                 .or_else(|| json.pointer("/part/text"))
                 .or_else(|| json.pointer("/delta/text"))
                 .or_else(|| json.pointer("/properties/text"))
-                .and_then(|t| t.as_str())?;
+                .or_else(|| json.pointer("/data/text"))
+                .or_else(|| json.get("content"))
+                .or_else(|| json.pointer("/delta/content")),
+            )?;
             Some(build_content_event(session_id, text.to_string()))
         }
         // thinking / reasoning 内容
         "thinking_delta" | "thinking" | "reasoning" | "reasoning_delta" => {
-            let text = json
+            let text = extract_textish_value(
+                json
                 .get("thinking")
                 .or_else(|| json.pointer("/part/thinking"))
                 .or_else(|| json.pointer("/delta/thinking"))
                 .or_else(|| json.pointer("/data/thinking"))
                 .or_else(|| json.pointer("/part/summary"))
                 .or_else(|| json.pointer("/part/text"))
-                .and_then(|t| t.as_str())
-                .filter(|s| !s.is_empty())
-                .or_else(|| {
-                    json.get("content")
-                        .and_then(|c| c.as_str())
-                        .filter(|s| !s.is_empty())
-                })
-                .or_else(|| {
-                    json.get("text")
-                        .and_then(|t| t.as_str())
-                        .filter(|s| !s.is_empty())
-                })?;
+                .or_else(|| json.pointer("/data/summary"))
+                .or_else(|| json.pointer("/data/text"))
+                .or_else(|| json.get("content"))
+                .or_else(|| json.get("text"))
+                .or_else(|| json.pointer("/payload/content"))
+                .or_else(|| json.pointer("/payload/text")),
+            )?;
             Some(CliStreamEvent {
                 event_type: "thinking".to_string(),
                 session_id: session_id.to_string(),
@@ -1464,17 +1623,18 @@ fn parse_opencode_json_output(
                     })
                 }
                 "reasoning" | "thinking" | "reasoning_content" => {
-                    let text = json
+                    let text = extract_textish_value(
+                        json
                         .get("thinking")
                         .or_else(|| json.pointer("/data/thinking"))
                         .or_else(|| json.get("content"))
                         .or_else(|| json.pointer("/data/content"))
-                        .or_else(|| json.get("text"))
-                        .and_then(|t| t.as_str());
+                        .or_else(|| json.get("text")),
+                    );
                     text.map(|t| CliStreamEvent {
                         event_type: "thinking".to_string(),
                         session_id: session_id.to_string(),
-                        content: Some(t.to_string()),
+                        content: Some(t),
                         tool_name: None,
                         tool_call_id: None,
                         tool_input: None,
@@ -1496,23 +1656,25 @@ fn parse_opencode_json_output(
                 }
                 _ => {
                     // 尝试从 delta/data 中提取文本
-                    let text = json
+                    let text = extract_textish_value(
+                        json
                         .get("text")
                         .or_else(|| json.pointer("/properties/text"))
                         .or_else(|| json.pointer("/delta/text"))
-                        .or_else(|| json.pointer("/data/text"))
-                        .and_then(|t| t.as_str());
+                        .or_else(|| json.pointer("/data/text")),
+                    );
                     if let Some(t) = text {
-                        Some(build_content_event(session_id, t.to_string()))
-                    } else if let Some(reasoning) = json
-                        .get("thinking")
-                        .or_else(|| json.pointer("/data/thinking"))
-                        .and_then(|t| t.as_str())
-                    {
+                        Some(build_content_event(session_id, t))
+                    } else if let Some(reasoning) = extract_textish_value(
+                        json.get("thinking")
+                            .or_else(|| json.pointer("/data/thinking"))
+                            .or_else(|| json.get("content"))
+                            .or_else(|| json.pointer("/data/content")),
+                    ) {
                         Some(CliStreamEvent {
                             event_type: "thinking".to_string(),
                             session_id: session_id.to_string(),
-                            content: Some(reasoning.to_string()),
+                            content: Some(reasoning),
                             tool_name: None,
                             tool_call_id: None,
                             tool_input: None,
