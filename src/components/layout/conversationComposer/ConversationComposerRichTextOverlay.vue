@@ -48,10 +48,10 @@ defineProps<{
   >
     <span class="conversation-composer__ghost-hint-pill">
       <EaIcon
-        name="image-up"
+        name="paperclip"
         :size="11"
       />
-      <span>{{ t('message.ghostHintImages') }}</span>
+      <span>{{ t('message.ghostHintAttachments') }}</span>
     </span>
     <span class="conversation-composer__ghost-hint-pill">
       <EaIcon

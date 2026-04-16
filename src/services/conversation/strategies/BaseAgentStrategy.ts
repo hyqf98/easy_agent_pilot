@@ -11,6 +11,7 @@ import {
   type AgentRuntimeKey
 } from '../runtimeProfiles'
 import { writeFrontendRuntimeLog } from '@/services/runtimeLog/client'
+import { buildNonImageAttachmentPrompt } from '@/utils/attachmentMeta'
 import type {
   AgentStrategy,
   BackendStreamEvent,
@@ -188,11 +189,19 @@ export abstract class BaseAgentStrategy implements AgentStrategy {
   protected toMessageInputs(messages: ConversationContext['messages']): ExecutionRequest['messages'] {
     return messages
       .filter(message => message.role !== 'compression')
-      .map(message => ({
-        role: message.role as 'system' | 'user' | 'assistant',
-        content: message.content,
-        attachments: message.attachments
-      }))
+      .map(message => {
+        const nonImageAttachmentPrompt = buildNonImageAttachmentPrompt(message.attachments ?? [])
+        const normalizedContent = [
+          message.content.trim(),
+          nonImageAttachmentPrompt
+        ].filter(Boolean).join('\n\n')
+
+        return {
+          role: message.role as 'system' | 'user' | 'assistant',
+          content: normalizedContent,
+          attachments: message.attachments
+        }
+      })
   }
 
   protected transformEvent(event: BackendStreamEvent): StreamEvent | null {

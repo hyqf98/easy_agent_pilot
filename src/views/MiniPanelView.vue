@@ -521,6 +521,21 @@ onUnmounted(() => {
   box-shadow: 0 4px 10px rgba(15, 23, 42, 0.04);
 }
 
+:deep(.mini-panel__messages .runtime-notice__summary) {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 5px;
+  padding: 6px 8px;
+}
+
+:deep(.mini-panel__messages .runtime-notice__summary-divider) {
+  display: none;
+}
+
+:deep(.mini-panel__messages .runtime-notice__summary-runtime) {
+  align-items: flex-start;
+  gap: 5px;
+}
+
 :deep(.mini-panel__messages .runtime-notice__header) {
   align-items: center;
   gap: 6px;
@@ -550,6 +565,50 @@ onUnmounted(() => {
   gap: 4px;
   min-width: 0;
   flex: 1 1 auto;
+}
+
+:deep(.mini-panel__messages .runtime-notice__summary-usage),
+:deep(.mini-panel__messages .runtime-notice__usage) {
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 5px;
+  padding: 0;
+}
+
+:deep(.mini-panel__messages .runtime-notice__usage) {
+  padding: 6px 8px;
+}
+
+:deep(.mini-panel__messages .runtime-notice__usage-main) {
+  width: 100%;
+  min-width: 0;
+  gap: 4px;
+}
+
+:deep(.mini-panel__messages .runtime-notice__usage-label) {
+  font-size: 0.5rem;
+}
+
+:deep(.mini-panel__messages .runtime-notice__usage-model) {
+  min-width: 0;
+  font-size: 0.68rem;
+  line-height: 1.2;
+}
+
+:deep(.mini-panel__messages .runtime-notice__usage-stats) {
+  width: 100%;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 4px;
+}
+
+:deep(.mini-panel__messages .runtime-notice__usage-chip) {
+  max-width: 100%;
+  padding: 0.14rem 0.34rem;
+  font-size: 0.56rem;
+  line-height: 1.15;
+  white-space: normal;
 }
 
 :deep(.mini-panel__messages .runtime-notice__chips) {

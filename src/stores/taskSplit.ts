@@ -79,6 +79,7 @@ interface PlanSplitRuntimeMetrics {
 }
 
 const STALE_PLAN_SPLIT_SESSION_TIMEOUT_MS = 2_000
+const PLAN_SPLIT_AUTO_RETRY_DELAY_MS = 10_000
 
 function formatOptionValue(field: DynamicFormSchema['fields'][number], value: unknown): string {
   if (value === undefined || value === null || value === '') return '-'
@@ -262,6 +263,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
   const autoRetryCount = ref(0)
   const autoRetryTimer = ref<ReturnType<typeof setTimeout> | null>(null)
   const autoRetryScheduled = ref(false)
+  const autoRetryNextRunAt = ref<number | null>(null)
 
   const subSplitMode = computed(() => refinementState.value?.mode === 'task_resplit')
   const subSplitTargetIndex = computed(() => refinementState.value?.targetIndex ?? null)
@@ -303,6 +305,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     recordedUsageSessionIds.value = new Set()
     refinementState.value = null
     autoRetryCount.value = 0
+    autoRetryNextRunAt.value = null
   }
 
   function cancelAutoRetry() {
@@ -311,6 +314,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       autoRetryTimer.value = null
     }
     autoRetryScheduled.value = false
+    autoRetryNextRunAt.value = null
   }
 
   function scheduleAutoRetry() {
@@ -320,7 +324,6 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
 
     const settingsStore = useSettingsStore()
     const maxRetries = settingsStore.settings.planSplitMaxRetries ?? 5
-    const intervalMinutes = settingsStore.settings.retryIntervalMinutes ?? 5
 
     if (autoRetryCount.value >= maxRetries) {
       autoRetryScheduled.value = false
@@ -330,19 +333,28 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     autoRetryScheduled.value = true
     autoRetryCount.value += 1
     const retryNumber = autoRetryCount.value
+    const delaySeconds = Math.ceil(PLAN_SPLIT_AUTO_RETRY_DELAY_MS / 1000)
+    autoRetryNextRunAt.value = Date.now() + PLAN_SPLIT_AUTO_RETRY_DELAY_MS
 
     logs.value.push({
       id: `auto-retry-${retryNumber}-${Date.now()}`,
       planId: context.value.planId,
       sessionId: session.value.executionSessionId || '',
       type: 'system',
-      content: `自动重试中... 第 ${retryNumber}/${maxRetries} 次，${intervalMinutes} 分钟后重试`,
-      metadata: JSON.stringify({ retryCount: retryNumber, maxRetries, intervalMinutes }),
+      content: `自动重试准备中... 第 ${retryNumber}/${maxRetries} 次，${delaySeconds} 秒后重试`,
+      metadata: JSON.stringify({
+        retryCount: retryNumber,
+        maxRetries,
+        delaySeconds,
+        nextRunAt: autoRetryNextRunAt.value
+      }),
       createdAt: new Date().toISOString()
     })
 
     autoRetryTimer.value = setTimeout(async () => {
       autoRetryScheduled.value = false
+      autoRetryTimer.value = null
+      autoRetryNextRunAt.value = null
       if (!context.value || !session.value || session.value.status !== 'failed') {
         return
       }
@@ -353,7 +365,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       } catch (error) {
         logger.error('[TaskSplit] Auto-retry failed:', error)
       }
-    }, intervalMinutes * 60 * 1000)
+    }, PLAN_SPLIT_AUTO_RETRY_DELAY_MS)
   }
 
   function applySessionSnapshot(snapshot: PlanSplitSessionRecord | null, preserveLogs: boolean = true) {
@@ -758,20 +770,47 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     snapshot: PlanSplitSessionRecord,
     options?: {
       preserveAutoRetryState?: boolean
+      extraUserPrompt?: string
+      displayContent?: string
     }
   ) {
     if (!context.value) {
       return
     }
 
-    const llmMessages = trimTrailingAssistantMessages(
+    if (!options?.preserveAutoRetryState) {
+      cancelAutoRetry()
+      autoRetryCount.value = 0
+    }
+
+    let llmMessages = trimTrailingAssistantMessages(
       parseJson<MessageInput[]>(snapshot.llmMessagesJson, [])
     )
-    const uiMessages = trimTrailingAssistantMessages(
+    let uiMessages = trimTrailingAssistantMessages(
       toSplitMessages(snapshot.messagesJson)
     )
     if (llmMessages.length === 0) {
       throw new Error('当前会话缺少可重试的上下文。')
+    }
+
+    const extraUserPrompt = options?.extraUserPrompt?.trim()
+    if (extraUserPrompt) {
+      llmMessages = [
+        ...llmMessages,
+        {
+          role: 'user',
+          content: extraUserPrompt
+        }
+      ]
+      uiMessages = [
+        ...uiMessages,
+        {
+          id: crypto.randomUUID(),
+          role: 'user',
+          content: options?.displayContent?.trim() || extraUserPrompt,
+          timestamp: new Date().toISOString()
+        }
+      ]
     }
 
     const latestExecutionSessionId = snapshot.executionSessionId?.trim() || null
@@ -811,6 +850,25 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     }
 
     await restartFromPersistedContext(session.value)
+  }
+
+  /**
+   * 在保留上一轮上下文的前提下追加一条用户纠偏指令，并继续当前拆分会话。
+   */
+  async function continueSessionWithInstruction(text: string) {
+    if (!session.value || session.value.status !== 'stopped') {
+      return
+    }
+
+    const normalizedText = text.trim()
+    if (!normalizedText) {
+      return
+    }
+
+    await restartFromPersistedContext(session.value, {
+      extraUserPrompt: normalizedText,
+      displayContent: normalizedText
+    })
   }
 
   async function stop() {
@@ -1117,9 +1175,11 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     submitFormResponse,
     retry,
     continueSession,
+    continueSessionWithInstruction,
     stop,
     autoRetryCount,
     autoRetryScheduled,
+    autoRetryNextRunAt,
     cancelAutoRetry,
     updateSplitTask,
     removeSplitTask,

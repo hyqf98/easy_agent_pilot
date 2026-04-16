@@ -653,6 +653,12 @@
   gap: 8px;
 }
 
+.conversation-composer__memory-assist {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
 .conversation-composer__memory-tray-label,
 .conversation-composer__memory-group-title,
 .conversation-composer__memory-eyebrow {
@@ -702,6 +708,7 @@
 }
 
 .conversation-composer__memory-panel {
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: clamp(10px, 1.2vw, 12px);
@@ -718,9 +725,11 @@
   position: absolute;
   left: 0;
   right: 0;
+  width: 100%;
+  max-width: 100%;
   bottom: calc(100% + 10px);
   z-index: 4;
-  max-height: min(48vh, 520px);
+  max-height: min(48vh, calc(100dvh - 220px));
   overflow: hidden;
   backdrop-filter: blur(12px);
 }
@@ -861,18 +870,25 @@
 }
 
 .conversation-composer__memory-list {
+  box-sizing: border-box;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: clamp(8px, 1vw, 10px);
-  max-height: clamp(140px, 26vh, 268px);
+  width: 100%;
+  max-width: 100%;
+  max-height: min(30vh, calc(100dvh - 360px));
   overflow-y: auto;
-  padding-right: 4px;
+  padding-right: 2px;
   scrollbar-gutter: stable;
 }
 
 .conversation-composer__memory-card {
+  box-sizing: border-box;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  width: 100%;
+  min-width: 0;
   gap: clamp(10px, 1.3vw, 14px);
   padding: clamp(10px, 1.4vw, 14px);
   border-radius: clamp(12px, 1.8vw, 16px);
@@ -1039,7 +1055,7 @@
 
   .conversation-composer__memory-panel--floating {
     bottom: calc(100% + 8px);
-    max-height: min(42vh, 420px);
+    max-height: min(42vh, calc(100dvh - 180px));
   }
 
   .conversation-composer--main .conversation-composer__render,

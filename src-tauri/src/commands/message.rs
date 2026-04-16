@@ -7,7 +7,8 @@ use uuid::Uuid;
 
 use super::support::{now_rfc3339, open_db_connection};
 
-const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_INLINE_IMAGE_PREVIEW_BYTES: usize = 8 * 1024 * 1024;
+const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
 const SESSION_UPLOADS_DIR: &str = "session-uploads";
 
 /// 工具调用数据结构
@@ -236,7 +237,7 @@ fn sanitize_file_name(name: &str) -> String {
         .to_string();
 
     if sanitized.is_empty() {
-        "image".to_string()
+        "attachment".to_string()
     } else {
         sanitized
     }
@@ -614,6 +615,8 @@ pub fn clear_session_messages(session_id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// 上传当前会话的附件到本地持久化目录。
+/// 支持图片、视频和普通文件；图片会在安全大小内生成内联预览。
 #[tauri::command]
 pub fn upload_session_images(
     session_id: String,
@@ -631,17 +634,13 @@ pub fn upload_session_images(
     let mut attachments = Vec::with_capacity(files.len());
 
     for file in files {
-        if !file.mime_type.starts_with("image/") {
-            return Err(format!("不支持的文件类型: {}", file.mime_type));
-        }
-
         if file.bytes.is_empty() {
-            return Err("图片内容为空".to_string());
+            return Err("附件内容为空".to_string());
         }
 
-        if file.bytes.len() > MAX_IMAGE_BYTES {
+        if file.bytes.len() > MAX_ATTACHMENT_BYTES {
             return Err(format!(
-                "图片超过大小限制: {}",
+                "附件超过大小限制: {}",
                 file.file_name.unwrap_or_default()
             ));
         }
@@ -657,7 +656,13 @@ pub fn upload_session_images(
         fs::write(&file_path, &file.bytes).map_err(|e| e.to_string())?;
 
         let mime_type = file.mime_type;
-        let preview_url = build_image_preview_data_url(&file.bytes, &mime_type);
+        let preview_url = if mime_type.starts_with("image/")
+            && file.bytes.len() <= MAX_INLINE_IMAGE_PREVIEW_BYTES
+        {
+            Some(build_image_preview_data_url(&file.bytes, &mime_type))
+        } else {
+            None
+        };
 
         attachments.push(MessageAttachment {
             id: attachment_id,
@@ -665,13 +670,15 @@ pub fn upload_session_images(
             path: file_path.to_string_lossy().to_string(),
             mime_type,
             size: file.bytes.len(),
-            preview_url: Some(preview_url),
+            preview_url,
         });
     }
 
     Ok(UploadSessionImagesResponse { attachments })
 }
 
+/// 根据上传附件路径解析图片预览。
+/// 仅允许读取当前应用会话上传目录中的图片文件。
 #[tauri::command]
 pub fn resolve_uploaded_image_preview(
     path: String,
@@ -686,10 +693,15 @@ pub fn resolve_uploaded_image_preview(
     let resolved_mime_type = mime_type
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| mime_type_from_path(&file_path).to_string());
+    if !resolved_mime_type.starts_with("image/") {
+        return Err("当前附件不支持图片预览".to_string());
+    }
 
     Ok(build_image_preview_data_url(&bytes, &resolved_mime_type))
 }
 
+/// 删除当前会话已上传的附件文件。
+/// 仅允许删除当前会话上传目录下的文件，避免跨目录误删。
 #[tauri::command]
 pub fn delete_uploaded_image(session_id: String, path: String) -> Result<(), String> {
     let file_path = ensure_session_upload_path(&session_id, &path)?;

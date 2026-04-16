@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
@@ -6,6 +7,7 @@ use async_trait::async_trait;
 use tauri::AppHandle;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::time::sleep;
+use uuid::Uuid;
 
 use super::cli_common::{
     build_content_event, build_error_event, build_execution_summary, build_system_event,
@@ -22,6 +24,38 @@ use crate::commands::conversation::types::{CliStreamEvent, ExecutionRequest, Mcp
 use crate::commands::mcp_shared::parse_args_string;
 
 pub struct OpenCodeCliStrategy;
+
+struct TempPromptFile {
+    path: PathBuf,
+}
+
+impl TempPromptFile {
+    async fn create(prompt: &str) -> Result<Self> {
+        let path = std::env::temp_dir().join(format!("opencode-prompt-{}.md", Uuid::new_v4()));
+        tokio::fs::write(&path, prompt).await?;
+        Ok(Self { path })
+    }
+
+    fn to_path_string(&self) -> String {
+        self.path.to_string_lossy().to_string()
+    }
+}
+
+impl Drop for TempPromptFile {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_file(&self.path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                let message = format!(
+                    "清理 OpenCode 临时提示文件失败: {} ({})",
+                    self.path.display(),
+                    error
+                );
+                crate::logging::write_log("ERROR", "opencode-cli", &message);
+                eprintln!("[ERROR][opencode-cli] {}", message);
+            }
+        }
+    }
+}
 
 macro_rules! log_info {
     ($($arg:tt)*) => {
@@ -98,6 +132,33 @@ fn should_treat_process_failure_as_success(
     (stdout_outcome.emitted_content || stdout_outcome.emitted_non_error_event)
         && !stdout_outcome.emitted_error
         && !stderr_outcome.emitted_error
+}
+
+fn should_use_prompt_file(_request: &ExecutionRequest, input_text: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        return matches!(
+            _request.execution_mode.as_deref(),
+            Some("task_split" | "task_execution" | "solo_execution")
+        ) || input_text.chars().count() > 4_000;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        input_text.chars().count() > 12_000
+    }
+}
+
+fn build_prompt_file_instruction(execution_mode: Option<&str>) -> &'static str {
+    match execution_mode {
+        Some("task_split") => {
+            "Read the attached prompt file first and follow it exactly. Return the final result in the requested structured format."
+        }
+        Some("task_execution") | Some("solo_execution") => {
+            "Read the attached prompt file first and follow it exactly. Use the attached files when needed."
+        }
+        _ => "Read the attached prompt file first and follow it exactly.",
+    }
 }
 
 fn build_opencode_mcp_config_env(servers: &[McpServerConfig]) -> String {
@@ -236,6 +297,8 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
             .map(render_cli_message)
             .collect::<Vec<_>>()
             .join("\n\n");
+        let use_prompt_file = should_use_prompt_file(&request, &input_text);
+        let mut prompt_file: Option<TempPromptFile> = None;
 
         let mut args = vec!["run".to_string()];
         args.push("--format".to_string());
@@ -263,6 +326,16 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
         }
 
         let image_paths = extract_image_paths(&messages);
+        if use_prompt_file {
+            let temp_file = TempPromptFile::create(&input_text).await?;
+            let prompt_file_path = temp_file.to_path_string();
+            log_info!("OpenCode CLI 使用临时提示文件承载输入: {}", prompt_file_path);
+            args.push("-f".to_string());
+            args.push(prompt_file_path);
+            args.push(build_prompt_file_instruction(request.execution_mode.as_deref()).to_string());
+            prompt_file = Some(temp_file);
+        }
+
         if !image_paths.is_empty() {
             for path in &image_paths {
                 args.push("-f".to_string());
@@ -284,8 +357,13 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
             log_info!("设置工作目录: {}", work_dir);
         }
 
-        cmd.stdin(Stdio::piped())
-            .stdout(Stdio::piped())
+        if use_prompt_file {
+            cmd.stdin(Stdio::null());
+        } else {
+            cmd.stdin(Stdio::piped());
+        }
+
+        cmd.stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
         if let Some(servers) = &mcp_servers {
@@ -299,7 +377,15 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
             }
         }
 
-        let full_command = build_full_opencode_command(&cli_path, &args, &input_text);
+        let full_command = build_full_opencode_command(
+            &cli_path,
+            &args,
+            if use_prompt_file {
+                None
+            } else {
+                Some(input_text.len())
+            },
+        );
         log_info!("OpenCode CLI command: {}", full_command);
 
         let execution_started_at = Instant::now();
@@ -323,7 +409,9 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
             ))
         })?;
 
-        let stdin_write_handle = {
+        let stdin_write_handle = if use_prompt_file {
+            None
+        } else {
             let stdin_payload = input_text.clone();
             let mut stdin = child
                 .stdin
@@ -581,15 +669,22 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
             ));
         }
 
+        drop(prompt_file);
         Ok(())
     }
 }
 
-fn build_full_opencode_command(cli_path: &str, args: &[String], stdin_payload: &str) -> String {
+fn build_full_opencode_command(
+    cli_path: &str,
+    args: &[String],
+    stdin_payload_len: Option<usize>,
+) -> String {
     let mut cmd_parts = Vec::new();
     cmd_parts.push(shell_escape(cli_path));
     cmd_parts.extend(args.iter().map(|arg| shell_escape(arg)));
-    cmd_parts.push(format!("<stdin, {} chars>", stdin_payload.len()));
+    if let Some(stdin_len) = stdin_payload_len {
+        cmd_parts.push(format!("<stdin, {} chars>", stdin_len));
+    }
     cmd_parts.join(" ")
 }
 

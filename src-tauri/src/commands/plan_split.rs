@@ -587,7 +587,7 @@ fn parse_split_output(
             .to_lowercase();
         if output_type == "form_request" {
             let question = as_non_empty_string(record.get("question"))
-                .unwrap_or_else(|| "请先补充以下信息。".to_string());
+                .ok_or_else(|| "form_request 缺少有效 question。".to_string())?;
             let mut forms = record
                 .get("forms")
                 .and_then(|value| value.as_array())
@@ -618,19 +618,11 @@ fn parse_split_output(
             .get("done")
             .and_then(|value| value.as_bool())
             .unwrap_or(false)
-            || as_non_empty_string(
-                record
-                    .get("status")
-                    .or_else(|| record.get("state"))
-                    .or_else(|| record.get("phase")),
-            )
+            || as_non_empty_string(record.get("status"))
             .map(|value| value.to_uppercase() == "DONE")
             .unwrap_or(false);
 
-        if output_type == "task_split"
-            || output_type == "done"
-            || (is_done && record.get("tasks").is_some())
-        {
+        if output_type == "task_split" || (is_done && record.get("tasks").is_some()) {
             if !is_done {
                 return Err("task_split 必须包含 status: DONE。".to_string());
             }
@@ -895,20 +887,14 @@ fn refresh_session_after_turn(
         }
         Err(error_message) => {
             let llm_messages = load_llm_messages_json(session.llm_messages_json.as_ref());
-            let mut messages = load_messages_json(session.messages_json.as_ref());
-            append_ui_message(
-                &mut messages,
-                "assistant",
-                format!("解析失败：{error_message}"),
-            );
-            session.status = "failed".to_string();
+            session.status = "stopped".to_string();
             session.parse_error = Some(error_message.clone());
-            session.error_message = Some(error_message);
-            session.messages_json = Some(serialize_json(&messages)?);
+            session.error_message = None;
             session.llm_messages_json = Some(serialize_json(&llm_messages)?);
             session.form_queue_json = None;
             session.current_form_index = None;
             session.result_json = None;
+            session.stopped_at = session.completed_at.clone();
         }
     }
 

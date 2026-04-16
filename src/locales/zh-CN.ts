@@ -241,6 +241,10 @@ const zhCN = {
     removeImage: '删除图片',
     uploadingImages: '正在上传图片...',
     invalidImageFile: '仅支持图片文件',
+    selectAttachments: '文件',
+    removeAttachment: '删除附件',
+    uploadingAttachments: '正在上传文件...',
+    invalidAttachmentFile: '未选择可用文件',
     shortcutEnter: '回车',
     shortcutModifierEnter: 'Ctrl/Cmd + 回车',
     sending: '发送中...',
@@ -253,8 +257,9 @@ const zhCN = {
     retry: '重试',
     loadingMore: '加载更多历史消息...',
     scrollUpLoadMore: '向上滚动加载更多消息',
-    composerHint: "支持图片、{'@'}文件、/命令",
+    composerHint: "支持附件、{'@'}文件、/命令",
     dropImages: '拖拽图片到这里上传',
+    dropAttachments: '拖拽文件到这里引用',
     clearMessages: '清空消息',
     clearMessagesConfirm: '确定清空当前会话的全部消息吗？此操作无法撤销。',
     clearMessagesSuccess: '消息已清空',
@@ -277,10 +282,12 @@ const zhCN = {
     memoryDismiss: '忽略',
     memorySourceLibrary: '记忆库',
     memorySourceRaw: '原始记忆',
+    ghostHintAttachments: '附件',
     ghostHintImages: '图片',
     ghostHintFiles: "{'@'} 引用文件",
     ghostHintSend: '{shortcut} 发送',
     queueImages: '{count} 张图片',
+    queueAttachments: '{count} 个附件',
     slash: {
       title: '斜杠命令',
       hint: '输入命令，或继续输入以筛选',
@@ -1713,7 +1720,10 @@ const zhCN = {
 5. select、radio、multiselect 必须提供 options，格式为 [{"label":"显示名","value":"实际值"}]。
 6. 只有在确实需要用户补充信息才能继续时，才输出 form_request；其余场景正常回答。
 7. 如果用户发送 {"type":"form_response","formId":"...","values":{...}}，把它视为表单回答并继续处理，不要要求用户改写格式。
-8. 输出 form_request 时，JSON 前后不要再附加解释、标题、列表或其他文本。`
+8. 输出 form_request 时，JSON 前后不要再附加解释、标题、列表或其他文本。
+9. 顶层键名只能使用 type、question、forms；禁止输出 action、reason、data、payload 等替代键名。
+10. forms 必须是表单 schema 数组，每一项都要包含 formId、title、fields；禁止把字段数组直接放进 forms。
+11. 输出前先自行检查该字符串可以被 JSON.parse 直接解析，且不要使用单引号、尾逗号或 markdown 代码围栏。`
     },
     plan: {
       splitSystem: `你是项目规划助手，目标是把需求拆成可执行任务。
@@ -1733,7 +1743,10 @@ const zhCN = {
 12. 如果任务涉及前端，description 或 implementationSteps 中要写清楚页面/组件/状态管理/接口联动；如果涉及后端，要写清楚接口、服务、存储、调度、权限、事务或异常处理；如果跨端，要写清楚前后端协作边界。
 13. testSteps 不能只写“测试功能正常”，必须写清楚如何验证：测试前置条件、操作步骤、输入样例、预期结果，必要时区分手工验证、自动化测试、接口验证、回归验证。
 14. acceptanceCriteria 必须是可观察、可验收、可判定通过/失败的结果标准，优先描述业务结果、界面/接口表现、异常分支和性能/稳定性要求，禁止写成重复 implementationSteps 的过程描述。
-15. 优先输出少而完整的高质量任务，而不是很多个描述空泛的任务；每个任务都应该让执行者在不反复追问的情况下理解“做什么、怎么做、如何测试、何时算完成”。`,
+15. 优先输出少而完整的高质量任务，而不是很多个描述空泛的任务；每个任务都应该让执行者在不反复追问的情况下理解“做什么、怎么做、如何测试、何时算完成”。
+16. 顶层键名必须严格匹配标准结构：form_request 只能使用 type、question、forms；task_split 只能使用 type、status、tasks。禁止使用 action、reason、state、phase、payload、data 等替代键。
+17. forms 必须是 form schema 数组，不能把字段数组直接塞进 forms；每个表单必须包含 formId、title、fields。
+18. 输出前必须自行检查：内容可被 JSON.parse 直接解析、没有 markdown 代码块、没有 JSON 之外的额外文字、没有单引号和尾逗号。`,
       kickoffPlanName: '计划名称',
       kickoffPlanDescription: '计划描述',
       kickoffMinTaskCount: '最少任务数',
@@ -1750,10 +1763,12 @@ const zhCN = {
       directTaskSplitDone: '在保证每个任务都具备清晰的技术实现说明、实现步骤、测试步骤、验收标准的前提下，直接输出 task_split（status=DONE）。',
       formResponse: '表单 {formId} 回答: {valueStr}',
       formResponseContinue: '继续：需要更多信息就输出 form_request；足够则输出 task_split（status=DONE）。',
-      outputCorrection: `输出格式错误，请重新输出：
-- form_request：必须输出 forms 数组（兼容单个 formSchema 但优先 forms）
-- task_split：必须含 status:DONE，tasks >= {minTaskCount}
-- 禁止 markdown 代码块和额外文字`,
+      outputCorrection: `输出格式错误，请重新输出标准 JSON：
+- form_request：只能使用 type、question、forms，且 forms 必须是表单 schema 数组
+- task_split：只能使用 type、status、tasks，且必须包含 status:DONE，tasks >= {minTaskCount}
+- 禁止 action、reason、state、phase、payload、data 等替代键
+- 禁止 markdown 代码块、额外文字、单引号、尾逗号
+- 重新输出前先确认整段内容可以被 JSON.parse 直接解析`,
       dependsOnDescription: '依赖的任务标题列表（必须先完成的任务）'
     },
     taskExecution: {
@@ -1830,6 +1845,8 @@ const zhCN = {
     waitingResplitResult: '等待拆分结果',
     retryLabel: '重试',
     resendLabel: '重新发送',
+    autoRetryButtonPending: '{seconds}s 后自动重试',
+    autoRetryHint: '已安排自动重试，将在 {seconds} 秒后再次执行；也可以手动立即重试。',
     // 再拆分状态
     resplitInProgress: '正在拆分：{title}',
     resplitInProgressHint: '正在拆分：{title}，请稍候...',

@@ -145,15 +145,15 @@
 
 .conversation-input-area {
   flex-shrink: 0;
-  padding: var(--spacing-2, 0.5rem) var(--spacing-3, 0.75rem);
+  padding: 0.75rem 0.9rem 0.9rem;
   background: var(--color-bg-primary);
 }
 
 .pane-input-bar {
   display: flex;
   align-items: flex-end;
-  padding: 0.625rem 0.875rem;
-  border-radius: 0.625rem;
+  padding: 0.85rem 1rem;
+  border-radius: 0.85rem;
   background: var(--color-bg-primary);
   border: 1px solid var(--color-border);
   box-shadow: none;
@@ -519,14 +519,14 @@
 
 .instruction-input {
   width: 100%;
-  min-height: 2rem;
-  max-height: 6rem;
+  min-height: 3.25rem;
+  max-height: 10rem;
   padding: 0;
   border: none;
   background: transparent;
   color: var(--color-text-primary, #1e293b);
   font-size: var(--font-size-sm, 13px);
-  line-height: 1.5;
+  line-height: 1.6;
   resize: none;
   outline: none;
   box-shadow: none;
@@ -563,9 +563,33 @@
 }
 
 .btn-retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
   border-color: rgba(14, 165, 233, 0.36);
   color: #0369a1;
   background: linear-gradient(180deg, #ffffff, #eff8ff);
+}
+
+.btn-retry--pending {
+  position: relative;
+  border-color: rgba(14, 165, 233, 0.54);
+  color: #075985;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(224, 242, 254, 0.98)),
+    linear-gradient(120deg, rgba(14, 165, 233, 0.18), rgba(59, 130, 246, 0.08));
+  box-shadow: 0 0 0 1px rgba(14, 165, 233, 0.1), 0 10px 24px rgba(14, 165, 233, 0.18);
+  animation: retry-wait-breathe 1.8s ease-in-out infinite;
+}
+
+.btn-retry__pulse {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 999px;
+  background: radial-gradient(circle, #38bdf8 0%, #0ea5e9 70%, rgba(14, 165, 233, 0.16) 100%);
+  box-shadow: 0 0 0 rgba(14, 165, 233, 0.45);
+  animation: retry-pulse-ring 1.4s ease-out infinite;
+  flex: 0 0 auto;
 }
 
 .btn-continue {
@@ -655,6 +679,39 @@
 .btn-secondary:hover {
   background: linear-gradient(180deg, var(--color-surface, #ffffff), var(--color-bg-secondary, #f5f9ff));
   border-color: rgba(99, 102, 241, 0.35);
+}
+
+@keyframes retry-pulse-ring {
+  0% {
+    transform: scale(0.92);
+    box-shadow: 0 0 0 0 rgba(14, 165, 233, 0.38);
+    opacity: 0.92;
+  }
+
+  70% {
+    transform: scale(1.08);
+    box-shadow: 0 0 0 12px rgba(14, 165, 233, 0);
+    opacity: 1;
+  }
+
+  100% {
+    transform: scale(0.96);
+    box-shadow: 0 0 0 0 rgba(14, 165, 233, 0);
+    opacity: 0.88;
+  }
+}
+
+@keyframes retry-wait-breathe {
+  0%,
+  100% {
+    transform: translateY(0);
+    box-shadow: 0 0 0 1px rgba(14, 165, 233, 0.1), 0 10px 24px rgba(14, 165, 233, 0.18);
+  }
+
+  50% {
+    transform: translateY(-1px);
+    box-shadow: 0 0 0 1px rgba(14, 165, 233, 0.16), 0 14px 28px rgba(14, 165, 233, 0.24);
+  }
 }
 
 .btn-danger {
@@ -828,7 +885,7 @@
   }
 
   .conversation-input-area {
-    padding: var(--spacing-2, 0.5rem);
+    padding: 0.65rem 0.7rem 0.8rem;
   }
 
   .footer-bar {

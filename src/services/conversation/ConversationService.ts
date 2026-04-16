@@ -14,6 +14,7 @@ import { buildConversationMessages } from './buildConversationMessages'
 import { loadMountedMemoryPrompt } from '@/services/memory/mountedMemoryPrompt'
 import type { FileEditTrace } from '@/types/fileTrace'
 import { FileTraceCollector } from './fileTraceCollector'
+import i18n from '@/i18n'
 import {
   buildImageAttachmentFallbackPrompt as buildImageAttachmentFallbackSystemPrompt,
   buildMainConversationFormRequestPrompt
@@ -42,6 +43,10 @@ import {
   resolveRuntimeBindingKey,
   upsertSessionRuntimeBinding
 } from './runtimeBindings'
+import {
+  normalizeRuntimeUsage,
+  type UsageBaseline
+} from '@/utils/runtimeUsage'
 
 interface StreamTimingMetrics {
   startedAt: number
@@ -121,10 +126,12 @@ function estimateConversationInputTokens(messages: Message[]): number {
 export class ConversationService {
   private static instance: ConversationService | null = null
   private readonly queueDrainLocks = new Set<string>()
+  private readonly activeSendSessions = new Set<string>()
   private readonly dedupedInjectedSystemPrompts = new Map<string, Set<string>>()
   private readonly cliRuntimeKeys = ['claude-cli', 'codex-cli', 'opencode-cli'] as const
   private readonly conversationRetryCount = new Map<string, number>()
   private readonly conversationRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly usageBaselines = new Map<string, UsageBaseline>()
 
   private constructor() {}
 
@@ -206,12 +213,17 @@ export class ConversationService {
       ? { ...storedAgent, modelId: modelIdOverride }
       : storedAgent
 
+    if (this.activeSendSessions.has(sessionId) || sessionExecutionStore.getIsSending(sessionId)) {
+      throw new Error('当前会话正在处理中，请等待当前消息完成后再发送')
+    }
+
     // 检查策略支持
     if (!agentExecutor.isSupported(agent)) {
       throw new Error(`不支持的智能体类型: ${agent.type}`)
     }
 
     // 开始发送状态
+    this.activeSendSessions.add(sessionId)
     sessionExecutionStore.startSending(sessionId)
     this.clearConversationRetryState(sessionId)
 
@@ -461,6 +473,7 @@ export class ConversationService {
 
   private finalizeSend(sessionId: string) {
     const sessionExecutionStore = useSessionExecutionStore()
+    this.activeSendSessions.delete(sessionId)
     sessionExecutionStore.endSending(sessionId)
     void this.processQueuedMessages(sessionId)
   }
@@ -556,11 +569,11 @@ export class ConversationService {
     }
 
     if (attachments.length === 1) {
-      return `[图片] ${attachments[0].name}`
+      return attachments[0].name.trim()
     }
 
     if (attachments.length > 1) {
-      return `[${attachments.length} 张图片]`
+      return i18n.global.t('message.queueAttachments', { count: attachments.length }) as string
     }
 
     return ''
@@ -737,6 +750,11 @@ export class ConversationService {
     const resolvedProjectId = projectId
       ?? sessionStore.sessions.find(session => session.id === sessionId)?.projectId
       ?? null
+    const runtimeProvider = inferAgentProvider(context.agent) ?? context.agent.provider ?? context.agent.type
+
+    if (!context.resumeSessionId || runtimeProvider !== 'codex') {
+      this.usageBaselines.delete(sessionId)
+    }
 
     let accumulatedContent = ''
     let accumulatedThinking = ''
@@ -1078,6 +1096,7 @@ export class ConversationService {
         this.handleStreamEvent(event, {
           aiMessage,
           sessionId,
+          runtimeProvider,
           requestedModelId: context.agent.modelId?.trim() || undefined,
           toolCalls,
           onContent: (content) => {
@@ -1462,6 +1481,7 @@ export class ConversationService {
     handlers: {
       aiMessage: Message
       sessionId: string
+      runtimeProvider?: string
       requestedModelId?: string
       toolCalls: ToolCall[]
       onContent: (content: string) => void
@@ -1479,31 +1499,48 @@ export class ConversationService {
   ): void {
     const { onContent, onThinking, onThinkingStart, onToolUse, onToolInputDelta, onToolResult, onFileEdit, onUsage, onSystem, onError, onDone } = handlers
     const tokenStore = useTokenStore()
+    const normalizedUsage = normalizeRuntimeUsage({
+      provider: handlers.runtimeProvider,
+      inputTokens: event.inputTokens,
+      outputTokens: event.outputTokens,
+      baseline: this.usageBaselines.get(handlers.sessionId) ?? null
+    })
+    const normalizedEvent: StreamEvent = {
+      ...event,
+      inputTokens: normalizedUsage.inputTokens,
+      outputTokens: normalizedUsage.outputTokens
+    }
+
+    if (normalizedUsage.nextBaseline) {
+      this.usageBaselines.set(handlers.sessionId, normalizedUsage.nextBaseline)
+    } else {
+      this.usageBaselines.delete(handlers.sessionId)
+    }
 
     // 处理 token 事件 - 优先使用 CLI 返回的真实 token 数据
-    if (event.inputTokens !== undefined || event.outputTokens !== undefined) {
+    if (normalizedEvent.inputTokens !== undefined || normalizedEvent.outputTokens !== undefined) {
       tokenStore.updateRealtimeTokens(
         handlers.sessionId,
-        event.inputTokens,
-        event.outputTokens,
+        normalizedEvent.inputTokens,
+        normalizedEvent.outputTokens,
         resolveRequestedUsageModel({
           requestedModelId: handlers.requestedModelId,
-          reportedModelId: event.model
+          reportedModelId: normalizedEvent.model
         })
       )
     }
 
-    switch (event.type) {
+    switch (normalizedEvent.type) {
       case 'content':
-        if (event.content) {
-          onContent(event.content)
+        if (normalizedEvent.content) {
+          onContent(normalizedEvent.content)
         }
         break
 
       case 'thinking':
         // 处理思考内容
-        if (event.content) {
-          onThinking(event.content)
+        if (normalizedEvent.content) {
+          onThinking(normalizedEvent.content)
         }
         break
 
@@ -1512,13 +1549,13 @@ export class ConversationService {
         break
 
       case 'tool_use':
-        if (event.toolName) {
+        if (normalizedEvent.toolName) {
           // 如果 toolCallId 为空，生成一个唯一的备用 ID
-          const toolCallId = event.toolCallId || `tool-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+          const toolCallId = normalizedEvent.toolCallId || `tool-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
           const toolCall: ToolCall = {
             id: toolCallId,
-            name: event.toolName,
-            arguments: event.toolInput || {},
+            name: normalizedEvent.toolName,
+            arguments: normalizedEvent.toolInput || {},
             status: 'running'
           }
           onToolUse(toolCall)
@@ -1528,51 +1565,51 @@ export class ConversationService {
         break
 
       case 'tool_input_delta':
-        onToolInputDelta(event.toolCallId, event.toolInput)
+        onToolInputDelta(normalizedEvent.toolCallId, normalizedEvent.toolInput)
         break
 
       case 'tool_result':
-        if (event.toolCallId) {
-          const result = typeof event.toolResult === 'string'
-            ? event.toolResult
-            : JSON.stringify(event.toolResult, null, 2)
-          onToolResult(event.toolCallId, result, false)
+        if (normalizedEvent.toolCallId) {
+          const result = typeof normalizedEvent.toolResult === 'string'
+            ? normalizedEvent.toolResult
+            : JSON.stringify(normalizedEvent.toolResult, null, 2)
+          onToolResult(normalizedEvent.toolCallId, result, false)
         } else {
           console.warn('[ConversationService] tool_result 事件缺少 toolCallId，尝试匹配最后一个工具调用')
           // 如果没有 toolCallId，尝试更新最后一个 running 状态的工具调用
           const lastRunningTool = handlers.toolCalls.find(tc => tc.status === 'running')
-          if (lastRunningTool && event.toolResult) {
-            const result = typeof event.toolResult === 'string'
-              ? event.toolResult
-              : JSON.stringify(event.toolResult, null, 2)
+          if (lastRunningTool && normalizedEvent.toolResult) {
+            const result = typeof normalizedEvent.toolResult === 'string'
+              ? normalizedEvent.toolResult
+              : JSON.stringify(normalizedEvent.toolResult, null, 2)
             onToolResult(lastRunningTool.id, result, false)
           }
         }
         break
 
       case 'error':
-        if (event.error) {
-          onError(event.error)
+        if (normalizedEvent.error) {
+          onError(normalizedEvent.error)
         }
         break
 
       case 'usage':
         onUsage({
-          model: event.model,
-          inputTokens: event.inputTokens,
-          outputTokens: event.outputTokens
+          model: normalizedEvent.model,
+          inputTokens: normalizedEvent.inputTokens,
+          outputTokens: normalizedEvent.outputTokens
         })
         break
 
       case 'system':
-        if (event.content) {
-          onSystem(event.content)
+        if (normalizedEvent.content) {
+          onSystem(normalizedEvent.content)
         }
         break
 
       case 'file_edit':
-        if (event.fileEdit) {
-          onFileEdit(event.fileEdit)
+        if (normalizedEvent.fileEdit) {
+          onFileEdit(normalizedEvent.fileEdit)
         }
         break
 

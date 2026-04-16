@@ -872,6 +872,47 @@ fn build_command_execution_tool_result_event(
     })
 }
 
+fn build_todo_list_tool_use_event(
+    session_id: &str,
+    item: &serde_json::Value,
+) -> Option<CliStreamEvent> {
+    let tool_call_id = item.get("id").and_then(|value| value.as_str())?;
+    let items = item.get("items")?.as_array()?;
+    let normalized_items = items
+        .iter()
+        .filter_map(|entry| {
+            let text = entry.get("text").and_then(|value| value.as_str())?;
+            let completed = entry
+                .get("completed")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+
+            Some(serde_json::json!({
+                "text": text,
+                "completed": completed,
+                "status": if completed { "completed" } else { "pending" }
+            }))
+        })
+        .collect::<Vec<_>>();
+
+    let tool_input = serde_json::json!({ "items": normalized_items }).to_string();
+
+    Some(CliStreamEvent {
+        event_type: "tool_use".to_string(),
+        session_id: session_id.to_string(),
+        content: None,
+        tool_name: Some("todo_list".to_string()),
+        tool_call_id: Some(tool_call_id.to_string()),
+        tool_input: Some(tool_input),
+        tool_result: None,
+        error: None,
+        input_tokens: None,
+        output_tokens: None,
+        model: None,
+        external_session_id: None,
+    })
+}
+
 fn build_full_codex_command(cli_path: &str, global_args: &[String], args: &[String]) -> String {
     let mut cmd_parts = Vec::new();
     cmd_parts.push(shell_escape(cli_path));
@@ -912,6 +953,7 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
 
             match item_type {
                 "command_execution" => build_command_execution_tool_use_event(session_id, item),
+                "todo_list" => build_todo_list_tool_use_event(session_id, item),
                 "reasoning" | "thinking" => Some(build_thinking_start_event(session_id)),
                 _ => None,
             }
@@ -925,11 +967,21 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                     let text = extract_item_text(item)?;
                     Some(build_content_event(session_id, text))
                 }
+                "todo_list" => build_todo_list_tool_use_event(session_id, item),
                 "reasoning" | "thinking" => {
                     let text = extract_item_text(item)?;
                     Some(build_thinking_event(session_id, text))
                 }
                 "command_execution" => build_command_execution_tool_result_event(session_id, item),
+                _ => None,
+            }
+        }
+        "item.updated" => {
+            let item = json.get("item")?;
+            let item_type = item.get("type").and_then(|value| value.as_str())?;
+
+            match item_type {
+                "todo_list" => build_todo_list_tool_use_event(session_id, item),
                 _ => None,
             }
         }

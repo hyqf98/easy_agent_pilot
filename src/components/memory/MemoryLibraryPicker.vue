@@ -138,6 +138,11 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 0.75rem;
+  max-height: 14rem;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+  align-content: start;
+  scrollbar-gutter: stable;
 }
 
 .memory-library-picker__option {

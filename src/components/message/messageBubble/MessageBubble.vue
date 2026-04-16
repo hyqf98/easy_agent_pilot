@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ImageHoverPreview } from '@/components/common'
+import AttachmentThumbnail from '@/components/common/AttachmentThumbnail.vue'
 import StructuredContentRenderer from '../StructuredContentRenderer.vue'
 import ToolCallDisplay from '../ToolCallDisplay.vue'
 import ThinkingDisplay from '../ThinkingDisplay.vue'
@@ -35,7 +35,6 @@ const messageAttachmentImageStyle = {
 const {
   t,
   EaIcon,
-  messageAttachmentPreviews,
   areToolCallsExpanded,
   isUser,
   isAssistant,
@@ -159,19 +158,17 @@ const {
           </template>
         </div>
         <div
-          v-if="isUser && messageAttachmentPreviews.length > 0"
+          v-if="isUser && (message.attachments?.length ?? 0) > 0"
           class="message-bubble__attachments"
         >
-          <ImageHoverPreview
-            v-for="attachment in messageAttachmentPreviews"
+          <AttachmentThumbnail
+            v-for="attachment in message.attachments"
             :key="attachment.id"
-            :src="attachment.previewUrl"
-            :alt="attachment.name"
-            :title="attachment.name"
+            :attachment="attachment"
             wrapper-class="message-bubble__attachment"
-            image-class="message-bubble__attachment-image"
+            media-class="message-bubble__attachment-image"
             :wrapper-style="messageAttachmentWrapperStyle"
-            :image-style="messageAttachmentImageStyle"
+            :media-style="messageAttachmentImageStyle"
             :preview-max-width="460"
             :preview-max-height="520"
           />

@@ -69,6 +69,10 @@ import {
   buildUsageNotice,
   formatRuntimeNoticeAsSystemContent
 } from '@/utils/runtimeNotice'
+import {
+  normalizeRuntimeUsage,
+  type UsageBaseline
+} from '@/utils/runtimeUsage'
 import { recordAgentCliUsageInBackground, resolveRecordedModelId } from '@/services/usage/agentCliUsageRecorder'
 import {
   buildExpertSystemPrompt,
@@ -92,6 +96,7 @@ function finalizeRunningToolCalls(toolCalls: ToolCall[]): void {
 }
 
 const TASK_EXECUTION_STOPPED_ERROR = '__TASK_EXECUTION_STOPPED__'
+const TASK_AUTO_RETRY_DELAY_MS = 10_000
 
 function isMissingRecordError(error: unknown): boolean {
   return /query returned no rows/i.test(getErrorMessage(error))
@@ -133,6 +138,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
 
   // 待持久化的日志缓冲区 (taskId -> PendingLogBuffer)
   const pendingLogBuffers = ref<Map<string, PendingLogBuffer>>(new Map())
+  const usageBaselines = new Map<string, UsageBaseline>()
 
   // ==================== Getters ====================
 
@@ -776,6 +782,10 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
         resumeSessionId: resumableExternalSessionId
       }
 
+      if (!resumableExternalSessionId || agentProvider !== 'codex') {
+        usageBaselines.delete(taskId)
+      }
+
       const contextNotice = buildContextStrategyNotice({
         strategy: resumableExternalSessionId ? 'Task Resume Prompt' : 'Task Execution Prompt',
         runtime: inferAgentProvider(agent)?.toUpperCase() || agent.type,
@@ -832,7 +842,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
             }
           })()
         }
-        handleStreamEvent(taskId, event, agent.modelId)
+        handleStreamEvent(taskId, event, agent.modelId, agentProvider)
       })
 
       if (isTaskStopRequested(taskId, stopRequestedTaskIds.value)) {
@@ -892,7 +902,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
           await addExecutionLog({
             taskId,
             type: 'system',
-            content: `任务执行失败: ${errorMessage}，准备第 ${currentRetryCount + 1} 次重试...`
+            content: `任务执行失败: ${errorMessage}，10 秒后准备第 ${currentRetryCount + 1} 次重试...`
           })
 
           // 更新重试次数
@@ -916,7 +926,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
           // 使用 setTimeout 延迟重试，避免立即重入
           setTimeout(() => {
             void executeTask(planId, taskId)
-          }, 1000)
+          }, TASK_AUTO_RETRY_DELAY_MS)
 
           return
         } else {
@@ -956,19 +966,41 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
 
   /**
    */
-  function handleStreamEvent(taskId: string, event: StreamEvent, requestedModelId?: string | null): void {
+  function handleStreamEvent(
+    taskId: string,
+    event: StreamEvent,
+    requestedModelId?: string | null,
+    runtimeProvider?: string | null
+  ): void {
     const state = executionStates.value.get(taskId)
     if (!state) return
-
-    if (event.inputTokens !== undefined || event.outputTokens !== undefined || event.model) {
-      updateTaskTokenUsage(taskId, event, requestedModelId)
+    const normalizedUsage = normalizeRuntimeUsage({
+      provider: runtimeProvider,
+      inputTokens: event.inputTokens,
+      outputTokens: event.outputTokens,
+      baseline: usageBaselines.get(taskId) ?? null
+    })
+    const normalizedEvent: StreamEvent = {
+      ...event,
+      inputTokens: normalizedUsage.inputTokens,
+      outputTokens: normalizedUsage.outputTokens
     }
 
-    switch (event.type) {
+    if (normalizedUsage.nextBaseline) {
+      usageBaselines.set(taskId, normalizedUsage.nextBaseline)
+    } else {
+      usageBaselines.delete(taskId)
+    }
+
+    if (normalizedEvent.inputTokens !== undefined || normalizedEvent.outputTokens !== undefined || normalizedEvent.model) {
+      updateTaskTokenUsage(taskId, normalizedEvent, requestedModelId)
+    }
+
+    switch (normalizedEvent.type) {
       case 'content':
-        if (event.content) {
-          state.accumulatedContent += event.content
-          addStreamLogToBuffer(taskId, 'content', event.content)
+        if (normalizedEvent.content) {
+          state.accumulatedContent += normalizedEvent.content
+          addStreamLogToBuffer(taskId, 'content', normalizedEvent.content)
         }
         break
 
@@ -981,19 +1013,19 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
         break
 
       case 'thinking':
-        if (event.content) {
-          state.accumulatedThinking += event.content
-          addStreamLogToBuffer(taskId, 'thinking', event.content)
+        if (normalizedEvent.content) {
+          state.accumulatedThinking += normalizedEvent.content
+          addStreamLogToBuffer(taskId, 'thinking', normalizedEvent.content)
         }
         break
 
       case 'tool_use':
-        if (event.toolName) {
-          const toolCallId = event.toolCallId || createFallbackToolCallId(taskId)
+        if (normalizedEvent.toolName) {
+          const toolCallId = normalizedEvent.toolCallId || createFallbackToolCallId(taskId)
           const toolCall: ToolCall = {
             id: toolCallId,
-            name: event.toolName,
-            arguments: event.toolInput || {},
+            name: normalizedEvent.toolName,
+            arguments: normalizedEvent.toolInput || {},
             status: 'running'
           }
 
@@ -1007,37 +1039,37 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
           addExecutionLog({
             taskId,
             type: 'tool_use',
-            content: JSON.stringify(event.toolInput, null, 2),
+            content: JSON.stringify(normalizedEvent.toolInput, null, 2),
             metadata: {
-              toolName: event.toolName,
+              toolName: normalizedEvent.toolName,
               toolCallId,
-              toolInput: JSON.stringify(event.toolInput ?? {})
+              toolInput: JSON.stringify(normalizedEvent.toolInput ?? {})
             }
           })
         }
         break
 
       case 'tool_input_delta': {
-        const targetToolCall = (event.toolCallId
-          ? state.toolCalls.find(tool => tool.id === event.toolCallId)
+        const targetToolCall = (normalizedEvent.toolCallId
+          ? state.toolCalls.find(tool => tool.id === normalizedEvent.toolCallId)
           : null) || [...state.toolCalls].reverse().find(tool => tool.status === 'running')
 
         if (targetToolCall) {
-          targetToolCall.arguments = mergeToolInputArguments(targetToolCall.arguments, event.toolInput)
+          targetToolCall.arguments = mergeToolInputArguments(targetToolCall.arguments, normalizedEvent.toolInput)
         }
 
-        if (event.toolInput) {
+        if (normalizedEvent.toolInput) {
           void addExecutionLog({
             taskId,
             type: 'tool_input_delta',
-            content: typeof event.toolInput.raw === 'string'
-              ? event.toolInput.raw
-              : JSON.stringify(event.toolInput),
+            content: typeof normalizedEvent.toolInput.raw === 'string'
+              ? normalizedEvent.toolInput.raw
+              : JSON.stringify(normalizedEvent.toolInput),
             metadata: {
-              toolCallId: event.toolCallId,
-              toolInput: typeof event.toolInput.raw === 'string'
-                ? event.toolInput.raw
-                : JSON.stringify(event.toolInput)
+              toolCallId: normalizedEvent.toolCallId,
+              toolInput: typeof normalizedEvent.toolInput.raw === 'string'
+                ? normalizedEvent.toolInput.raw
+                : JSON.stringify(normalizedEvent.toolInput)
             }
           })
         }
@@ -1046,16 +1078,16 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
 
       case 'tool_result':
         {
-          const targetToolCall = (event.toolCallId
-            ? state.toolCalls.find(tool => tool.id === event.toolCallId)
+          const targetToolCall = (normalizedEvent.toolCallId
+            ? state.toolCalls.find(tool => tool.id === normalizedEvent.toolCallId)
             : null) || [...state.toolCalls].reverse().find(tool => tool.status === 'running')
-          const resolvedToolCallId = targetToolCall?.id || event.toolCallId
+          const resolvedToolCallId = targetToolCall?.id || normalizedEvent.toolCallId
           if (!resolvedToolCallId) {
             break
           }
-          const result = typeof event.toolResult === 'string'
-            ? event.toolResult
-            : JSON.stringify(event.toolResult, null, 2)
+          const result = typeof normalizedEvent.toolResult === 'string'
+            ? normalizedEvent.toolResult
+            : JSON.stringify(normalizedEvent.toolResult, null, 2)
           const isError = false
 
           const tc = state.toolCalls.find(t => t.id === resolvedToolCallId)
@@ -1081,11 +1113,11 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
         break
 
       case 'error':
-        if (event.error) {
+        if (normalizedEvent.error) {
           addExecutionLog({
             taskId,
             type: 'error',
-            content: event.error
+            content: normalizedEvent.error
           })
         }
         break

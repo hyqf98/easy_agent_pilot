@@ -86,14 +86,6 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
             />
           </div>
 
-          <div class="form-field">
-            <MemoryLibraryPicker
-              :model-value="props.form.memoryLibraryIds"
-              hint="计划挂载的记忆库会作为任务默认上下文。"
-              @update:model-value="updateField('memoryLibraryIds', $event)"
-            />
-          </div>
-
           <template v-if="isDraftEditable(props.plan?.status)">
             <div class="form-field">
               <label>任务拆分模式</label>
@@ -264,6 +256,14 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
               </span>
             </div>
           </div>
+
+          <div class="form-field form-field--memory">
+            <MemoryLibraryPicker
+              :model-value="props.form.memoryLibraryIds"
+              hint="计划挂载的记忆库会作为任务默认上下文。"
+              @update:model-value="updateField('memoryLibraryIds', $event)"
+            />
+          </div>
         </div>
         <div class="dialog-footer">
           <button
@@ -302,7 +302,7 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
 .dialog {
   background-color: var(--color-surface, #fff);
   border-radius: var(--radius-lg, 12px);
-  width: min(100%, 40rem);
+  width: min(100%, 48rem);
   max-height: min(88vh, calc(100vh - 1.5rem));
   display: flex;
   flex-direction: column;
@@ -376,6 +376,13 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(() =>
 
 .form-field {
   margin-bottom: var(--spacing-4, 1rem);
+}
+
+.form-field--memory {
+  margin-top: var(--spacing-2, 0.5rem);
+  margin-bottom: 0;
+  padding-top: var(--spacing-3, 0.75rem);
+  border-top: 1px solid var(--color-border, #e2e8f0);
 }
 
 .form-field label {

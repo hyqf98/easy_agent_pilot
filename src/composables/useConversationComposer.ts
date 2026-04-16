@@ -302,18 +302,16 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     })
   )
 
-  const currentExpertId = computed(() =>
-    currentSession.value?.expertId
-    || agentTeamsStore.builtinGeneralExpert?.id
-    || agentTeamsStore.enabledExperts[0]?.id
-    || null
-  )
+  const currentExpertId = computed(() => {
+    const explicitExpertId = currentSession.value?.expertId?.trim()
+    return explicitExpertId || null
+  })
 
   const currentExpert = computed(() =>
     resolveExpertById(currentExpertId.value, agentTeamsStore.experts)
   )
 
-  const currentAgentId = computed(() => currentExpertId.value)
+  const currentAgentId = computed(() => currentExpertId.value || currentAgent.value?.id || null)
 
   const currentAgent = computed(() => {
     const expertRuntime = resolveExpertRuntime(currentExpert.value, agentStore.agents)
@@ -372,13 +370,10 @@ export function useConversationComposer(options: UseConversationComposerOptions)
   const isUploadingImages = computed(() =>
     currentSessionId.value ? sessionExecutionStore.getIsUploadingImages(currentSessionId.value) : false
   )
-  const hasStreamingAssistantMessage = computed(() =>
-    currentSessionId.value
-      ? messageStore.messagesBySession(currentSessionId.value)
-        .some(message => message.role === 'assistant' && message.status === 'streaming')
-      : false
-  )
-  const isDispatchingMessage = ref(false)
+  const dispatchingSessionId = ref<string | null>(null)
+  const isCurrentSessionDispatching = computed(() => (
+    Boolean(currentSessionId.value) && dispatchingSessionId.value === currentSessionId.value
+  ))
   const currentFileMentions = computed(() =>
     currentSessionId.value ? sessionExecutionStore.getFileMentions(currentSessionId.value) : []
   )
@@ -1551,27 +1546,33 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     scheduleMemorySuggestionSearch(inputText.value)
   }
 
-  const toPendingImage = async (attachment: MessageAttachment): Promise<PendingImageAttachment> => ({
+  const toPendingAttachment = async (attachment: MessageAttachment): Promise<PendingImageAttachment> => ({
     ...attachment,
     previewUrl: await resolveAttachmentPreviewUrl(attachment)
   })
 
-  const uploadImages = async (files: File[]) => {
-    const sessionId = currentSessionId.value
-    if (!sessionId || files.length === 0) {
-      return
+  const buildAttachmentPreview = (attachments: MessageAttachment[]) => {
+    if (attachments.length === 0) {
+      return ''
     }
 
-    const imageFiles = files.filter(file => file.type.startsWith('image/'))
-    if (imageFiles.length === 0) {
-      notificationStore.warning(t('message.invalidImageFile'))
+    if (attachments.length === 1) {
+      return attachments[0].name.trim()
+    }
+
+    return t('message.queueAttachments', { count: attachments.length })
+  }
+
+  const uploadAttachments = async (files: File[]) => {
+    const sessionId = currentSessionId.value
+    if (!sessionId || files.length === 0) {
       return
     }
 
     try {
       sessionExecutionStore.setIsUploadingImages(sessionId, true)
 
-      const payload: UploadImageInput[] = await Promise.all(imageFiles.map(async (file) => ({
+      const payload: UploadImageInput[] = await Promise.all(files.map(async (file) => ({
         fileName: file.name,
         mimeType: file.type || 'application/octet-stream',
         bytes: Array.from(new Uint8Array(await file.arrayBuffer()))
@@ -1582,25 +1583,25 @@ export function useConversationComposer(options: UseConversationComposerOptions)
         files: payload
       })
 
-      const pendingImages = await Promise.all(result.attachments.map(toPendingImage))
+      const pendingImages = await Promise.all(result.attachments.map(toPendingAttachment))
       sessionExecutionStore.appendPendingImages(sessionId, pendingImages)
     } catch (error) {
-      console.error('Failed to upload images:', error)
-      notificationStore.smartError('上传图片', error instanceof Error ? error : new Error(String(error)))
+      console.error('Failed to upload attachments:', error)
+      notificationStore.smartError('上传附件', error instanceof Error ? error : new Error(String(error)))
     } finally {
       sessionExecutionStore.setIsUploadingImages(sessionId, false)
     }
   }
 
-  const openImagePicker = () => {
+  const openAttachmentPicker = () => {
     fileInputRef.value?.click()
   }
 
-  const handleImageFileChange = async (event: Event) => {
+  const handleAttachmentFileChange = async (event: Event) => {
     const target = event.target as HTMLInputElement
     const files = target.files ? Array.from(target.files) : []
     target.value = ''
-    await uploadImages(files)
+    await uploadAttachments(files)
   }
 
   const handlePaste = async (event: ClipboardEvent) => {
@@ -1615,7 +1616,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     }
 
     event.preventDefault()
-    await uploadImages(imageFiles)
+    await uploadAttachments(imageFiles)
   }
 
   const removeImage = async (imageId: string) => {
@@ -1632,8 +1633,8 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       })
       sessionExecutionStore.removePendingImage(sessionId, imageId)
     } catch (error) {
-      console.error('Failed to delete uploaded image:', error)
-      notificationStore.smartError('删除图片', error instanceof Error ? error : new Error(String(error)))
+      console.error('Failed to delete uploaded attachment:', error)
+      notificationStore.smartError('删除附件', error instanceof Error ? error : new Error(String(error)))
     }
   }
 
@@ -1643,7 +1644,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       return
     }
 
-    const pendingImages = await Promise.all(attachments.map(toPendingImage))
+    const pendingImages = await Promise.all(attachments.map(toPendingAttachment))
     sessionExecutionStore.setPendingImages(sessionId, pendingImages)
   }
 
@@ -1653,15 +1654,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       return trimmed
     }
 
-    if (draft.attachments.length === 1) {
-      return `[图片] ${draft.attachments[0].name}`
-    }
-
-    if (draft.attachments.length > 1) {
-      return `[${draft.attachments.length} 张图片]`
-    }
-
-    return ''
+    return buildAttachmentPreview(draft.attachments)
   }
 
   const removeQueuedMessage = (draftId: string) => {
@@ -1880,7 +1873,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       }
     }
 
-    if (isSending.value || hasStreamingAssistantMessage.value || isDispatchingMessage.value) {
+    if (isSending.value || isCurrentSessionDispatching.value) {
       if (!validateCurrentAgentAvailability()) {
         return
       }
@@ -1909,7 +1902,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       return
     }
 
-    isDispatchingMessage.value = true
+    dispatchingSessionId.value = sessionId
 
     try {
       clearComposerDraft(sessionId)
@@ -1928,7 +1921,9 @@ export function useConversationComposer(options: UseConversationComposerOptions)
         focusInput()
       }
     } finally {
-      isDispatchingMessage.value = false
+      if (dispatchingSessionId.value === sessionId) {
+        dispatchingSessionId.value = null
+      }
     }
   }
 
@@ -1940,7 +1935,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
   ) => {
     const sessionId = currentSessionId.value
     const normalizedContent = content.trim()
-    if (!sessionId || isUploadingImages.value || isSending.value || isDispatchingMessage.value) {
+    if (!sessionId || isUploadingImages.value || isSending.value || isCurrentSessionDispatching.value) {
       return false
     }
 
@@ -1957,7 +1952,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       return false
     }
 
-    isDispatchingMessage.value = true
+    dispatchingSessionId.value = sessionId
 
     try {
       const expert = currentExpert.value
@@ -1992,12 +1987,14 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       sessionExecutionStore.endSending(sessionId)
       return false
     } finally {
-      isDispatchingMessage.value = false
+      if (dispatchingSessionId.value === sessionId) {
+        dispatchingSessionId.value = null
+      }
     }
   }
 
   const handleMessageFormSubmit = async (formId: string, values: Record<string, unknown>) => {
-    if (!currentSessionId.value || !currentAgent.value || isSending.value) {
+    if (!currentSessionId.value || !currentAgent.value || isSending.value || isCurrentSessionDispatching.value) {
       return
     }
 
@@ -2136,7 +2133,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     handleCdPathSelect,
     handleConfirmCompress,
     handleFileSelect,
-    handleImageFileChange,
+    handleAttachmentFileChange,
     handleInput,
     handleCompositionEnd,
     handleCompositionStart,
@@ -2166,7 +2163,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     mentionStart,
     messageCount,
     modelDropdownRef,
-    openImagePicker,
+    openAttachmentPicker,
     parsedInputText,
     pendingImages,
     previewMemoryReference,

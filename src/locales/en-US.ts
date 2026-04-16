@@ -327,6 +327,10 @@ export default {
     removeImage: 'Remove image',
     uploadingImages: 'Uploading images...',
     invalidImageFile: 'Only image files are supported',
+    selectAttachments: 'Files',
+    removeAttachment: 'Remove attachment',
+    uploadingAttachments: 'Uploading files...',
+    invalidAttachmentFile: 'No valid files were selected',
     shortcutEnter: 'Enter',
     shortcutModifierEnter: 'Ctrl/Cmd+Enter',
     sending: 'Sending...',
@@ -339,8 +343,9 @@ export default {
     retry: 'Retry',
     loadingMore: 'Loading history...',
     scrollUpLoadMore: 'Scroll up to load more messages',
-    composerHint: "Supports images, {'@'}files, /commands",
+    composerHint: "Supports files, {'@'}files, /commands",
     dropImages: 'Drop images here to upload',
+    dropAttachments: 'Drop files here to reference',
     clearMessages: 'Clear Messages',
     clearMessagesConfirm: 'Are you sure you want to clear all messages in this session? This action cannot be undone.',
     clearMessagesSuccess: 'Messages cleared',
@@ -363,10 +368,12 @@ export default {
     memoryDismiss: 'Dismiss',
     memorySourceLibrary: 'Library',
     memorySourceRaw: 'Raw',
+    ghostHintAttachments: 'Files',
     ghostHintImages: 'Images',
     ghostHintFiles: "{'@'} files",
     ghostHintSend: '{shortcut} to send',
     queueImages: '{count} images',
+    queueAttachments: '{count} files',
     slash: {
       title: 'Slash Commands',
       hint: 'Type a command or keep typing to filter',
@@ -2168,7 +2175,10 @@ When you cannot continue the current task and must collect explicit parameters, 
 5. select, radio, and multiselect must provide options in the format [{"label":"Visible Label","value":"actual_value"}].
 6. Output form_request only when you truly need more user input to continue. Otherwise reply normally.
 7. If the user sends {"type":"form_response","formId":"...","values":{...}}, treat it as the form answer and continue. Do not ask the user to rewrite the format.
-8. When outputting form_request, do not add explanations, headings, lists, or any extra text before or after the JSON.`
+8. When outputting form_request, do not add explanations, headings, lists, or any extra text before or after the JSON.
+9. Top-level keys may only be type, question, and forms. Do not output alias keys such as action, reason, data, or payload.
+10. forms must be an array of form schemas, and every form must contain formId, title, and fields. Do not put a raw field array directly into forms.
+11. Before responding, self-check that the entire string can be parsed by JSON.parse directly, with no single quotes, trailing commas, or markdown fences.`
     },
     plan: {
       splitSystem: `You are a project planning assistant. Your goal is to split requirements into executable tasks.
@@ -2188,7 +2198,10 @@ Rules:
 12. If the task is frontend-related, description or implementationSteps must mention the relevant pages/components/state management/API interactions. If it is backend-related, mention the API/service/storage/scheduler/permission/transaction/error-handling aspects. If it is cross-stack, make the collaboration boundary explicit.
 13. testSteps must not say only "test that it works". They must describe how to verify the task: setup/preconditions, operation steps, sample inputs, and expected results. Distinguish manual verification, automated tests, API checks, and regression checks when relevant.
 14. acceptanceCriteria must be observable and pass/fail oriented. Prefer business outcomes, UI/API behavior, error-path expectations, and performance/stability constraints. Do not repeat implementation steps as acceptance criteria.
-15. Prefer fewer but more complete high-quality tasks over many vague tasks. Each task should let an executor understand what to do, how to do it, how to test it, and when it is considered done without repeated clarification.`,
+15. Prefer fewer but more complete high-quality tasks over many vague tasks. Each task should let an executor understand what to do, how to do it, how to test it, and when it is considered done without repeated clarification.
+16. Top-level keys must strictly follow the canonical structure: form_request may only use type, question, and forms; task_split may only use type, status, and tasks. Do not use alias keys such as action, reason, state, phase, payload, or data.
+17. forms must be an array of form schemas. Do not place a raw field array directly into forms; each form must include formId, title, and fields.
+18. Before responding, self-check that the output can be parsed by JSON.parse directly, contains no markdown code fences, no extra prose outside JSON, and no single quotes or trailing commas.`,
       kickoffPlanName: 'Plan Name',
       kickoffPlanDescription: 'Plan Description',
       kickoffMinTaskCount: 'Minimum Task Count',
@@ -2205,10 +2218,12 @@ Rules:
       directTaskSplitDone: 'Output task_split directly (status=DONE) only when every task already has a clear technical implementation description, implementation steps, test steps, and acceptance criteria.',
       formResponse: 'Form {formId} response: {valueStr}',
       formResponseContinue: 'Continue: if more information is needed, output form_request; if sufficient, output task_split (status=DONE).',
-      outputCorrection: `Output format is invalid. Please output again:
-- form_request: must contain the forms array (single formSchema is tolerated but forms is preferred)
-- task_split: must contain status:DONE and tasks >= {minTaskCount}
-- Do not output markdown code fences or extra text`,
+      outputCorrection: `Output format is invalid. Re-output strict JSON:
+- form_request: may only use type, question, and forms, and forms must be an array of form schemas
+- task_split: may only use type, status, and tasks, and must contain status:DONE with tasks >= {minTaskCount}
+- Do not use alias keys such as action, reason, state, phase, payload, or data
+- Do not output markdown fences, extra prose, single quotes, or trailing commas
+- Before responding again, verify the full string can be parsed by JSON.parse directly`,
       dependsOnDescription: 'List of task titles this task depends on and that must be completed first'
     },
     taskExecution: {
@@ -2285,6 +2300,8 @@ Rules:
     waitingResplitResult: 'Waiting for split...',
     retryLabel: 'Retry',
     resendLabel: 'Resend',
+    autoRetryButtonPending: 'Auto retry in {seconds}s',
+    autoRetryHint: 'Auto retry is queued and will run again in {seconds}s. You can still retry manually now.',
     // Resplit status
     resplitInProgress: 'Splitting: {title}',
     resplitInProgressHint: 'Splitting: {title}, please wait...',

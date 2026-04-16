@@ -32,6 +32,9 @@ fn build_anthropic_message_content(message: &MessageInput) -> Result<serde_json:
 
     if let Some(attachments) = &message.attachments {
         for attachment in attachments {
+            if !attachment.mime_type.starts_with("image/") {
+                continue;
+            }
             content.push(attachment_to_anthropic_content(attachment)?);
         }
     }

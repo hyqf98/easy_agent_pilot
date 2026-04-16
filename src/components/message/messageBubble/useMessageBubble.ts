@@ -5,7 +5,6 @@ import { conversationService } from '@/services/conversation'
 import type { Message } from '@/stores/message'
 import { useMessageStore } from '@/stores/message'
 import { useTokenStore } from '@/stores/token'
-import { getAttachmentPreviewUrl, resolveAttachmentPreviewUrl } from '@/utils/attachmentPreview'
 import { FILE_MENTION_PATTERN, getMentionDisplayText } from '@/utils/fileMention'
 import {
   getProcessingTimeNoticeSummary,
@@ -39,7 +38,6 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
   const { t, locale } = useI18n()
   const messageStore = useMessageStore()
   const tokenStore = useTokenStore()
-  const messageAttachmentPreviews = ref<Array<{ id: string, name: string, previewUrl: string }>>([])
   const nowTick = ref(Date.now())
   const areToolCallsExpanded = ref(false)
   let elapsedTimer: ReturnType<typeof setInterval> | null = null
@@ -51,47 +49,6 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
   const isError = computed(() => props.message.status === 'error')
   const isInterrupted = computed(() => props.message.status === 'interrupted')
   const canRetry = computed(() => isError.value || isInterrupted.value)
-
-  async function syncMessageAttachmentPreviews() {
-    const attachments = props.message.attachments ?? []
-    if (attachments.length === 0) {
-      messageAttachmentPreviews.value = []
-      return
-    }
-
-    messageAttachmentPreviews.value = attachments.map(attachment => ({
-      id: attachment.id,
-      name: attachment.name,
-      previewUrl: getAttachmentPreviewUrl(attachment)
-    }))
-
-    const resolvedPreviews = await Promise.all(attachments.map(async attachment => ({
-      id: attachment.id,
-      name: attachment.name,
-      previewUrl: await resolveAttachmentPreviewUrl(attachment)
-    })))
-
-    const currentAttachmentIds = (props.message.attachments ?? [])
-      .map(attachment => attachment.id)
-      .join('|')
-    const resolvedAttachmentIds = attachments
-      .map(attachment => attachment.id)
-      .join('|')
-
-    if (currentAttachmentIds !== resolvedAttachmentIds) {
-      return
-    }
-
-    messageAttachmentPreviews.value = resolvedPreviews
-  }
-
-  watch(
-    () => props.message.attachments?.map(attachment => `${attachment.id}:${attachment.path}`).join('|') || '',
-    () => {
-      void syncMessageAttachmentPreviews()
-    },
-    { immediate: true }
-  )
 
   watch(
     isStreaming,
@@ -481,7 +438,6 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
   return {
     t,
     EaIcon,
-    messageAttachmentPreviews,
     areToolCallsExpanded,
     isUser,
     isAssistant,

@@ -1,4 +1,4 @@
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { usePlanStore } from '@/stores/plan'
 import { useTaskSplitStore } from '@/stores/taskSplit'
@@ -67,6 +67,12 @@ export function useTaskSplitDialog() {
 
   // 是否显示预览
   const showPreview = computed(() => taskSplitStore.splitResult !== null)
+  const showRecoveryInput = computed(() =>
+    !showPreview.value
+    && taskSplitStore.session?.status === 'stopped'
+    && Boolean(taskSplitStore.session?.parseError?.trim())
+    && Boolean(taskSplitStore.session?.rawContent?.trim())
+  )
   const refinementMode = computed(() => taskSplitStore.refinementMode)
   const hasPendingRefinement = computed(() => Boolean(refinementMode.value))
   const isSubSplitActive = computed(() => refinementMode.value === 'task_resplit')
@@ -143,11 +149,30 @@ export function useTaskSplitDialog() {
     )
     return hasUserMessage ? t('taskSplit.resendLabel') : t('taskSplit.retryLabel')
   })
+  const retryNow = ref(Date.now())
+  let retryCountdownTimer: ReturnType<typeof setInterval> | null = null
   const splitErrorMessage = computed(() =>
     taskSplitStore.session?.errorMessage?.trim()
     || taskSplitStore.session?.parseError?.trim()
     || ''
   )
+  const isAutoRetryPending = computed(() =>
+    canRetrySplit.value
+    && taskSplitStore.autoRetryScheduled
+    && typeof taskSplitStore.autoRetryNextRunAt === 'number'
+  )
+  const autoRetrySecondsRemaining = computed(() => {
+    if (!isAutoRetryPending.value || typeof taskSplitStore.autoRetryNextRunAt !== 'number') {
+      return 0
+    }
+
+    return Math.max(0, Math.ceil((taskSplitStore.autoRetryNextRunAt - retryNow.value) / 1000))
+  })
+  const retryButtonLabel = computed(() => (
+    isAutoRetryPending.value
+      ? t('taskSplit.autoRetryButtonPending', { seconds: autoRetrySecondsRemaining.value })
+      : retryActionLabel.value
+  ))
   const primaryActionLabel = computed(() => {
     if (refinementMode.value === 'list_optimize') {
       return canApplyRefinement.value ? t('taskSplit.applyOptimizeResult') : t('taskSplit.waitingOptimizeResult')
@@ -158,11 +183,18 @@ export function useTaskSplitDialog() {
     return isConfirming.value ? t('taskSplit.creating') : t('taskSplit.confirmCreate')
   })
   const footerHint = computed(() => {
+    if (isAutoRetryPending.value) {
+      return t('taskSplit.autoRetryHint', { seconds: autoRetrySecondsRemaining.value })
+    }
+
     if (canRetrySplit.value) {
       return splitErrorMessage.value || t('taskSplit.hintRetryFailed')
     }
 
     if (taskSplitStore.session?.status === 'stopped') {
+      if (splitErrorMessage.value) {
+        return splitErrorMessage.value
+      }
       if (activeFormSchema.value) {
         return t('taskSplit.hintSessionStoppedWithForm')
       }
@@ -1374,9 +1406,16 @@ async function executeParsedInstruction(text: string) {
 
 async function handleUserInstruction() {
   const text = userInstruction.value.trim()
-  if (!text || !taskSplitStore.splitResult) return
+  if (!text) return
 
-  const handled = await executeParsedInstruction(text)
+  let handled = false
+  if (taskSplitStore.splitResult) {
+    handled = await executeParsedInstruction(text)
+  } else if (showRecoveryInput.value) {
+    await taskSplitStore.continueSessionWithInstruction(text)
+    handled = true
+  }
+
   if (!handled) {
     logger.warn('[TaskSplitDialog] Unrecognized instruction:', text)
   }
@@ -1450,6 +1489,30 @@ watch(messageRenderState, async () => {
   scrollMessagesToBottom()
 }, { flush: 'post' })
 
+watch(isAutoRetryPending, (pending) => {
+  if (pending) {
+    retryNow.value = Date.now()
+    if (!retryCountdownTimer) {
+      retryCountdownTimer = setInterval(() => {
+        retryNow.value = Date.now()
+      }, 1000)
+    }
+    return
+  }
+
+  if (retryCountdownTimer) {
+    clearInterval(retryCountdownTimer)
+    retryCountdownTimer = null
+  }
+}, { immediate: true })
+
+onBeforeUnmount(() => {
+  if (retryCountdownTimer) {
+    clearInterval(retryCountdownTimer)
+    retryCountdownTimer = null
+  }
+})
+
 const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(closeDialog)
 
   return {
@@ -1469,6 +1532,7 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(close
     mentionSuggestions,
     selectedMentionOptionIndex,
     showPreview,
+    showRecoveryInput,
     refinementMode,
     hasPendingRefinement,
     isSubSplitActive,
@@ -1482,6 +1546,8 @@ const { handleOverlayPointerDown, handleOverlayClick } = useOverlayDismiss(close
     canRetrySplit,
     canContinueSplit,
     retryActionLabel,
+    retryButtonLabel,
+    isAutoRetryPending,
     splitErrorMessage,
     primaryActionLabel,
     footerHint,

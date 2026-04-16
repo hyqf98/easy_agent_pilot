@@ -17,6 +17,8 @@ const TODO_TOOL_NAMES = new Set([
   'todo.write',
   'todo_write',
   'todowriteitems',
+  'todo_list',
+  'todo-list',
   'update_plan',
   'functions.update_plan'
 ])
@@ -59,6 +61,18 @@ function normalizeTodoStatus(value: unknown): TodoItem['status'] {
   }
 
   return 'pending'
+}
+
+function resolveTodoStatus(entry: Record<string, unknown>): TodoItem['status'] {
+  if (typeof entry.completed === 'boolean') {
+    return entry.completed ? 'completed' : 'pending'
+  }
+
+  if (typeof entry.done === 'boolean') {
+    return entry.done ? 'completed' : 'pending'
+  }
+
+  return normalizeTodoStatus(entry.status)
 }
 
 function resolveTodoArray(toolCall: ToolCall): unknown[] {
@@ -108,7 +122,7 @@ function parseToolCallTodos(toolCall: ToolCall): TodoItem[] {
     return [{
       id: `${toolCall.id}-${index}`,
       content,
-      status: normalizeTodoStatus(entry.status),
+      status: resolveTodoStatus(entry),
       activeForm: typeof entry.activeForm === 'string' ? entry.activeForm.trim() : undefined
     }]
   })

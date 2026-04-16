@@ -56,7 +56,7 @@ const {
   handleCompositionEnd,
   handleCompositionStart,
   handleFileSelect,
-  handleImageFileChange,
+  handleAttachmentFileChange,
   handleInput,
   handleKeyDown,
   handleMessageFormSubmit,
@@ -85,7 +85,7 @@ const {
   mentionStart,
   messageCount,
   modelDropdownRef,
-  openImagePicker,
+  openAttachmentPicker,
   parsedInputText,
   pendingImages,
   previewMemoryReference,
@@ -140,7 +140,7 @@ defineExpose({
   <div
     ref="rootRef"
     class="conversation-composer"
-    :data-drag-text="t('message.dropImages')"
+    :data-drag-text="t('message.dropAttachments')"
     :class="{
       'conversation-composer--main': isMainPanel,
       'conversation-composer--mini': isMiniPanel,
@@ -291,13 +291,13 @@ defineExpose({
         <button
           class="composer-chip composer-chip--image"
           :disabled="isUploadingImages"
-          @click="openImagePicker"
+          @click="openAttachmentPicker"
         >
           <EaIcon
-            name="image-up"
+            name="paperclip"
             :size="12"
           />
-          <span>{{ isUploadingImages ? t('message.uploadingImages') : t('message.selectImages') }}</span>
+          <span>{{ isUploadingImages ? t('message.uploadingAttachments') : t('message.selectAttachments') }}</span>
         </button>
       </div>
     </div>
@@ -346,7 +346,7 @@ defineExpose({
           <div class="conversation-composer__queue-body">
             <div class="conversation-composer__queue-top">
               <span>{{ draft.status === 'failed' ? t('message.pendingFailed') : t('message.pendingLabel') }}</span>
-              <span v-if="draft.attachments.length > 0">{{ t('message.queueImages', { count: draft.attachments.length }) }}</span>
+              <span v-if="draft.attachments.length > 0">{{ t('message.queueAttachments', { count: draft.attachments.length }) }}</span>
             </div>
             <div
               class="conversation-composer__queue-preview"
@@ -428,9 +428,9 @@ defineExpose({
 
       <ConversationComposerAttachments
         v-if="isMainPanel"
-        :images="pendingImages"
+        :attachments="pendingImages"
         :main="true"
-        :remove-image="removeImage"
+        :remove-attachment="removeImage"
       />
 
       <div
@@ -530,13 +530,13 @@ defineExpose({
             class="composer-chip composer-chip--image"
             :class="{ 'composer-chip--main': isMainPanel }"
             :disabled="isUploadingImages"
-            @click="openImagePicker"
+            @click="openAttachmentPicker"
           >
             <EaIcon
-              name="image-up"
+              name="paperclip"
               :size="12"
             />
-            <span>{{ isUploadingImages ? t('message.uploadingImages') : t('message.selectImages') }}</span>
+            <span>{{ isUploadingImages ? t('message.uploadingAttachments') : t('message.selectAttachments') }}</span>
           </button>
         </div>
       </div>
@@ -545,9 +545,8 @@ defineExpose({
         ref="fileInputRef"
         type="file"
         class="conversation-composer__file-input"
-        accept="image/*"
         multiple
-        @change="handleImageFileChange"
+        @change="handleAttachmentFileChange"
       >
 
       <ConversationComposerMemoryAssist
@@ -574,9 +573,9 @@ defineExpose({
 
       <ConversationComposerAttachments
         v-if="!isMainPanel"
-        :images="pendingImages"
+        :attachments="pendingImages"
         :main="false"
-        :remove-image="removeImage"
+        :remove-attachment="removeImage"
       />
 
       <div class="conversation-composer__editor-stack">

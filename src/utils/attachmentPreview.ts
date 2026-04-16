@@ -1,5 +1,6 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import type { MessageAttachment } from '@/stores/message'
+import { isImageAttachment } from '@/utils/attachmentMeta'
 
 const previewCache = new Map<string, Promise<string>>()
 
@@ -20,6 +21,10 @@ function getFileSrc(path: string): string {
  * 优先使用上传阶段返回的预览 data URL，缺失时再从本地持久化文件生成。
  */
 export async function resolveAttachmentPreviewUrl(attachment: MessageAttachment): Promise<string> {
+  if (!isImageAttachment(attachment)) {
+    return getFileSrc(attachment.path)
+  }
+
   if (attachment.previewUrl?.trim()) {
     return attachment.previewUrl
   }
@@ -41,5 +46,9 @@ export async function resolveAttachmentPreviewUrl(attachment: MessageAttachment)
 }
 
 export function getAttachmentPreviewUrl(attachment: MessageAttachment): string {
-  return attachment.previewUrl?.trim() || getFileSrc(attachment.path)
+  if (attachment.previewUrl?.trim()) {
+    return attachment.previewUrl
+  }
+
+  return getFileSrc(attachment.path)
 }

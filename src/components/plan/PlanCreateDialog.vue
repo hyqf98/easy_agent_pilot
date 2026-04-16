@@ -78,14 +78,6 @@ const isAiMode = () => props.form.splitMode === 'ai'
             />
           </div>
 
-          <div class="form-field">
-            <MemoryLibraryPicker
-              :model-value="props.form.memoryLibraryIds"
-              hint="计划挂载的记忆库会默认透传给每个任务。"
-              @update:model-value="updateField('memoryLibraryIds', $event)"
-            />
-          </div>
-
           <!-- 拆分模式 -->
           <div class="form-field">
             <label>任务拆分模式</label>
@@ -263,6 +255,14 @@ const isAiMode = () => props.form.splitMode === 'ai'
               </span>
             </div>
           </div>
+
+          <div class="form-field form-field--memory">
+            <MemoryLibraryPicker
+              :model-value="props.form.memoryLibraryIds"
+              hint="计划挂载的记忆库会默认透传给每个任务。"
+              @update:model-value="updateField('memoryLibraryIds', $event)"
+            />
+          </div>
         </div>
         <div class="dialog-footer">
           <button
@@ -320,7 +320,7 @@ const isAiMode = () => props.form.splitMode === 'ai'
 .dialog {
   background-color: var(--color-surface, #fff);
   border-radius: var(--radius-lg, 12px);
-  width: min(100%, 32rem);
+  width: min(100%, 46rem);
   max-height: min(88vh, calc(100vh - 1.5rem));
   display: flex;
   flex-direction: column;
@@ -394,6 +394,13 @@ const isAiMode = () => props.form.splitMode === 'ai'
 
 .form-field {
   margin-bottom: var(--spacing-4, 1rem);
+}
+
+.form-field--memory {
+  margin-top: var(--spacing-2, 0.5rem);
+  margin-bottom: 0;
+  padding-top: var(--spacing-3, 0.75rem);
+  border-top: 1px solid var(--color-border, #e2e8f0);
 }
 
 .form-field label {

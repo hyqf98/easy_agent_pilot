@@ -39,6 +39,9 @@ fn build_openai_message_content(message: &MessageInput) -> Result<serde_json::Va
 
     if let Some(attachments) = &message.attachments {
         for attachment in attachments {
+            if !attachment.mime_type.starts_with("image/") {
+                continue;
+            }
             content.push(attachment_to_openai_content(attachment)?);
         }
     }

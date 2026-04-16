@@ -1,15 +1,16 @@
 <script setup lang="ts">
-import { EaIcon, ImageHoverPreview } from '@/components/common'
+import { EaIcon } from '@/components/common'
+import AttachmentThumbnail from '@/components/common/AttachmentThumbnail.vue'
 import type { ConversationComposerViewState } from './useConversationComposerView'
 import { computed } from 'vue'
 
 type Resolved<T> = T extends { value: infer V } ? V : T
-type PendingImage = Resolved<ConversationComposerViewState['pendingImages']>[number]
+type PendingAttachment = Resolved<ConversationComposerViewState['pendingImages']>[number]
 
 const props = defineProps<{
-  images: PendingImage[]
+  attachments: PendingAttachment[]
   main: boolean
-  removeImage: (imageId: string) => void
+  removeAttachment: (attachmentId: string) => void
 }>()
 
 const attachmentWrapperStyle = computed(() => {
@@ -43,34 +44,32 @@ const attachmentImageStyle = {
 
 <template>
   <div
-    v-if="images.length > 0"
+    v-if="attachments.length > 0"
     class="conversation-composer__attachments"
     :class="{ 'conversation-composer__attachments--main': main }"
   >
-    <ImageHoverPreview
-      v-for="image in images"
-      :key="image.id"
-      :src="image.previewUrl"
-      :alt="image.name"
-      :title="image.name"
+    <AttachmentThumbnail
+      v-for="attachment in attachments"
+      :key="attachment.id"
+      :attachment="attachment"
       wrapper-class="conversation-composer__attachment"
-      image-class="conversation-composer__attachment-image"
+      media-class="conversation-composer__attachment-image"
       :wrapper-style="attachmentWrapperStyle"
-      :image-style="attachmentImageStyle"
+      :media-style="attachmentImageStyle"
       :preview-max-width="420"
       :preview-max-height="480"
     >
       <button
         type="button"
         class="conversation-composer__attachment-remove"
-        @click="removeImage(image.id)"
+        @click="removeAttachment(attachment.id)"
       >
         <EaIcon
           name="x"
           :size="12"
         />
       </button>
-    </ImageHoverPreview>
+    </AttachmentThumbnail>
   </div>
 </template>
 

@@ -17,6 +17,7 @@ const {
   mentionSuggestions,
   selectedMentionOptionIndex,
   showPreview,
+  showRecoveryInput,
   refinementMode,
   hasPendingRefinement,
   isSubSplitActive,
@@ -28,7 +29,8 @@ const {
   showLoadingIndicator,
   canRetrySplit,
   canContinueSplit,
-  retryActionLabel,
+  retryButtonLabel,
+  isAutoRetryPending,
   primaryActionLabel,
   footerHint,
   runningStatusText,
@@ -116,7 +118,7 @@ const {
               </div>
 
               <div
-                v-if="showPreview"
+                v-if="showPreview || showRecoveryInput"
                 class="conversation-input-area"
               >
                 <div
@@ -134,7 +136,7 @@ const {
                       class="instruction-input"
                       :disabled="isSessionRunning || isConfirming"
                       :placeholder="t('taskSplit.instructionPlaceholder')"
-                      rows="1"
+                      rows="2"
                       @keydown="handleInstructionKeydown"
                       @input="handleInstructionInput"
                       @click="handleInstructionCaretChange"
@@ -204,9 +206,14 @@ const {
               <button
                 v-if="canRetrySplit"
                 class="btn btn-secondary btn-retry"
+                :class="{ 'btn-retry--pending': isAutoRetryPending }"
                 @click="retrySplitTask"
               >
-                {{ retryActionLabel }}
+                <span
+                  v-if="isAutoRetryPending"
+                  class="btn-retry__pulse"
+                />
+                {{ retryButtonLabel }}
               </button>
               <button
                 v-if="canContinueSplit"
@@ -251,9 +258,14 @@ const {
                 <button
                   v-if="canRetrySplit"
                   class="btn btn-secondary btn-retry"
+                  :class="{ 'btn-retry--pending': isAutoRetryPending }"
                   @click="retrySplitTask"
                 >
-                  {{ retryActionLabel }}
+                  <span
+                    v-if="isAutoRetryPending"
+                    class="btn-retry__pulse"
+                  />
+                  {{ retryButtonLabel }}
                 </button>
                 <button
                   v-if="canContinueSplit"
