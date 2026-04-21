@@ -274,6 +274,8 @@ const INIT_SQL: &str = r#"
         sonnet_default TEXT,
         opus_default TEXT,
         codex_model TEXT,
+        opencode_provider_models TEXT,
+        opencode_provider_npm TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );
@@ -811,6 +813,8 @@ pub fn init_database() -> Result<()> {
         "ALTER TABLE sessions ADD COLUMN cli_session_provider TEXT",
         "ALTER TABLE unattended_channels ADD COLUMN default_model_id TEXT",
         "ALTER TABLE unattended_threads ADD COLUMN active_project_id TEXT",
+        "ALTER TABLE provider_profiles ADD COLUMN opencode_provider_models TEXT",
+        "ALTER TABLE provider_profiles ADD COLUMN opencode_provider_npm TEXT",
     ];
 
     for migration in migrations {

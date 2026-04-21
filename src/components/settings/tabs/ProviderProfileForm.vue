@@ -6,6 +6,9 @@ import { EaButton, EaIcon } from '@/components/common'
 import { useOverlayDismiss } from '@/composables/useOverlayDismiss'
 import { invoke } from '@tauri-apps/api/core'
 
+const OPENCODE_DEFAULT_PROVIDER_NPM = '@ai-sdk/openai-compatible'
+type OpenCodeProviderMode = 'preset' | 'custom'
+
 const props = defineProps<{
   visible: boolean
   profile: ProviderProfile | null
@@ -26,6 +29,8 @@ const form = ref({
   baseUrl: '',
   providerName: '',
   mainModel: '',
+  opencodeProviderModels: '',
+  opencodeProviderNpm: '',
   reasoningModel: '',
   haikuModel: '',
   sonnetDefault: '',
@@ -57,12 +62,15 @@ function resetForm() {
     baseUrl: '',
     providerName: '',
     mainModel: '',
+    opencodeProviderModels: '',
+    opencodeProviderNpm: '',
     reasoningModel: '',
     haikuModel: '',
     sonnetDefault: '',
     opusDefault: '',
     codexModel: ''
   }
+  opencodeProviderModelRows.value = ['']
 }
 
 // 填充表单（编辑模式）
@@ -73,26 +81,16 @@ function populateForm(profile: ProviderProfile) {
     baseUrl: profile.baseUrl || '',
     providerName: profile.providerName || '',
     mainModel: profile.mainModel || '',
+    opencodeProviderModels: profile.opencodeProviderModels || '',
+    opencodeProviderNpm: profile.opencodeProviderNpm || '',
     reasoningModel: profile.reasoningModel || '',
     haikuModel: profile.haikuModel || '',
     sonnetDefault: profile.sonnetDefault || '',
     opusDefault: profile.opusDefault || '',
     codexModel: profile.codexModel || ''
   }
+  syncOpenCodeProviderModelRows(profile.opencodeProviderModels || '')
 }
-
-// 监听 profile 变化
-watch(
-  () => props.profile,
-  (profile) => {
-    if (profile) {
-      populateForm(profile)
-    } else {
-      resetForm()
-    }
-  },
-  { immediate: true }
-)
 
 // 关闭弹窗
 function handleClose() {
@@ -108,30 +106,149 @@ interface AuthProvider {
   hasKey: boolean
 }
 
+function formatInvokeError(error: unknown): string {
+  if (typeof error === 'string') return error
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = (error as { message?: unknown }).message
+    return typeof message === 'string' ? message : t('common.unknownError')
+  }
+  return t('common.unknownError')
+}
+
 const opencodeProviders = ref<AuthProvider[]>([])
 const opencodeProvidersLoaded = ref(false)
+const opencodeProvidersLoading = ref(false)
+const opencodeProvidersError = ref('')
 const opencodeModels = ref<string[]>([])
 const opencodeModelsLoading = ref(false)
+const opencodeModelsError = ref('')
 const opencodeModelDropdownOpen = ref(false)
 const opencodeModelSearch = ref('')
 const comboboxInputRef = ref<HTMLElement | null>(null)
 const comboboxDropdownStyle = ref<Record<string, string>>({})
+const opencodeProviderMode = ref<OpenCodeProviderMode>('preset')
+const opencodeProviderModelRows = ref<string[]>([''])
+
+const hasOpenCodeProviderOptions = computed(() => opencodeProviders.value.length > 0)
+const isOpenCodeCustomProvider = computed(() => opencodeProviderMode.value === 'custom')
+const hasValidOpenCodeProviderModels = computed(() =>
+  opencodeProviderModelRows.value.some(item => item.trim())
+)
+const isSubmitDisabled = computed(() => {
+  if (!isCurrentConfig.value && !form.value.name.trim()) {
+    return true
+  }
+
+  if (props.cliType !== 'opencode') {
+    return false
+  }
+
+  if (!form.value.providerName.trim() || !form.value.mainModel.trim()) {
+    return true
+  }
+
+  if (!isOpenCodeCustomProvider.value) {
+    return false
+  }
+
+  return !form.value.baseUrl.trim() || !hasValidOpenCodeProviderModels.value
+})
+
+function syncOpenCodeProviderModelRows(raw: string) {
+  const items = raw
+    .split(/\r?\n/)
+    .map(item => item.trim())
+    .filter(Boolean)
+  opencodeProviderModelRows.value = items.length > 0 ? items : ['']
+}
+
+function syncOpenCodeProviderModelsField() {
+  form.value.opencodeProviderModels = opencodeProviderModelRows.value
+    .map(item => item.trim())
+    .filter(Boolean)
+    .join('\n')
+}
+
+function addOpenCodeProviderModelRow() {
+  opencodeProviderModelRows.value.push('')
+}
+
+function removeOpenCodeProviderModelRow(index: number) {
+  if (opencodeProviderModelRows.value.length === 1) {
+    opencodeProviderModelRows.value[0] = ''
+  } else {
+    opencodeProviderModelRows.value.splice(index, 1)
+  }
+  syncOpenCodeProviderModelsField()
+}
+
+watch(
+  () => props.profile,
+  (profile) => {
+    if (profile) {
+      populateForm(profile)
+    } else {
+      resetForm()
+    }
+  },
+  { immediate: true }
+)
+
+function syncOpenCodeProviderMode() {
+  const provider = form.value.providerName.trim()
+  const hasCustomFields = Boolean(
+    form.value.baseUrl.trim()
+    || opencodeProviderModelRows.value.some(item => item.trim())
+    || form.value.opencodeProviderNpm.trim()
+  )
+  const matchesKnownProvider = opencodeProviders.value.some(item => item.id === provider)
+
+  if (hasCustomFields || (provider && !matchesKnownProvider)) {
+    opencodeProviderMode.value = 'custom'
+    if (!form.value.opencodeProviderNpm.trim()) {
+      form.value.opencodeProviderNpm = OPENCODE_DEFAULT_PROVIDER_NPM
+    }
+    return
+  }
+
+  opencodeProviderMode.value = 'preset'
+}
+
+function handleOpenCodeProviderModeChange(mode: OpenCodeProviderMode) {
+  opencodeProviderMode.value = mode
+  opencodeModelsError.value = ''
+  if (mode === 'preset') {
+    form.value.baseUrl = ''
+    form.value.opencodeProviderNpm = ''
+    opencodeProviderModelRows.value = ['']
+    syncOpenCodeProviderModelsField()
+  } else if (!form.value.opencodeProviderNpm.trim()) {
+    form.value.opencodeProviderNpm = OPENCODE_DEFAULT_PROVIDER_NPM
+  }
+}
 
 async function loadOpenCodeProviders() {
   if (opencodeProvidersLoaded.value) return
+  opencodeProvidersLoading.value = true
+  opencodeProvidersError.value = ''
   try {
     const result = await invoke<AuthProvider[]>('read_opencode_auth_providers')
     opencodeProviders.value = result
-    opencodeProvidersLoaded.value = true
-  } catch {
+    syncOpenCodeProviderMode()
+  } catch (error) {
     opencodeProviders.value = []
+    opencodeProvidersError.value = formatInvokeError(error)
+  } finally {
+    opencodeProvidersLoaded.value = true
+    opencodeProvidersLoading.value = false
   }
 }
 
 async function loadOpenCodeModels(autoOpen = true) {
-  const provider = form.value.providerName
+  const provider = form.value.providerName.trim()
   if (!provider) return
   opencodeModelsLoading.value = true
+  opencodeModelsError.value = ''
   opencodeModels.value = []
   opencodeModelSearch.value = ''
   try {
@@ -141,8 +258,9 @@ async function loadOpenCodeModels(autoOpen = true) {
       updateDropdownPosition()
       opencodeModelDropdownOpen.value = true
     }
-  } catch {
+  } catch (error) {
     opencodeModels.value = []
+    opencodeModelsError.value = formatInvokeError(error)
   } finally {
     opencodeModelsLoading.value = false
   }
@@ -204,6 +322,9 @@ watch(
   (v) => {
     if (v && props.cliType === 'opencode') {
       opencodeProvidersLoaded.value = false
+      opencodeProvidersError.value = ''
+      opencodeModelsError.value = ''
+      syncOpenCodeProviderMode()
       loadOpenCodeProviders()
       if (form.value.providerName) {
         nextTick(() => loadOpenCodeModels(false))
@@ -213,13 +334,32 @@ watch(
   { immediate: true }
 )
 
+watch(
+  () => props.profile,
+  () => {
+    if (props.cliType === 'opencode') {
+      syncOpenCodeProviderModelRows(props.profile?.opencodeProviderModels || '')
+      syncOpenCodeProviderMode()
+    }
+  }
+)
+
 // 提交表单
 async function handleSubmit() {
-  if (!isCurrentConfig.value && !form.value.name.trim()) {
+  syncOpenCodeProviderModelsField()
+
+  if (isSubmitDisabled.value) {
     return
   }
 
   saving.value = true
+
+  const opencodeProviderNpm = props.cliType === 'opencode' && isOpenCodeCustomProvider.value
+    ? (form.value.opencodeProviderNpm.trim() || OPENCODE_DEFAULT_PROVIDER_NPM)
+    : undefined
+  const opencodeProviderModels = props.cliType === 'opencode' && isOpenCodeCustomProvider.value
+    ? (form.value.opencodeProviderModels.trim() || undefined)
+    : undefined
 
   try {
     if (isCurrentConfig.value) {
@@ -228,6 +368,8 @@ async function handleSubmit() {
         baseUrl: form.value.baseUrl || undefined,
         providerName: form.value.providerName || undefined,
         mainModel: form.value.mainModel || undefined,
+        opencodeProviderModels,
+        opencodeProviderNpm,
         reasoningModel: form.value.reasoningModel || undefined,
         haikuModel: form.value.haikuModel || undefined,
         sonnetDefault: form.value.sonnetDefault || undefined,
@@ -243,6 +385,8 @@ async function handleSubmit() {
         baseUrl: form.value.baseUrl || undefined,
         providerName: form.value.providerName || undefined,
         mainModel: form.value.mainModel || undefined,
+        opencodeProviderModels,
+        opencodeProviderNpm,
         reasoningModel: form.value.reasoningModel || undefined,
         haikuModel: form.value.haikuModel || undefined,
         sonnetDefault: form.value.sonnetDefault || undefined,
@@ -259,6 +403,8 @@ async function handleSubmit() {
         baseUrl: form.value.baseUrl || undefined,
         providerName: form.value.providerName || undefined,
         mainModel: form.value.mainModel || undefined,
+        opencodeProviderModels,
+        opencodeProviderNpm,
         reasoningModel: form.value.reasoningModel || undefined,
         haikuModel: form.value.haikuModel || undefined,
         sonnetDefault: form.value.sonnetDefault || undefined,
@@ -444,51 +590,101 @@ async function handleSubmit() {
               </h4>
 
               <div class="form-group">
-                <label class="form-label">{{ t('settings.providerSwitch.form.providerName') }}</label>
-                <select
-                  v-model="form.providerName"
-                  class="form-input form-select"
-                  @change="loadOpenCodeModels(false)"
+                <label class="form-label">{{ t('settings.providerSwitch.form.opencodeProviderMode') }}</label>
+                <div class="provider-mode-switch">
+                  <button
+                    type="button"
+                    class="provider-mode-btn"
+                    :class="{ active: opencodeProviderMode === 'preset' }"
+                    @click="handleOpenCodeProviderModeChange('preset')"
+                  >
+                    {{ t('settings.providerSwitch.form.opencodeProviderModePreset') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="provider-mode-btn"
+                    :class="{ active: opencodeProviderMode === 'custom' }"
+                    @click="handleOpenCodeProviderModeChange('custom')"
+                  >
+                    {{ t('settings.providerSwitch.form.opencodeProviderModeCustom') }}
+                  </button>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">
+                  {{ t('settings.providerSwitch.form.providerName') }} <span class="required">*</span>
+                </label>
+                <template v-if="!isOpenCodeCustomProvider">
+                  <select
+                    v-model="form.providerName"
+                    class="form-input form-select"
+                    :disabled="opencodeProvidersLoading"
+                    required
+                    @change="loadOpenCodeModels(false)"
+                  >
+                    <option
+                      value=""
+                      disabled
+                    >
+                      {{ t('settings.providerSwitch.form.opencodeProviderPlaceholder') }}
+                    </option>
+                    <template v-if="opencodeProviders.length">
+                      <optgroup
+                        v-if="opencodeProviders.some(p => p.hasKey)"
+                        :label="t('settings.providerSwitch.form.connected')"
+                      >
+                        <option
+                          v-for="p in opencodeProviders.filter(p => p.hasKey)"
+                          :key="p.id"
+                          :value="p.id"
+                        >
+                          {{ p.displayName }}
+                        </option>
+                      </optgroup>
+                      <optgroup
+                        v-if="opencodeProviders.some(p => !p.hasKey)"
+                        :label="t('settings.providerSwitch.form.other')"
+                      >
+                        <option
+                          v-for="p in opencodeProviders.filter(p => !p.hasKey)"
+                          :key="p.id"
+                          :value="p.id"
+                        >
+                          {{ p.displayName }}
+                        </option>
+                      </optgroup>
+                    </template>
+                  </select>
+                </template>
+                <template v-else>
+                  <input
+                    v-model="form.providerName"
+                    type="text"
+                    class="form-input"
+                    :placeholder="t('settings.providerSwitch.form.opencodeCustomProviderPlaceholder')"
+                    required
+                    @blur="loadOpenCodeModels(false)"
+                  >
+                </template>
+                <div
+                  v-if="opencodeProvidersLoading && !isOpenCodeCustomProvider"
+                  class="form-hint"
                 >
-                  <option
-                    value=""
-                    disabled
-                  >
-                    {{ t('settings.providerSwitch.form.opencodeProviderPlaceholder') }}
-                  </option>
-                  <template v-if="opencodeProviders.length">
-                    <optgroup
-                      v-if="opencodeProviders.some(p => p.hasKey)"
-                      :label="t('settings.providerSwitch.form.connected')"
-                    >
-                      <option
-                        v-for="p in opencodeProviders.filter(p => p.hasKey)"
-                        :key="p.id"
-                        :value="p.id"
-                      >
-                        {{ p.displayName }}
-                      </option>
-                    </optgroup>
-                    <optgroup
-                      v-if="opencodeProviders.some(p => !p.hasKey)"
-                      :label="t('settings.providerSwitch.form.other')"
-                    >
-                      <option
-                        v-for="p in opencodeProviders.filter(p => !p.hasKey)"
-                        :key="p.id"
-                        :value="p.id"
-                      >
-                        {{ p.displayName }}
-                      </option>
-                    </optgroup>
-                  </template>
-                  <option
-                    v-else
-                    disabled
-                  >
-                    {{ t('common.loading') }}
-                  </option>
-                </select>
+                  {{ t('common.loading') }}
+                </div>
+                <div
+                  v-else-if="opencodeProvidersError && !isOpenCodeCustomProvider"
+                  class="form-error"
+                >
+                  {{ t('settings.providerSwitch.form.opencodeProvidersLoadFailed', { error: opencodeProvidersError }) }}
+                </div>
+                <div
+                  v-else-if="!hasOpenCodeProviderOptions && !isOpenCodeCustomProvider"
+                  class="form-hint"
+                >
+                  {{ t('settings.providerSwitch.form.opencodeProvidersEmpty') }}
+                </div>
               </div>
 
               <div class="form-group">
@@ -501,8 +697,93 @@ async function handleSubmit() {
                 >
               </div>
 
+              <div
+                v-if="isOpenCodeCustomProvider"
+                class="form-group"
+              >
+                <label class="form-label">
+                  {{ t('settings.providerSwitch.form.baseUrl') }} <span class="required">*</span>
+                </label>
+                <input
+                  v-model="form.baseUrl"
+                  type="text"
+                  class="form-input"
+                  :placeholder="t('settings.providerSwitch.form.opencodeBaseUrlPlaceholder')"
+                  required
+                >
+              </div>
+
+              <div
+                v-if="isOpenCodeCustomProvider"
+                class="form-group"
+              >
+                <label class="form-label">
+                  {{ t('settings.providerSwitch.form.opencodeProviderModels') }} <span class="required">*</span>
+                </label>
+                <div class="provider-model-list">
+                  <div
+                    v-for="(_, index) in opencodeProviderModelRows"
+                    :key="`model-${index}`"
+                    class="provider-model-row"
+                  >
+                    <input
+                      v-model="opencodeProviderModelRows[index]"
+                      type="text"
+                      class="form-input"
+                      :placeholder="t('settings.providerSwitch.form.opencodeProviderModelItemPlaceholder')"
+                      @input="syncOpenCodeProviderModelsField"
+                    >
+                    <div class="provider-model-actions">
+                      <button
+                        v-if="opencodeProviderModelRows.length > 1"
+                        type="button"
+                        class="provider-model-action provider-model-action--danger"
+                        @click="removeOpenCodeProviderModelRow(index)"
+                      >
+                        <EaIcon
+                          name="minus"
+                          :size="16"
+                        />
+                      </button>
+                      <button
+                        v-if="index === opencodeProviderModelRows.length - 1"
+                        type="button"
+                        class="provider-model-action"
+                        @click="addOpenCodeProviderModelRow"
+                      >
+                        <EaIcon
+                          name="plus"
+                          :size="16"
+                        />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div class="form-hint">
+                  {{ t('settings.providerSwitch.form.opencodeProviderModelsHint') }}
+                </div>
+              </div>
+
+              <div
+                v-if="isOpenCodeCustomProvider"
+                class="form-group"
+              >
+                <label class="form-label">{{ t('settings.providerSwitch.form.opencodeProviderNpm') }}</label>
+                <input
+                  v-model="form.opencodeProviderNpm"
+                  type="text"
+                  class="form-input"
+                  :placeholder="OPENCODE_DEFAULT_PROVIDER_NPM"
+                >
+                <div class="form-hint">
+                  {{ t('settings.providerSwitch.form.opencodeProviderNpmHint') }}
+                </div>
+              </div>
+
               <div class="form-group model-combobox">
-                <label class="form-label">{{ t('settings.providerSwitch.form.mainModel') }}</label>
+                <label class="form-label">
+                  {{ t('settings.providerSwitch.form.mainModel') }} <span class="required">*</span>
+                </label>
                 <div class="combobox-wrapper">
                   <input
                     ref="comboboxInputRef"
@@ -510,6 +791,7 @@ async function handleSubmit() {
                     type="text"
                     class="form-input combobox-input"
                     :placeholder="t('settings.providerSwitch.form.opencodeModelPlaceholder')"
+                    required
                     @focus="onModelFocus"
                     @input="onModelInput"
                     @blur="opencodeModelDropdownOpen = false"
@@ -551,10 +833,18 @@ async function handleSubmit() {
                   {{ t('settings.providerSwitch.form.loadingModels') }}
                 </div>
                 <div
+                  v-else-if="opencodeModelsError"
+                  class="form-error"
+                >
+                  {{ t('settings.providerSwitch.form.opencodeModelsLoadFailed', { error: opencodeModelsError }) }}
+                </div>
+                <div
                   v-else-if="form.providerName && opencodeModels.length === 0"
                   class="model-hint"
                 >
-                  {{ t('settings.providerSwitch.form.modelHint') }}
+                  {{ isOpenCodeCustomProvider
+                    ? t('settings.providerSwitch.form.opencodeCustomModelHint')
+                    : t('settings.providerSwitch.form.modelHint') }}
                 </div>
               </div>
             </div>
@@ -571,7 +861,7 @@ async function handleSubmit() {
           <EaButton
             type="primary"
             :loading="saving"
-            :disabled="!isCurrentConfig && !form.name.trim()"
+            :disabled="isSubmitDisabled"
             @click="handleSubmit"
           >
             {{ t('common.save') }}
@@ -705,6 +995,11 @@ async function handleSubmit() {
   color: var(--color-text-tertiary, #999);
 }
 
+.form-textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
 .form-select {
   appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236b7280' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
@@ -770,11 +1065,89 @@ async function handleSubmit() {
   font-weight: 500;
 }
 
+.provider-mode-switch {
+  display: inline-flex;
+  width: 100%;
+  gap: 8px;
+}
+
+.provider-mode-btn {
+  flex: 1;
+  min-height: 40px;
+  border: 1px solid var(--color-border, #e0e0e0);
+  border-radius: 8px;
+  background: var(--color-bg-secondary, #f5f5f5);
+  color: var(--color-text-secondary, #666);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.provider-mode-btn.active {
+  border-color: var(--color-primary, #7c3aed);
+  background: color-mix(in srgb, var(--color-primary, #7c3aed) 10%, white);
+  color: var(--color-primary, #7c3aed);
+}
+
+.provider-model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.provider-model-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.provider-model-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.provider-model-action {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border: 1px solid var(--color-border, #e0e0e0);
+  border-radius: 8px;
+  background: var(--color-bg-secondary, #f5f5f5);
+  color: var(--color-text-secondary, #666);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.provider-model-action:hover {
+  border-color: var(--color-primary, #7c3aed);
+  color: var(--color-primary, #7c3aed);
+}
+
+.provider-model-action--danger:hover {
+  border-color: var(--color-danger, #ef4444);
+  color: var(--color-danger, #ef4444);
+}
+
+.form-hint,
+.form-error,
 .model-loading,
 .model-hint {
   font-size: 12px;
-  color: var(--color-text-tertiary, #999);
   margin-top: 4px;
+}
+
+.form-hint,
+.model-loading,
+.model-hint {
+  color: var(--color-text-tertiary, #999);
+}
+
+.form-error {
+  color: var(--color-danger, #ef4444);
 }
 
 .form-row {

@@ -43,6 +43,8 @@ export interface ProviderProfile {
   opusDefault?: string
   // Codex 配置字段
   codexModel?: string
+  opencodeProviderModels?: string
+  opencodeProviderNpm?: string
   // 元数据
   createdAt: string
   updatedAt: string
@@ -61,6 +63,8 @@ export interface CreateProviderProfileInput {
   sonnetDefault?: string
   opusDefault?: string
   codexModel?: string
+  opencodeProviderModels?: string
+  opencodeProviderNpm?: string
 }
 
 /** 更新 Provider 配置输入 */
@@ -75,6 +79,8 @@ export interface UpdateProviderProfileInput {
   sonnetDefault?: string
   opusDefault?: string
   codexModel?: string
+  opencodeProviderModels?: string
+  opencodeProviderNpm?: string
 }
 
 // 后端返回的原始数据结构（snake_case）
@@ -92,6 +98,8 @@ interface RawProviderProfile {
   sonnet_default?: string
   opus_default?: string
   codex_model?: string
+  opencode_provider_models?: string
+  opencode_provider_npm?: string
   created_at: string
   updated_at: string
 }
@@ -115,6 +123,8 @@ function transformProfile(raw: RawProviderProfile): ProviderProfile {
     sonnetDefault: raw.sonnet_default,
     opusDefault: raw.opus_default,
     codexModel: raw.codex_model,
+    opencodeProviderModels: raw.opencode_provider_models,
+    opencodeProviderNpm: raw.opencode_provider_npm,
     createdAt: raw.created_at,
     updatedAt: raw.updated_at
   }
@@ -285,7 +295,9 @@ export const useProviderProfileStore = defineStore('providerProfile', () => {
           haiku_model: input.haikuModel,
           sonnet_default: input.sonnetDefault,
           opus_default: input.opusDefault,
-          codex_model: input.codexModel
+          codex_model: input.codexModel,
+          opencode_provider_models: input.opencodeProviderModels,
+          opencode_provider_npm: input.opencodeProviderNpm
         }
       })
       const newProfile = transformProfile(rawProfile)
@@ -318,7 +330,9 @@ export const useProviderProfileStore = defineStore('providerProfile', () => {
           haiku_model: input.haikuModel,
           sonnet_default: input.sonnetDefault,
           opus_default: input.opusDefault,
-          codex_model: input.codexModel
+          codex_model: input.codexModel,
+          opencode_provider_models: input.opencodeProviderModels,
+          opencode_provider_npm: input.opencodeProviderNpm
         }
       })
       const updatedProfile = transformProfile(rawProfile)
@@ -438,7 +452,9 @@ export const useProviderProfileStore = defineStore('providerProfile', () => {
           haiku_model: input.haikuModel,
           sonnet_default: input.sonnetDefault,
           opus_default: input.opusDefault,
-          codex_model: input.codexModel
+          codex_model: input.codexModel,
+          opencode_provider_models: input.opencodeProviderModels,
+          opencode_provider_npm: input.opencodeProviderNpm
         }
       })
 

@@ -21,11 +21,12 @@ fn opencode_auth_dir() -> Result<PathBuf, String> {
 }
 
 const PROVIDER_PROFILE_SELECT_SQL: &str =
-    "SELECT id, name, cli_type, is_active, api_key, base_url, provider_name, main_model, reasoning_model, haiku_model, sonnet_default, opus_default, codex_model, created_at, updated_at FROM provider_profiles";
+    "SELECT id, name, cli_type, is_active, api_key, base_url, provider_name, main_model, reasoning_model, haiku_model, sonnet_default, opus_default, codex_model, opencode_provider_models, opencode_provider_npm, created_at, updated_at FROM provider_profiles";
 const PROVIDER_PROFILE_SELECT_BY_ID_SQL: &str =
-    "SELECT id, name, cli_type, is_active, api_key, base_url, provider_name, main_model, reasoning_model, haiku_model, sonnet_default, opus_default, codex_model, created_at, updated_at FROM provider_profiles WHERE id = ?1";
+    "SELECT id, name, cli_type, is_active, api_key, base_url, provider_name, main_model, reasoning_model, haiku_model, sonnet_default, opus_default, codex_model, opencode_provider_models, opencode_provider_npm, created_at, updated_at FROM provider_profiles WHERE id = ?1";
 const PROVIDER_PROFILE_SELECT_ACTIVE_SQL: &str =
-    "SELECT id, name, cli_type, is_active, api_key, base_url, provider_name, main_model, reasoning_model, haiku_model, sonnet_default, opus_default, codex_model, created_at, updated_at FROM provider_profiles WHERE cli_type = ?1 AND is_active = 1";
+    "SELECT id, name, cli_type, is_active, api_key, base_url, provider_name, main_model, reasoning_model, haiku_model, sonnet_default, opus_default, codex_model, opencode_provider_models, opencode_provider_npm, created_at, updated_at FROM provider_profiles WHERE cli_type = ?1 AND is_active = 1";
+const OPENCODE_DEFAULT_PROVIDER_NPM: &str = "@ai-sdk/openai-compatible";
 
 fn open_conn() -> Result<Connection, String> {
     open_db_connection().map_err(|e| e.to_string())
@@ -46,9 +47,56 @@ fn build_current_profile(cli_type: &str, now: String) -> ProviderProfile {
         sonnet_default: None,
         opus_default: None,
         codex_model: None,
+        opencode_provider_models: None,
+        opencode_provider_npm: None,
         created_at: now.clone(),
         updated_at: now,
     }
+}
+
+fn normalize_optional_text(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn parse_opencode_model_names(raw: Option<&str>, main_model: Option<&str>) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut models = Vec::new();
+
+    if let Some(raw) = raw {
+        for item in raw.split([',', '\n', '\r']) {
+            let model = item.trim();
+            if !model.is_empty() && seen.insert(model.to_string()) {
+                models.push(model.to_string());
+            }
+        }
+    }
+
+    if let Some(main_model) = main_model.map(str::trim).filter(|value| !value.is_empty()) {
+        if seen.insert(main_model.to_string()) {
+            models.push(main_model.to_string());
+        }
+    }
+
+    models
+}
+
+fn serialize_opencode_model_names(models: &[String]) -> Option<String> {
+    if models.is_empty() {
+        None
+    } else {
+        Some(models.join("\n"))
+    }
+}
+
+fn parse_json_object_map(
+    value: Option<&serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    value
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default()
 }
 
 /// Provider 配置
@@ -69,6 +117,9 @@ pub struct ProviderProfile {
     pub opus_default: Option<String>,
     // Codex 配置字段
     pub codex_model: Option<String>,
+    // OpenCode 自定义 Provider 配置字段
+    pub opencode_provider_models: Option<String>,
+    pub opencode_provider_npm: Option<String>,
     // 元数据
     pub created_at: String,
     pub updated_at: String,
@@ -88,6 +139,8 @@ pub struct CreateProviderProfileInput {
     pub sonnet_default: Option<String>,
     pub opus_default: Option<String>,
     pub codex_model: Option<String>,
+    pub opencode_provider_models: Option<String>,
+    pub opencode_provider_npm: Option<String>,
 }
 
 /// 更新 Provider 配置输入
@@ -103,6 +156,8 @@ pub struct UpdateProviderProfileInput {
     pub sonnet_default: Option<String>,
     pub opus_default: Option<String>,
     pub codex_model: Option<String>,
+    pub opencode_provider_models: Option<String>,
+    pub opencode_provider_npm: Option<String>,
 }
 
 fn map_provider_profile_row(row: &Row<'_>) -> rusqlite::Result<ProviderProfile> {
@@ -120,8 +175,10 @@ fn map_provider_profile_row(row: &Row<'_>) -> rusqlite::Result<ProviderProfile> 
         sonnet_default: row.get(10)?,
         opus_default: row.get(11)?,
         codex_model: row.get(12)?,
-        created_at: row.get(13)?,
-        updated_at: row.get(14)?,
+        opencode_provider_models: row.get(13)?,
+        opencode_provider_npm: row.get(14)?,
+        created_at: row.get(15)?,
+        updated_at: row.get(16)?,
     })
 }
 
@@ -180,8 +237,8 @@ pub fn create_provider_profile(
     let now = now_rfc3339();
 
     conn.execute(
-        "INSERT INTO provider_profiles (id, name, cli_type, is_active, api_key, base_url, provider_name, main_model, reasoning_model, haiku_model, sonnet_default, opus_default, codex_model, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        "INSERT INTO provider_profiles (id, name, cli_type, is_active, api_key, base_url, provider_name, main_model, reasoning_model, haiku_model, sonnet_default, opus_default, codex_model, opencode_provider_models, opencode_provider_npm, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         rusqlite::params![
             &id,
             &input.name,
@@ -196,6 +253,8 @@ pub fn create_provider_profile(
             &input.sonnet_default,
             &input.opus_default,
             &input.codex_model,
+            &input.opencode_provider_models,
+            &input.opencode_provider_npm,
             &now,
             &now
         ],
@@ -216,6 +275,8 @@ pub fn create_provider_profile(
         sonnet_default: input.sonnet_default,
         opus_default: input.opus_default,
         codex_model: input.codex_model,
+        opencode_provider_models: input.opencode_provider_models,
+        opencode_provider_npm: input.opencode_provider_npm,
         created_at: now.clone(),
         updated_at: now,
     })
@@ -242,6 +303,11 @@ pub fn update_provider_profile(
     updates.push("sonnet_default", input.sonnet_default.is_some());
     updates.push("opus_default", input.opus_default.is_some());
     updates.push("codex_model", input.codex_model.is_some());
+    updates.push(
+        "opencode_provider_models",
+        input.opencode_provider_models.is_some(),
+    );
+    updates.push("opencode_provider_npm", input.opencode_provider_npm.is_some());
 
     let sql = updates.finish("provider_profiles", "id");
 
@@ -260,6 +326,18 @@ pub fn update_provider_profile(
     bind_optional(&mut stmt, &mut param_count, &input.sonnet_default).map_err(|e| e.to_string())?;
     bind_optional(&mut stmt, &mut param_count, &input.opus_default).map_err(|e| e.to_string())?;
     bind_optional(&mut stmt, &mut param_count, &input.codex_model).map_err(|e| e.to_string())?;
+    bind_optional(
+        &mut stmt,
+        &mut param_count,
+        &input.opencode_provider_models,
+    )
+    .map_err(|e| e.to_string())?;
+    bind_optional(
+        &mut stmt,
+        &mut param_count,
+        &input.opencode_provider_npm,
+    )
+    .map_err(|e| e.to_string())?;
     bind_value(&mut stmt, &mut param_count, &id).map_err(|e| e.to_string())?;
 
     stmt.raw_execute().map_err(|e| e.to_string())?;
@@ -312,6 +390,12 @@ pub fn update_current_cli_config(
     }
     if let Some(codex_model) = input.codex_model {
         profile.codex_model = Some(codex_model);
+    }
+    if let Some(opencode_provider_models) = input.opencode_provider_models {
+        profile.opencode_provider_models = Some(opencode_provider_models);
+    }
+    if let Some(opencode_provider_npm) = input.opencode_provider_npm {
+        profile.opencode_provider_npm = Some(opencode_provider_npm);
     }
 
     write_to_cli_config(&profile)?;
@@ -558,6 +642,10 @@ fn write_to_cli_config(profile: &ProviderProfile) -> Result<(), String> {
                 .map_err(|e| format!("Failed to create opencode config directory: {}", e))?;
 
             let config_path = config_dir.join("opencode.json");
+            let auth_dir = opencode_auth_dir()?;
+            fs::create_dir_all(&auth_dir)
+                .map_err(|e| format!("Failed to create opencode auth directory: {}", e))?;
+            let auth_path = auth_dir.join("auth.json");
 
             let mut config: serde_json::Value = if config_path.exists() {
                 let content = fs::read_to_string(&config_path)
@@ -567,54 +655,95 @@ fn write_to_cli_config(profile: &ProviderProfile) -> Result<(), String> {
                 serde_json::json!({})
             };
 
-            let provider_name = profile.provider_name.as_deref().unwrap_or("").to_string();
+            let provider_name = normalize_optional_text(profile.provider_name.as_deref());
+            let main_model = normalize_optional_text(profile.main_model.as_deref());
+            let base_url = normalize_optional_text(profile.base_url.as_deref());
+            let api_key = normalize_optional_text(profile.api_key.as_deref());
+            let provider_npm = normalize_optional_text(profile.opencode_provider_npm.as_deref())
+                .unwrap_or_else(|| OPENCODE_DEFAULT_PROVIDER_NPM.to_string());
+            let provider_models = parse_opencode_model_names(
+                profile.opencode_provider_models.as_deref(),
+                profile.main_model.as_deref(),
+            );
 
             if let Some(obj) = config.as_object_mut() {
-                if !provider_name.is_empty() {
-                    if let Some(ref main_model) = profile.main_model {
-                        if !main_model.is_empty() {
-                            obj.insert(
-                                "model".to_string(),
-                                serde_json::json!(format!("{}/{}", provider_name, main_model)),
+                if let (Some(provider_name), Some(main_model)) =
+                    (provider_name.as_ref(), main_model.as_ref())
+                {
+                    obj.insert(
+                        "model".to_string(),
+                        serde_json::json!(format!("{}/{}", provider_name, main_model)),
+                    );
+                }
+
+                if let Some(provider_name) = provider_name.as_ref() {
+                    let mut providers_map = parse_json_object_map(obj.get("provider"));
+                    let should_write_custom_provider =
+                        base_url.is_some() || !provider_models.is_empty();
+
+                    if should_write_custom_provider {
+                        let mut provider_config =
+                            parse_json_object_map(providers_map.get(provider_name));
+                        let mut provider_options =
+                            parse_json_object_map(provider_config.get("options"));
+
+                        if let Some(base_url) = base_url.as_ref() {
+                            provider_options
+                                .insert("baseURL".to_string(), serde_json::json!(base_url));
+                        } else {
+                            provider_options.remove("baseURL");
+                        }
+
+                        if let Some(api_key) = api_key.as_ref() {
+                            provider_options
+                                .insert("apiKey".to_string(), serde_json::json!(api_key));
+                        } else {
+                            provider_options.remove("apiKey");
+                        }
+
+                        if provider_options.is_empty() {
+                            provider_config.remove("options");
+                        } else {
+                            provider_config.insert(
+                                "options".to_string(),
+                                serde_json::Value::Object(provider_options),
                             );
                         }
-                    }
 
-                    let mut providers_map: serde_json::Map<String, serde_json::Value> = obj
-                        .remove("provider")
-                        .and_then(|v| {
-                            if v.is_object() {
-                                Some(v.as_object().unwrap().clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or_else(serde_json::Map::new);
+                        provider_config.insert(
+                            "npm".to_string(),
+                            serde_json::json!(provider_npm),
+                        );
 
-                    let mut provider_opts = serde_json::Map::new();
-                    if let Some(ref base_url) = profile.base_url {
-                        if !base_url.is_empty() {
-                            provider_opts
-                                .insert("baseURL".to_string(), serde_json::json!(base_url));
+                        let models_map = provider_models
+                            .iter()
+                            .map(|model| (model.clone(), serde_json::json!({ "name": model })))
+                            .collect::<serde_json::Map<String, serde_json::Value>>();
+
+                        if models_map.is_empty() {
+                            provider_config.remove("models");
+                        } else {
+                            provider_config.insert(
+                                "models".to_string(),
+                                serde_json::Value::Object(models_map),
+                            );
                         }
-                    }
 
-                    if !provider_opts.is_empty() {
                         providers_map.insert(
                             provider_name.clone(),
-                            serde_json::json!({ "options": provider_opts }),
+                            serde_json::Value::Object(provider_config),
                         );
                     } else {
-                        providers_map.remove(&provider_name);
+                        providers_map.remove(provider_name);
                     }
 
-                    if !providers_map.is_empty() {
+                    if providers_map.is_empty() {
+                        obj.remove("provider");
+                    } else {
                         obj.insert(
                             "provider".to_string(),
                             serde_json::Value::Object(providers_map),
                         );
-                    } else {
-                        obj.remove("provider");
                     }
                 }
             }
@@ -624,38 +753,30 @@ fn write_to_cli_config(profile: &ProviderProfile) -> Result<(), String> {
             fs::write(&config_path, content)
                 .map_err(|e| format!("Failed to write opencode.json: {}", e))?;
 
-            // 写入 API Key 到 auth.json
-            if let Some(ref api_key) = profile.api_key {
-                if !api_key.is_empty() && !provider_name.is_empty() {
-                    let auth_dir = opencode_auth_dir()?;
-                    fs::create_dir_all(&auth_dir)
-                        .map_err(|e| format!("Failed to create opencode auth directory: {}", e))?;
+            let mut auth: serde_json::Value = if auth_path.exists() {
+                let content = fs::read_to_string(&auth_path)
+                    .map_err(|e| format!("Failed to read auth.json: {}", e))?;
+                serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+            } else {
+                serde_json::json!({})
+            };
 
-                    let auth_path = auth_dir.join("auth.json");
-                    let mut auth: serde_json::Value = if auth_path.exists() {
-                        let content = fs::read_to_string(&auth_path)
-                            .map_err(|e| format!("Failed to read auth.json: {}", e))?;
-                        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
-                    } else {
-                        serde_json::json!({})
-                    };
-
-                    if let Some(auth_obj) = auth.as_object_mut() {
-                        auth_obj.insert(
-                            provider_name,
-                            serde_json::json!({
-                                "type": "api",
-                                "key": api_key
-                            }),
-                        );
-                    }
-
-                    let auth_content = serde_json::to_string_pretty(&auth)
-                        .map_err(|e| format!("Failed to serialize auth.json: {}", e))?;
-                    fs::write(&auth_path, auth_content)
-                        .map_err(|e| format!("Failed to write auth.json: {}", e))?;
+            if let (Some(provider_name), Some(api_key)) = (provider_name.as_ref(), api_key.as_ref()) {
+                if let Some(auth_obj) = auth.as_object_mut() {
+                    auth_obj.insert(
+                        provider_name.clone(),
+                        serde_json::json!({
+                            "type": "api",
+                            "key": api_key
+                        }),
+                    );
                 }
             }
+
+            let auth_content = serde_json::to_string_pretty(&auth)
+                .map_err(|e| format!("Failed to serialize auth.json: {}", e))?;
+            fs::write(&auth_path, auth_content)
+                .map_err(|e| format!("Failed to write auth.json: {}", e))?;
         }
         _ => {
             return Err(format!("Unknown CLI type: {}", profile.cli_type));
@@ -811,7 +932,6 @@ pub fn read_current_cli_config(cli_type: String) -> Result<ProviderProfile, Stri
             if config_path.exists() {
                 if let Ok(content) = fs::read_to_string(&config_path) {
                     if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
-                        // 解析 "providerID/modelID" 格式
                         if let Some(model_str) = config.get("model").and_then(|v| v.as_str()) {
                             if let Some(slash_pos) = model_str.find('/') {
                                 resolved_provider = Some(model_str[..slash_pos].to_string());
@@ -821,19 +941,34 @@ pub fn read_current_cli_config(cli_type: String) -> Result<ProviderProfile, Stri
                             }
                         }
 
-                        // 从 provider 覆盖配置读取 baseURL
-                        if let Some(ref pname) = resolved_provider {
-                            profile.provider_name = Some(pname.clone());
-                            if let Some(providers) =
-                                config.get("provider").and_then(|p| p.as_object())
-                            {
-                                if let Some(pcfg) = providers.get(pname) {
-                                    if let Some(opts) = pcfg.get("options") {
-                                        profile.base_url = opts
-                                            .get("baseURL")
-                                            .and_then(|v| v.as_str())
-                                            .map(|s| s.to_string());
+                        if let Some(providers) = config.get("provider").and_then(|p| p.as_object()) {
+                            if resolved_provider.is_none() {
+                                resolved_provider = providers.keys().next().cloned();
+                            }
+
+                            if let Some(ref pname) = resolved_provider {
+                                profile.provider_name = Some(pname.clone());
+
+                                if let Some(pcfg) = providers.get(pname).and_then(|value| value.as_object()) {
+                                    profile.opencode_provider_npm =
+                                        normalize_optional_text(pcfg.get("npm").and_then(|v| v.as_str()));
+
+                                    if let Some(opts) = pcfg.get("options").and_then(|value| value.as_object()) {
+                                        profile.base_url = normalize_optional_text(
+                                            opts.get("baseURL").and_then(|v| v.as_str()),
+                                        );
+                                        profile.api_key = normalize_optional_text(
+                                            opts.get("apiKey").and_then(|v| v.as_str()),
+                                        );
                                     }
+
+                                    let provider_models = pcfg
+                                        .get("models")
+                                        .and_then(|value| value.as_object())
+                                        .map(|models| models.keys().cloned().collect::<Vec<_>>())
+                                        .unwrap_or_default();
+                                    profile.opencode_provider_models =
+                                        serialize_opencode_model_names(&provider_models);
                                 }
                             }
                         }
@@ -847,11 +982,13 @@ pub fn read_current_cli_config(cli_type: String) -> Result<ProviderProfile, Stri
                     if let Ok(auth) = serde_json::from_str::<serde_json::Value>(&content) {
                         let provider_key = resolved_provider.as_deref().unwrap_or("");
                         if !provider_key.is_empty() {
-                            profile.api_key = auth
-                                .get(provider_key)
-                                .and_then(|p| p.get("key"))
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string());
+                            if profile.api_key.is_none() {
+                                profile.api_key = auth
+                                    .get(provider_key)
+                                    .and_then(|p| p.get("key"))
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string());
+                            }
                         }
 
                         // 如果没有解析到 provider，从 auth.json 取第一个
@@ -859,10 +996,12 @@ pub fn read_current_cli_config(cli_type: String) -> Result<ProviderProfile, Stri
                             if let Some(obj) = auth.as_object() {
                                 for (key, val) in obj {
                                     profile.provider_name = Some(key.clone());
-                                    profile.api_key = val
-                                        .get("key")
-                                        .and_then(|v| v.as_str())
-                                        .map(|s| s.to_string());
+                                    if profile.api_key.is_none() {
+                                        profile.api_key = val
+                                            .get("key")
+                                            .and_then(|v| v.as_str())
+                                            .map(|s| s.to_string());
+                                    }
                                     break;
                                 }
                             }
@@ -1087,16 +1226,29 @@ pub fn read_cli_connection_info(cli_type: String) -> Result<CliConnectionInfo, S
                             }
                         }
 
-                        if let Some(ref pname) = resolved_provider {
-                            if let Some(providers) =
-                                config.get("provider").and_then(|p| p.as_object())
-                            {
-                                if let Some(pcfg) = providers.get(pname) {
-                                    if let Some(opts) = pcfg.get("options") {
+                        if let Some(providers) = config.get("provider").and_then(|p| p.as_object()) {
+                            if resolved_provider.is_none() {
+                                resolved_provider = providers.keys().next().cloned();
+                            }
+
+                            if let Some(ref pname) = resolved_provider {
+                                if let Some(pcfg) =
+                                    providers.get(pname).and_then(|value| value.as_object())
+                                {
+                                    if let Some(opts) =
+                                        pcfg.get("options").and_then(|value| value.as_object())
+                                    {
                                         info.base_url = opts
                                             .get("baseURL")
                                             .and_then(|v| v.as_str())
                                             .map(|s| s.to_string());
+
+                                        if let Some(api_key) =
+                                            opts.get("apiKey").and_then(|v| v.as_str())
+                                        {
+                                            info.api_key = Some(api_key.to_string());
+                                            info.api_key_masked = Some(mask_api_key(api_key));
+                                        }
                                     }
                                 }
                             }
@@ -1107,12 +1259,11 @@ pub fn read_cli_connection_info(cli_type: String) -> Result<CliConnectionInfo, S
                 }
             }
 
-            // 从 auth.json 读取 API Key
             if auth_file.exists() {
                 if let Ok(content) = fs::read_to_string(&auth_file) {
                     if let Ok(auth) = serde_json::from_str::<serde_json::Value>(&content) {
                         let provider_key = resolved_provider.as_deref().unwrap_or("");
-                        if !provider_key.is_empty() {
+                        if !provider_key.is_empty() && info.api_key.is_none() {
                             if let Some(api_key) = auth
                                 .get(provider_key)
                                 .and_then(|p| p.get("key"))
@@ -1124,14 +1275,17 @@ pub fn read_cli_connection_info(cli_type: String) -> Result<CliConnectionInfo, S
                             }
                         }
 
-                        // 如果没有解析到 provider，从 auth.json 取第一个
                         if resolved_provider.is_none() {
                             if let Some(obj) = auth.as_object() {
                                 for (key, val) in obj {
                                     resolved_provider = Some(key.clone());
-                                    if let Some(api_key) = val.get("key").and_then(|v| v.as_str()) {
-                                        info.api_key = Some(api_key.to_string());
-                                        info.api_key_masked = Some(mask_api_key(api_key));
+                                    if info.api_key.is_none() {
+                                        if let Some(api_key) =
+                                            val.get("key").and_then(|v| v.as_str())
+                                        {
+                                            info.api_key = Some(api_key.to_string());
+                                            info.api_key_masked = Some(mask_api_key(api_key));
+                                        }
                                     }
                                     break;
                                 }
@@ -1146,9 +1300,7 @@ pub fn read_cli_connection_info(cli_type: String) -> Result<CliConnectionInfo, S
                 info.error_message = Some("未找到有效配置".to_string());
             }
 
-            if let Some(ref pname) = resolved_provider {
-                info.provider_name = Some(format_provider_display_name(pname));
-            }
+            info.provider_name = resolved_provider;
 
             Ok(info)
         }
@@ -1240,33 +1392,96 @@ pub struct OpenCodeAuthProvider {
     pub has_key: bool,
 }
 
-/// 通过 opencode CLI 获取所有支持的 Provider，并从 auth.json 判断是否已配置凭据
+fn load_opencode_config_json() -> Option<serde_json::Value> {
+    let config_path = opencode_config_dir().ok()?.join("opencode.json");
+    let content = fs::read_to_string(config_path).ok()?;
+    serde_json::from_str::<serde_json::Value>(&content).ok()
+}
+
+fn load_opencode_auth_json() -> Option<serde_json::Value> {
+    let auth_path = opencode_auth_dir().ok()?.join("auth.json");
+    let content = fs::read_to_string(auth_path).ok()?;
+    serde_json::from_str::<serde_json::Value>(&content).ok()
+}
+
+fn collect_opencode_provider_ids() -> Vec<String> {
+    let mut provider_set = std::collections::BTreeSet::new();
+
+    if let Ok(cli_provider_ids) = fetch_all_opencode_provider_ids() {
+        provider_set.extend(cli_provider_ids);
+    }
+
+    if let Some(config) = load_opencode_config_json() {
+        if let Some(model_str) = config.get("model").and_then(|value| value.as_str()) {
+            if let Some((provider, _)) = model_str.split_once('/') {
+                if !provider.trim().is_empty() {
+                    provider_set.insert(provider.trim().to_string());
+                }
+            }
+        }
+
+        if let Some(providers) = config.get("provider").and_then(|value| value.as_object()) {
+            provider_set.extend(
+                providers
+                    .keys()
+                    .map(|provider| provider.trim())
+                    .filter(|provider| !provider.is_empty())
+                    .map(ToOwned::to_owned),
+            );
+        }
+    }
+
+    if let Some(auth) = load_opencode_auth_json() {
+        if let Some(obj) = auth.as_object() {
+            provider_set.extend(
+                obj.keys()
+                    .map(|provider| provider.trim())
+                    .filter(|provider| !provider.is_empty())
+                    .map(ToOwned::to_owned),
+            );
+        }
+    }
+
+    provider_set.into_iter().collect()
+}
+
+fn load_configured_opencode_models(provider: &str) -> Vec<String> {
+    let Some(config) = load_opencode_config_json() else {
+        return Vec::new();
+    };
+
+    let Some(provider_config) = config
+        .get("provider")
+        .and_then(|value| value.get(provider))
+        .and_then(|value| value.as_object())
+    else {
+        return Vec::new();
+    };
+
+    provider_config
+        .get("models")
+        .and_then(|value| value.as_object())
+        .map(|models| models.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default()
+}
+
+/// 聚合 opencode CLI、opencode.json 与 auth.json 中的 Provider 信息
 #[tauri::command]
 pub fn read_opencode_auth_providers() -> Result<Vec<OpenCodeAuthProvider>, String> {
     let mut providers = Vec::new();
 
-    // 1. 从 opencode CLI 获取所有支持的 Provider ID（通过不带参数的 models 命令提取唯一前缀）
-    let all_provider_ids = fetch_all_opencode_provider_ids()?;
-
-    // 2. 从 auth.json 读取已配置凭据的 provider ID
-    let auth_dir = opencode_auth_dir()?;
-    let auth_path = auth_dir.join("auth.json");
+    let all_provider_ids = collect_opencode_provider_ids();
     let mut auth_keys_set: std::collections::HashSet<String> = std::collections::HashSet::new();
-    if auth_path.exists() {
-        if let Ok(content) = fs::read_to_string(&auth_path) {
-            if let Ok(auth) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(obj) = auth.as_object() {
-                    for (key, val) in obj {
-                        if val.get("key").and_then(|v| v.as_str()).is_some() {
-                            auth_keys_set.insert(key.clone());
-                        }
-                    }
+    if let Some(auth) = load_opencode_auth_json() {
+        if let Some(obj) = auth.as_object() {
+            for (key, val) in obj {
+                if val.get("key").and_then(|v| v.as_str()).is_some() {
+                    auth_keys_set.insert(key.clone());
                 }
             }
         }
     }
 
-    // 3. 生成 display name 并组装结果
     let display_names = build_provider_display_names(&all_provider_ids);
     for id in &all_provider_ids {
         let display_name = display_names.get(id).cloned().unwrap_or_else(|| id.clone());
@@ -1321,13 +1536,22 @@ fn build_provider_display_names(auth_keys: &[String]) -> std::collections::HashM
 /// 通过 opencode CLI 查询指定 Provider 可用的模型列表
 #[tauri::command]
 pub fn list_opencode_models(provider: String) -> Result<Vec<String>, String> {
-    let cli_path = crate::commands::cli_support::find_cli_executable("opencode", &[])
-        .ok_or_else(|| "未找到 opencode CLI".to_string())?;
+    let configured_models = load_configured_opencode_models(&provider);
+
+    let Some(cli_path) = crate::commands::cli_support::find_cli_executable("opencode", &[]) else {
+        if !configured_models.is_empty() {
+            return Ok(configured_models);
+        }
+        return Err("未找到 opencode CLI".to_string());
+    };
 
     let output = crate::commands::cli_support::run_cli_command(&cli_path, &["models", &provider])
         .map_err(|e| format!("执行 opencode models {} 失败: {}", provider, e))?;
 
     if !output.status.success() {
+        if !configured_models.is_empty() {
+            return Ok(configured_models);
+        }
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         return Err(format!("查询模型失败: {}", stderr.trim()));
     }
@@ -1346,6 +1570,10 @@ pub fn list_opencode_models(provider: String) -> Result<Vec<String>, String> {
             }
         })
         .collect();
+
+    if models.is_empty() && !configured_models.is_empty() {
+        return Ok(configured_models);
+    }
 
     Ok(models)
 }

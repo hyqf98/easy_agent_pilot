@@ -1702,12 +1702,27 @@ export default {
         // OpenCode Config
         opencodeConfig: 'OpenCode CLI Configuration',
         providerName: 'Provider',
+        opencodeProviderMode: 'Provider Type',
+        opencodeProviderModePreset: 'Built-in Provider',
+        opencodeProviderModeCustom: 'Custom Provider',
         opencodeProviderPlaceholder: 'Select provider',
+        opencodeCustomProviderPlaceholder: 'Enter provider ID, e.g. modelhub',
+        opencodeProvidersEmpty: 'No provider list available from OpenCode CLI. You can switch to custom provider mode and enter it manually.',
+        opencodeProvidersLoadFailed: 'Failed to load provider list: {error}',
+        opencodeBaseUrlPlaceholder: 'https://your-openai-compatible-endpoint/v1',
+        opencodeProviderModels: 'Provider Models',
+        opencodeProviderModelsPlaceholder: 'One model per line, e.g.\\nglm-5.1\\nglm-4.5-air',
+        opencodeProviderModelItemPlaceholder: 'Enter a model name, e.g. glm-5.1',
+        opencodeProviderModelsHint: 'These models will be written to the custom provider models map and can be used by OpenCode CLI for custom providers.',
+        opencodeProviderNpm: 'Provider Adapter Package',
+        opencodeProviderNpmHint: 'Keep the default OpenAI-compatible adapter unless your custom provider requires a different AI SDK package.',
         opencodeModelPlaceholder: 'provider/model-id (e.g., anthropic/claude-sonnet-4-5)',
         connected: 'Connected',
         other: 'Other',
         loadingModels: 'Loading models...',
-        modelHint: 'Enter API Key and save first, or type model name directly'
+        modelHint: 'Enter API Key and save first, or type model name directly',
+        opencodeCustomModelHint: 'For custom providers, you can type the main model directly. If provider.<id>.models is configured, the list will also appear here.',
+        opencodeModelsLoadFailed: 'Failed to load models: {error}'
       },
       // Messages
       messages: {
