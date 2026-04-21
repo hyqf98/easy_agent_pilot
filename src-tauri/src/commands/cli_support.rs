@@ -470,8 +470,6 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     #[cfg(unix)]
-    use std::path::PathBuf;
-    #[cfg(unix)]
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]

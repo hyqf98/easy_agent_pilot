@@ -144,7 +144,7 @@ export function useMessageComposer() {
   })
 
   const isSending = computed(() =>
-    currentSessionId.value ? sessionExecutionStore.getIsSending(currentSessionId.value) : false
+    currentSessionId.value ? sessionExecutionStore.getIsBusy(currentSessionId.value) : false
   )
 
   const pendingImages = computed(() =>
@@ -873,7 +873,11 @@ export function useMessageComposer() {
     }
   }
 
-  const handleMessageFormSubmit = async (formId: string, values: Record<string, unknown>) => {
+  const handleMessageFormSubmit = async (
+    formId: string,
+    values: Record<string, unknown>,
+    assistantMessageId?: string
+  ) => {
     if (!currentSessionId.value || !currentAgent.value || isSending.value) {
       return
     }
@@ -885,6 +889,7 @@ export function useMessageComposer() {
     }, null, 2)
 
     await sendWithCurrentAgent(payload, [])
+    void assistantMessageId
   }
 
   const handleKeyDown = (event: KeyboardEvent) => {

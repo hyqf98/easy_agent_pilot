@@ -76,6 +76,8 @@ const RETRYABLE_PATTERNS: &[&str] = &[
 ];
 
 const ERROR_CONTEXT_PATTERNS: &[&str] = &[
+    "api error",
+    "apl error",
     "error",
     "failed",
     "fatal",
@@ -194,9 +196,11 @@ fn starts_with_error_context(normalized: &str) -> bool {
 }
 
 fn has_structured_error_payload(normalized: &str) -> bool {
-    normalized.contains("{\"error\"")
-        || normalized.contains("\"error\":")
-        || normalized.contains("'error':")
+    let trimmed = normalized.trim_start();
+    trimmed.starts_with("{\"error\"")
+        || trimmed.starts_with("{'error'")
+        || trimmed.starts_with("[{\"error\"")
+        || trimmed.starts_with("[{'error'")
 }
 
 fn source_allows_retryable_match(source: CliTextSource, normalized: &str) -> bool {
@@ -249,7 +253,7 @@ mod tests {
     #[test]
     fn ignores_known_rmcp_warning() {
         assert!(is_shared_benign_stderr_warning(
-            "worker quit with fatal: Transport channel closed, when UnexpectedContentType(Missing-Content-Type)"
+            "rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedContentType(Missing-Content-Type)"
         ));
     }
 
@@ -270,5 +274,31 @@ mod tests {
 
         let failure = classify_cli_completion("OpenCode", &fragments, false);
         assert!(failure.is_none());
+    }
+
+    #[test]
+    fn does_not_treat_tool_output_source_code_as_failure() {
+        let fragments = vec![CliTextFragment::new(
+            CliTextSource::ToolResult,
+            "command: /bin/zsh -lc 'nl -ba src/services/conversation/ConversationService.ts'\nstatus: completed\nexit_code: 0\nif (normalizedEvent.error) {\n  onError(normalizedEvent.error)\n}\nconst timeoutConfig = detectTimeout(config)\n",
+        )
+        .expect("fragment")];
+
+        let failure = classify_cli_completion("Codex", &fragments, false);
+        assert!(failure.is_none());
+    }
+
+    #[test]
+    fn still_classifies_api_error_prefix_with_json_payload() {
+        let fragments = vec![CliTextFragment::new(
+            CliTextSource::ToolResult,
+            r#"API Error: 429 {"error":{"code":"1302","message":"您的账户已达到速率限制，请您控制请求频率"}}"#,
+        )
+        .expect("fragment")];
+
+        let failure =
+            classify_cli_completion("OpenCode", &fragments, false).expect("should classify");
+
+        assert_eq!(failure.kind, CliCompletionFailureKind::Retryable);
     }
 }

@@ -55,6 +55,8 @@ const RETRYABLE_PATTERNS = [
 ]
 
 const ERROR_CONTEXT_PATTERNS = [
+  'api error',
+  'apl error',
   'error',
   'failed',
   'fatal',
@@ -93,9 +95,11 @@ function startsWithErrorContext(normalized: string): boolean {
 }
 
 function hasStructuredErrorPayload(normalized: string): boolean {
-  return normalized.includes('{"error"')
-    || normalized.includes('"error":')
-    || normalized.includes("'error':")
+  const trimmed = normalized.trimStart()
+  return trimmed.startsWith('{"error"')
+    || trimmed.startsWith("{'error'")
+    || trimmed.startsWith('[{"error"')
+    || trimmed.startsWith("[{'error'")
 }
 
 function sourceAllowsRetryableMatch(

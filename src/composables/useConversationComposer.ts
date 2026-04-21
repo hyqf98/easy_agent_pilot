@@ -358,7 +358,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
   })
 
   const isSending = computed(() =>
-    currentSessionId.value ? sessionExecutionStore.getIsSending(currentSessionId.value) : false
+    currentSessionId.value ? sessionExecutionStore.getIsBusy(currentSessionId.value) : false
   )
 
   const pendingImages = computed(() =>
@@ -1786,6 +1786,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     options?: {
       displayPreviewContent?: string
       memoryReferences?: ComposerMemoryReference[]
+      reuseAssistantMessageId?: string
     }
   ): Promise<boolean> => {
     const sessionId = currentSessionId.value
@@ -1828,7 +1829,8 @@ export function useConversationComposer(options: UseConversationComposerOptions)
             buildExpertSystemPrompt(expert.prompt)
           ],
           previewContent: options?.displayPreviewContent,
-          memoryReferencesToPersist: options?.memoryReferences ?? []
+          memoryReferencesToPersist: options?.memoryReferences ?? [],
+          reuseAssistantMessageId: options?.reuseAssistantMessageId
         }
       )
       return true
@@ -2043,7 +2045,11 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     }
   }
 
-  const handleMessageFormSubmit = async (formId: string, values: Record<string, unknown>) => {
+  const handleMessageFormSubmit = async (
+    formId: string,
+    values: Record<string, unknown>,
+    assistantMessageId?: string
+  ) => {
     if (!currentSessionId.value || !currentAgent.value || isSending.value || isCurrentSessionDispatching.value) {
       return
     }
@@ -2054,7 +2060,9 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       values
     }, null, 2)
 
-    await sendWithCurrentAgent(payload, [])
+    await sendWithCurrentAgent(payload, [], {
+      reuseAssistantMessageId: assistantMessageId
+    })
   }
 
   const handleKeyDown = (event: KeyboardEvent) => {

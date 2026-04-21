@@ -40,6 +40,7 @@ const {
   isAssistant,
   isCompression,
   isStreaming,
+  isCurrentStreamingMessage,
   isError,
   isInterrupted,
   canRetry,
@@ -349,7 +350,7 @@ const {
         </span>
         <!-- 停止按钮 - 仅在流式输出时显示 -->
         <button
-          v-if="isAssistant && isStreaming"
+          v-if="isAssistant && isStreaming && isCurrentStreamingMessage"
           class="message-bubble__stop"
           :title="t('common.stop')"
           @click="handleStop"

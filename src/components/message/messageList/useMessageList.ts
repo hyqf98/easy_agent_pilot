@@ -1,4 +1,4 @@
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch, type ComponentPublicInstance } from 'vue'
 import { useMessageStore, type Message } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import { useSessionExecutionStore } from '@/stores/sessionExecution'
@@ -23,7 +23,7 @@ export interface MessageListProps {
 
 export interface MessageListEmits {
   (event: 'retry', message: Message): void
-  (event: 'formSubmit', formId: string, values: Record<string, unknown>): void
+  (event: 'formSubmit', formId: string, values: Record<string, unknown>, assistantMessageId?: string): void
   (event: 'openEditTrace', messageId: string, traceId: string): void
 }
 
@@ -299,10 +299,10 @@ export function useMessageList(props: MessageListProps, emit: MessageListEmits) 
     showScrollToBottom.value = false
   }
 
-  function bindMessageElement(messageId: string, element: Element | null) {
+  function bindMessageElement(messageId: string, element: Element | ComponentPublicInstance | null) {
     const existingObserver = resizeObservers.get(messageId)
 
-    if (!element || !(element instanceof HTMLElement)) {
+    if (!(element instanceof HTMLElement)) {
       existingObserver?.disconnect()
       resizeObservers.delete(messageId)
       return
@@ -328,8 +328,12 @@ export function useMessageList(props: MessageListProps, emit: MessageListEmits) 
     emit('retry', message)
   }
 
-  function handleFormSubmit(formId: string, values: Record<string, unknown>) {
-    emit('formSubmit', formId, values)
+  function handleFormSubmit(
+    formId: string,
+    values: Record<string, unknown>,
+    assistantMessageId?: string
+  ) {
+    emit('formSubmit', formId, values, assistantMessageId)
   }
 
   function handleOpenEditTrace(messageId: string, traceId: string) {

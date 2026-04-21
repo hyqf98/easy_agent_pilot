@@ -16,7 +16,11 @@ import { useOverlayDismiss } from '@/composables/useOverlayDismiss'
 export function useMessageArea() {
   type ComposerExposed = ComponentPublicInstance & {
     focusInput: () => void
-    handleMessageFormSubmit: (formId: string, values: Record<string, unknown>) => Promise<void>
+    handleMessageFormSubmit: (
+      formId: string,
+      values: Record<string, unknown>,
+      assistantMessageId?: string
+    ) => Promise<void>
     retryMessage: (
       messageId: string,
       content: string,
@@ -307,8 +311,12 @@ export function useMessageArea() {
     showCompressionDialog.value = false
   }
 
-  const handleMessageFormSubmit = async (formId: string, values: Record<string, unknown>) => {
-    await composerRef.value?.handleMessageFormSubmit(formId, values)
+  const handleMessageFormSubmit = async (
+    formId: string,
+    values: Record<string, unknown>,
+    assistantMessageId?: string
+  ) => {
+    await composerRef.value?.handleMessageFormSubmit(formId, values, assistantMessageId)
   }
 
   watch(() => sessionStore.currentSessionId, (sessionId) => {

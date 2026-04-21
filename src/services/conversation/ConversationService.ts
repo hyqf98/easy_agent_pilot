@@ -137,6 +137,77 @@ function isCumulativeUsageRuntime(provider?: string | null): boolean {
   return normalized.includes('codex') || normalized.includes('opencode')
 }
 
+function isSnapshotProneContentRuntime(provider?: string | null): boolean {
+  const normalized = provider?.trim().toLowerCase() ?? ''
+  return normalized.includes('opencode')
+}
+
+function findTextOverlapLength(left: string, right: string): number {
+  const maxLength = Math.min(left.length, right.length)
+  for (let length = maxLength; length > 0; length -= 1) {
+    if (left.endsWith(right.slice(0, length))) {
+      return length
+    }
+  }
+  return 0
+}
+
+function mergeStreamingText(current: string, incoming: string, provider?: string | null): string {
+  if (!incoming) {
+    return current
+  }
+
+  if (!current || !isSnapshotProneContentRuntime(provider)) {
+    return current + incoming
+  }
+
+  if (incoming === current || current.endsWith(incoming)) {
+    return current
+  }
+
+  if (incoming.startsWith(current) || incoming.includes(current)) {
+    return incoming
+  }
+
+  const overlapLength = findTextOverlapLength(current, incoming)
+  return overlapLength > 0
+    ? current + incoming.slice(overlapLength)
+    : current + incoming
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value)
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map(item => stableStringify(item)).join(',')}]`
+  }
+
+  const record = value as Record<string, unknown>
+  return `{${Object.keys(record)
+    .sort()
+    .map(key => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
+    .join(',')}}`
+}
+
+function hashString(value: string): string {
+  let hash = 5381
+  for (let index = 0; index < value.length; index += 1) {
+    hash = ((hash << 5) + hash) ^ value.charCodeAt(index)
+  }
+  return (hash >>> 0).toString(36)
+}
+
+function resolveToolCallId(event: StreamEvent): string {
+  const normalizedId = event.toolCallId?.trim()
+  if (normalizedId) {
+    return normalizedId
+  }
+
+  return `tool-${hashString(`${event.toolName ?? ''}:${stableStringify(event.toolInput ?? {})}`)}`
+}
+
 /**
  * 对话服务
  * 封装消息发送逻辑，处理流式事件更新
@@ -211,6 +282,7 @@ export class ConversationService {
       previewContent?: string
       memoryReferencesToPersist?: ComposerMemoryReference[]
       existingUserMessageId?: string
+      reuseAssistantMessageId?: string
     }
   ): Promise<void> {
     const messageStore = useMessageStore()
@@ -292,13 +364,32 @@ export class ConversationService {
         }
       }
 
-      // 创建流式 AI 响应消息
-      const aiMessage = await messageStore.addMessage({
+      const reuseAssistantMessageId = options?.reuseAssistantMessageId?.trim()
+      const reusableAssistantMessage = reuseAssistantMessageId
+        ? messageStore.messagesBySession(sessionId).find(message =>
+            message.id === reuseAssistantMessageId
+            && message.role === 'assistant'
+            && message.status !== 'streaming'
+          )
+        : undefined
+
+      const aiMessage = reusableAssistantMessage ?? await messageStore.addMessage({
         sessionId,
         role: 'assistant',
         content: '',
         status: 'streaming'
       })
+
+      if (reusableAssistantMessage) {
+        await messageStore.updateMessage(reusableAssistantMessage.id, {
+          status: 'streaming',
+          thinking: '',
+          thinkingActive: false,
+          toolCalls: [],
+          editTraces: [],
+          errorMessage: ''
+        })
+      }
 
       const usageModelHint = await resolveUsageModelHint(agent)
       const executionAgent = (!agent.modelId?.trim() && usageModelHint)
@@ -507,7 +598,7 @@ export class ConversationService {
     }
 
     const sessionExecutionStore = useSessionExecutionStore()
-    if (sessionExecutionStore.getIsSending(sessionId)) {
+    if (sessionExecutionStore.getIsBusy(sessionId)) {
       return
     }
 
@@ -517,6 +608,7 @@ export class ConversationService {
     }
 
     this.queueDrainLocks.add(sessionId)
+    sessionExecutionStore.setIsQueueDraining(sessionId, true)
 
     try {
       const sessionStore = useSessionStore()
@@ -555,13 +647,14 @@ export class ConversationService {
       notificationStore.smartError('发送待发送消息', error instanceof Error ? error : new Error(errorMessage))
     } finally {
       this.queueDrainLocks.delete(sessionId)
+      sessionExecutionStore.setIsQueueDraining(sessionId, false)
 
       const hasPendingQueuedMessages = sessionExecutionStore
         .getExecutionState(sessionId)
         .queuedMessages
         .some(draft => draft.status === 'queued')
 
-      if (!sessionExecutionStore.getIsSending(sessionId) && hasPendingQueuedMessages) {
+      if (!sessionExecutionStore.getIsBusy(sessionId) && hasPendingQueuedMessages) {
         queueMicrotask(() => {
           void this.processQueuedMessages(sessionId)
         })
@@ -776,7 +869,9 @@ export class ConversationService {
       this.usageBaselines.delete(sessionId)
     }
 
-    let accumulatedContent = ''
+    let accumulatedContent = aiMessage.content
+      ? `${aiMessage.content.trimEnd()}\n\n`
+      : ''
     let accumulatedThinking = ''
     const toolCalls: ToolCall[] = []
     const editTraces: FileEditTrace[] = []
@@ -1135,7 +1230,7 @@ export class ConversationService {
           toolCalls,
           onContent: (content) => {
             markMetric('firstContentAt')
-            accumulatedContent += content
+            accumulatedContent = mergeStreamingText(accumulatedContent, content, runtimeProvider)
             // 流式输出期间估算 output tokens（CLI 不在 content 事件中携带 token 数据）
             const estimatedOutputTokens = Math.ceil(accumulatedContent.length / 4)
             if ((usageState.outputTokens ?? 0) < estimatedOutputTokens) {
@@ -1149,7 +1244,7 @@ export class ConversationService {
           },
           onThinking: (thinking) => {
             markMetric('firstThinkingAt')
-            accumulatedThinking += thinking
+            accumulatedThinking = mergeStreamingText(accumulatedThinking, thinking, runtimeProvider)
             bufferMessageUpdate({
               thinking: accumulatedThinking,
               thinkingActive: true
@@ -1164,17 +1259,32 @@ export class ConversationService {
             markMetric('firstToolAt')
             // 添加或更新工具调用
             const existingIndex = toolCalls.findIndex(tc => tc.id === toolCall.id)
+            let isNewToolCall = false
             if (existingIndex >= 0) {
-              toolCalls[existingIndex] = toolCall
+              const existingToolCall = toolCalls[existingIndex]
+              const finalizedStatus = existingToolCall.status === 'success' || existingToolCall.status === 'error'
+                ? existingToolCall.status
+                : toolCall.status
+              toolCalls[existingIndex] = {
+                ...existingToolCall,
+                ...toolCall,
+                arguments: mergeToolInputArguments(existingToolCall.arguments, toolCall.arguments),
+                status: finalizedStatus,
+                result: existingToolCall.result,
+                errorMessage: existingToolCall.errorMessage
+              }
             } else {
               toolCalls.push(toolCall)
+              isNewToolCall = true
             }
             bufferMessageUpdate({
               toolCalls: [...toolCalls]
             })
-            registerTraceTask((async () => {
-              await fileTraceCollector.captureToolUse(toolCall)
-            })())
+            if (isNewToolCall) {
+              registerTraceTask((async () => {
+                await fileTraceCollector.captureToolUse(toolCall)
+              })())
+            }
           },
           onToolInputDelta: (toolCallId, toolInput) => {
             const targetToolCall = (toolCallId
@@ -1238,10 +1348,10 @@ export class ConversationService {
               usageState.model = normalizedUsageModel
             }
             if (usage.inputTokens !== undefined) {
-              usageState.inputTokens = usage.inputTokens
+              usageState.inputTokens = Math.max(usageState.inputTokens ?? 0, usage.inputTokens)
             }
             if (usage.outputTokens !== undefined) {
-              usageState.outputTokens = usage.outputTokens
+              usageState.outputTokens = Math.max(usageState.outputTokens ?? 0, usage.outputTokens)
             }
 
             syncRealtimeUsageNotice()
@@ -1464,6 +1574,8 @@ export class ConversationService {
       this.conversationRetryTimers.delete(sessionId)
 
       const messageStore = useMessageStore()
+      const sessionExecutionStore = useSessionExecutionStore()
+      sessionExecutionStore.setIsAwaitingRetry(sessionId, false)
       const currentMessage = messageStore.messagesBySession(sessionId)
         .find(message => message.id === aiMessage.id)
       if (!currentMessage || currentMessage.status === 'interrupted') {
@@ -1482,7 +1594,6 @@ export class ConversationService {
           errorMessage: '',
           status: 'streaming'
         })
-        const sessionExecutionStore = useSessionExecutionStore()
         sessionExecutionStore.startSending(sessionId)
         await this.executeConversation(context, aiMessage, sessionId, projectId)
       } catch (retryError) {
@@ -1495,6 +1606,7 @@ export class ConversationService {
       }
     }, intervalMinutes * 60 * 1000)
 
+    useSessionExecutionStore().setIsAwaitingRetry(sessionId, true)
     this.conversationRetryTimers.set(sessionId, timer)
   }
 
@@ -1508,6 +1620,7 @@ export class ConversationService {
 
   private clearConversationRetryState(sessionId: string): void {
     this.cancelConversationAutoRetry(sessionId)
+    useSessionExecutionStore().setIsAwaitingRetry(sessionId, false)
     this.conversationRetryCount.delete(sessionId)
   }
 
@@ -1596,8 +1709,7 @@ export class ConversationService {
 
       case 'tool_use':
         if (normalizedEvent.toolName) {
-          // 如果 toolCallId 为空，生成一个唯一的备用 ID
-          const toolCallId = normalizedEvent.toolCallId || `tool-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+          const toolCallId = resolveToolCallId(normalizedEvent)
           const toolCall: ToolCall = {
             id: toolCallId,
             name: normalizedEvent.toolName,
@@ -1623,7 +1735,7 @@ export class ConversationService {
         } else {
           console.warn('[ConversationService] tool_result 事件缺少 toolCallId，尝试匹配最后一个工具调用')
           // 如果没有 toolCallId，尝试更新最后一个 running 状态的工具调用
-          const lastRunningTool = handlers.toolCalls.find(tc => tc.status === 'running')
+          const lastRunningTool = [...handlers.toolCalls].reverse().find(tc => tc.status === 'running')
           if (lastRunningTool && normalizedEvent.toolResult) {
             const result = typeof normalizedEvent.toolResult === 'string'
               ? normalizedEvent.toolResult
@@ -1686,7 +1798,15 @@ export class ConversationService {
     const sessionExecutionStore = useSessionExecutionStore()
 
     if (sessionId) {
+      this.clearConversationRetryState(sessionId)
+
       // 中断指定会话
+      const streamingMessageId = sessionExecutionStore.getExecutionState(sessionId).currentStreamingMessageId
+      if (messageId && streamingMessageId && messageId !== streamingMessageId) {
+        void messageStore.updateMessage(messageId, { status: 'interrupted' })
+        return
+      }
+
       // 1. 调用 AgentExecutor 中断策略
       agentExecutor.abort(sessionId)
 
@@ -1695,7 +1815,6 @@ export class ConversationService {
         messageStore.updateMessage(messageId, { status: 'interrupted' })
       } else {
         // 如果没有传入 messageId，从 sessionExecutionStore 获取当前流式消息 ID
-        const streamingMessageId = sessionExecutionStore.getExecutionState(sessionId).currentStreamingMessageId
         if (streamingMessageId) {
           messageStore.updateMessage(streamingMessageId, { status: 'interrupted' })
         }

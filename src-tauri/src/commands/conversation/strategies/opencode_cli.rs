@@ -181,10 +181,11 @@ fn collect_event_fragments(event: &CliStreamEvent) -> Vec<CliTextFragment> {
 fn should_use_prompt_file(_request: &ExecutionRequest, input_text: &str) -> bool {
     #[cfg(target_os = "windows")]
     {
-        return matches!(
-            _request.execution_mode.as_deref(),
-            Some("task_split" | "task_execution" | "solo_execution")
-        ) || input_text.chars().count() > 4_000;
+        // Windows 下 opencode 的 npm/cmd 包装层在 `-f <temp prompt>` 场景会出现
+        // task_split 直接退出（主会话走 stdin 正常）。为了统一稳定行为，
+        // Windows 始终优先使用 stdin 传递提示词，仅保留图片附件走 `-f`。
+        let _ = (_request, input_text);
+        return false;
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -1691,11 +1692,13 @@ fn parse_opencode_json_output(
             .or_else(|| json.pointer("/properties/part"))
             .or_else(|| json.pointer("/data/part"))
             .and_then(|part| parse_opencode_part_event(session_id, part)),
-        "message.created" | "message.updated" | "message.completed" => {
-            parse_opencode_message_payload(session_id, json)
-        }
+        // OpenCode 长任务期间会频繁推送整条 assistant message 的快照。
+        // 前端真实增量由 message.part.* 事件消费；这里如果继续透传 created/updated，
+        // 会把整段内容和工具快照重复追加，造成重复回复和工具数量暴涨。
+        "message.created" | "message.updated" => None,
+        "message.completed" => parse_opencode_message_payload(session_id, json),
         // OpenCode pubsub 消息更新事件 {"type":"updated","payload":{"Role":"assistant","Parts":[...]}}
-        "created" | "updated" => parse_opencode_message_payload(session_id, json),
+        "created" | "updated" => None,
         // item 事件（OpenCode 特有）
         "item.started" | "item.completed" | "item.delta" => {
             let item_type = json

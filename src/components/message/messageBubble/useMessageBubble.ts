@@ -4,6 +4,7 @@ import { EaIcon } from '@/components/common'
 import { conversationService } from '@/services/conversation'
 import type { Message } from '@/stores/message'
 import { useMessageStore } from '@/stores/message'
+import { useSessionExecutionStore } from '@/stores/sessionExecution'
 import { useTokenStore } from '@/stores/token'
 import { FILE_MENTION_PATTERN, getMentionDisplayText } from '@/utils/fileMention'
 import {
@@ -21,7 +22,7 @@ export interface MessageBubbleProps {
 
 export interface MessageBubbleEmits {
   (event: 'retry', message: Message): void
-  (event: 'formSubmit', formId: string, values: Record<string, unknown>): void
+  (event: 'formSubmit', formId: string, values: Record<string, unknown>, assistantMessageId?: string): void
   (event: 'openEditTrace', messageId: string, traceId: string): void
 }
 
@@ -37,6 +38,7 @@ interface MessagePart {
 export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleEmits) {
   const { t, locale } = useI18n()
   const messageStore = useMessageStore()
+  const sessionExecutionStore = useSessionExecutionStore()
   const tokenStore = useTokenStore()
   const nowTick = ref(Date.now())
   const areToolCallsExpanded = ref(false)
@@ -46,6 +48,13 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
   const isAssistant = computed(() => props.message.role === 'assistant')
   const isCompression = computed(() => props.message.role === 'compression')
   const isStreaming = computed(() => props.message.status === 'streaming')
+  const isCurrentStreamingMessage = computed(() => {
+    if (!props.sessionId || !isStreaming.value) {
+      return false
+    }
+
+    return sessionExecutionStore.getExecutionState(props.sessionId).currentStreamingMessageId === props.message.id
+  })
   const isError = computed(() => props.message.status === 'error')
   const isInterrupted = computed(() => props.message.status === 'interrupted')
   const canRetry = computed(() => isError.value || isInterrupted.value)
@@ -368,7 +377,7 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
   })
 
   function handleStop() {
-    if (props.message.status === 'streaming' && props.sessionId) {
+    if (props.message.status === 'streaming' && props.sessionId && isCurrentStreamingMessage.value) {
       conversationService.abort(props.sessionId, props.message.id)
     }
   }
@@ -378,7 +387,7 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
   }
 
   function handleFormSubmit(formId: string, values: Record<string, unknown>) {
-    emit('formSubmit', formId, values)
+    emit('formSubmit', formId, values, props.message.id)
   }
 
   function handleOpenEditTrace(traceId: string) {
@@ -443,6 +452,7 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
     isAssistant,
     isCompression,
     isStreaming,
+    isCurrentStreamingMessage,
     isError,
     isInterrupted,
     canRetry,

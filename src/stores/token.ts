@@ -83,6 +83,17 @@ function resolvePreferredTokenTotal(options: {
   return estimatedTokens
 }
 
+function resolveNonDecreasingTokenValue(
+  currentValue: number,
+  nextValue: number | undefined
+): number {
+  if (typeof nextValue !== 'number') {
+    return currentValue
+  }
+
+  return Math.max(currentValue, nextValue)
+}
+
 function estimateMessageTokens(content: string): number {
   const normalized = content.trim()
   if (!normalized) {
@@ -252,8 +263,12 @@ export const useTokenStore = defineStore('token', () => {
     if (inputTokens === undefined && outputTokens === undefined && !model) return
     const existing = realtimeTokens.value.get(sessionId) || { inputTokens: 0, outputTokens: 0 }
     const incomingHasUsage = (inputTokens ?? 0) > 0 || (outputTokens ?? 0) > 0
-    const nextInputTokens = incomingHasUsage ? (inputTokens ?? 0) : existing.inputTokens
-    const nextOutputTokens = incomingHasUsage ? (outputTokens ?? 0) : existing.outputTokens
+    const nextInputTokens = incomingHasUsage
+      ? resolveNonDecreasingTokenValue(existing.inputTokens, inputTokens)
+      : existing.inputTokens
+    const nextOutputTokens = incomingHasUsage
+      ? resolveNonDecreasingTokenValue(existing.outputTokens, outputTokens)
+      : existing.outputTokens
 
     realtimeTokens.value = replaceMapEntry(realtimeTokens.value, sessionId, {
       inputTokens: nextInputTokens,

@@ -68,6 +68,10 @@ export interface SessionExecutionState {
   isUploadingImages: boolean
   /** 是否正在发送消息 */
   isSending: boolean
+  /** 是否正在从待发送队列接力发起下一条消息 */
+  isQueueDraining: boolean
+  /** 是否正在等待自动重试 */
+  isAwaitingRetry: boolean
   /** 是否正在流式输出 */
   isStreaming: boolean
   /** 流式输出定时器 ID */
@@ -131,6 +135,25 @@ export const useSessionExecutionStore = defineStore('sessionExecution', () => {
     }
   })
 
+  const getIsQueueDraining = computed(() => {
+    return (sessionId: string) => {
+      return getExecutionState(sessionId).isQueueDraining
+    }
+  })
+
+  const getIsAwaitingRetry = computed(() => {
+    return (sessionId: string) => {
+      return getExecutionState(sessionId).isAwaitingRetry
+    }
+  })
+
+  const getIsBusy = computed(() => {
+    return (sessionId: string) => {
+      const state = getExecutionState(sessionId)
+      return state.isSending || state.isQueueDraining || state.isAwaitingRetry
+    }
+  })
+
   const getPendingImages = computed(() => {
     return (sessionId: string) => {
       return getExecutionState(sessionId).pendingImages
@@ -176,6 +199,8 @@ export const useSessionExecutionStore = defineStore('sessionExecution', () => {
       pendingImages: [],
       isUploadingImages: false,
       isSending: false,
+      isQueueDraining: false,
+      isAwaitingRetry: false,
       isStreaming: false,
       streamTimerId: null,
       currentStreamingMessageId: null,
@@ -443,6 +468,16 @@ export const useSessionExecutionStore = defineStore('sessionExecution', () => {
     state.isSending = sending
   }
 
+  function setIsQueueDraining(sessionId: string, draining: boolean) {
+    const state = getExecutionState(sessionId)
+    state.isQueueDraining = draining
+  }
+
+  function setIsAwaitingRetry(sessionId: string, awaiting: boolean) {
+    const state = getExecutionState(sessionId)
+    state.isAwaitingRetry = awaiting
+  }
+
   /**
    * 设置流式输出状态
    */
@@ -473,6 +508,8 @@ export const useSessionExecutionStore = defineStore('sessionExecution', () => {
   function startSending(sessionId: string) {
     const state = getExecutionState(sessionId)
     state.isSending = true
+    state.isQueueDraining = false
+    state.isAwaitingRetry = false
     state.isStreaming = true
   }
 
@@ -482,6 +519,7 @@ export const useSessionExecutionStore = defineStore('sessionExecution', () => {
   function endSending(sessionId: string) {
     const state = getExecutionState(sessionId)
     state.isSending = false
+    state.isQueueDraining = false
     state.isUploadingImages = false
     state.isStreaming = false
     state.streamTimerId = null
@@ -502,6 +540,7 @@ export const useSessionExecutionStore = defineStore('sessionExecution', () => {
 
     // 重置状态
     state.isSending = false
+    state.isQueueDraining = false
     state.isStreaming = false
     state.currentStreamingMessageId = null
   }
@@ -540,7 +579,7 @@ export const useSessionExecutionStore = defineStore('sessionExecution', () => {
    */
   const hasAnyRunningSession = computed(() => {
     for (const state of executionStates.value.values()) {
-      if (state.isSending || state.isStreaming) {
+      if (state.isSending || state.isStreaming || state.isAwaitingRetry) {
         return true
       }
     }
@@ -553,7 +592,7 @@ export const useSessionExecutionStore = defineStore('sessionExecution', () => {
   const runningSessionIds = computed(() => {
     const ids: string[] = []
     executionStates.value.forEach((state, sessionId) => {
-      if (state.isSending || state.isStreaming) {
+      if (state.isSending || state.isStreaming || state.isAwaitingRetry) {
         ids.push(sessionId)
       }
     })
@@ -575,6 +614,9 @@ export const useSessionExecutionStore = defineStore('sessionExecution', () => {
     getQueuedMessages,
     getIsUploadingImages,
     getIsSending,
+    getIsQueueDraining,
+    getIsAwaitingRetry,
+    getIsBusy,
     getIsStreaming,
     hasAnyRunningSession,
     runningSessionIds,
@@ -606,6 +648,8 @@ export const useSessionExecutionStore = defineStore('sessionExecution', () => {
     retryQueuedMessage,
     setIsUploadingImages,
     setIsSending,
+    setIsQueueDraining,
+    setIsAwaitingRetry,
     setIsStreaming,
     setStreamTimerId,
     setCurrentStreamingMessageId,
