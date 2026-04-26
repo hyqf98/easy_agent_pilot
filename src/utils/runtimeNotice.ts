@@ -265,6 +265,12 @@ export function isProcessingTimeRuntimeNotice(
   return resolveRuntimeNoticeDescriptor(notice)?.id === 'processing-time'
 }
 
+export function isEnvironmentRuntimeNotice(
+  notice: Pick<RuntimeNotice, 'id' | 'title'>
+): boolean {
+  return resolveRuntimeNoticeDescriptor(notice)?.id === 'environment'
+}
+
 function inferRuntimeNoticeId(title: string): string {
   return resolveRuntimeNoticeDescriptor({ id: '', title })?.id ?? 'system'
 }

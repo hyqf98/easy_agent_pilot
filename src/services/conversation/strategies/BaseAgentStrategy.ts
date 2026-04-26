@@ -24,7 +24,12 @@ interface ExecutionEventState {
   sawMeaningfulOutput: boolean
   sawDone: boolean
   sawError: boolean
+  lastEventAt: number
 }
+
+const QUIET_WAIT_AFTER_STREAM_EVENT_MS = 1500
+const QUIET_WAIT_WITH_OUTPUT_MS = 5000
+const MAX_TERMINAL_EVENT_WAIT_MS = 30000
 
 interface ActiveExecution {
   runId: symbol
@@ -302,7 +307,8 @@ export abstract class BaseAgentStrategy implements AgentStrategy {
       eventState: {
         sawMeaningfulOutput: false,
         sawDone: false,
-        sawError: false
+        sawError: false,
+        lastEventAt: Date.now()
       },
       unlistenStream: null
     }
@@ -325,24 +331,36 @@ export abstract class BaseAgentStrategy implements AgentStrategy {
       case 'tool_result':
       case 'file_edit':
         state.sawMeaningfulOutput = true
+        state.lastEventAt = Date.now()
         break
       case 'error':
         state.sawError = true
+        state.lastEventAt = Date.now()
         break
       case 'done':
         state.sawDone = true
+        state.lastEventAt = Date.now()
         break
       default:
+        state.lastEventAt = Date.now()
         break
     }
   }
 
   private async waitForTerminalEvent(state: ExecutionEventState): Promise<void> {
-    const deadline = Date.now() + (state.sawMeaningfulOutput ? 5000 : 1500)
-    while (Date.now() < deadline) {
+    const startedAt = Date.now()
+    while (Date.now() - startedAt < MAX_TERMINAL_EVENT_WAIT_MS) {
       if (state.sawDone || state.sawError) {
         break
       }
+
+      const quietWait = state.sawMeaningfulOutput
+        ? QUIET_WAIT_WITH_OUTPUT_MS
+        : QUIET_WAIT_AFTER_STREAM_EVENT_MS
+      if (Date.now() - state.lastEventAt >= quietWait) {
+        break
+      }
+
       await new Promise(resolve => setTimeout(resolve, 50))
     }
   }

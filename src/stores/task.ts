@@ -312,6 +312,10 @@ export const useTaskStore = defineStore('task', () => {
   }
 
   // 根据会话 ID 获取关联的任务
+  function getCachedTaskBySessionId(sessionId: string): Task | null {
+    return tasks.value.find(t => t.sessionId === sessionId) ?? null
+  }
+
   async function getTaskBySessionId(sessionId: string): Promise<Task | null> {
     try {
       const rustTask = await invoke<RustTask | null>('get_task_by_session_id', { sessionId })
@@ -816,6 +820,7 @@ export const useTaskStore = defineStore('task', () => {
     loadProjectLooseTasks,
     getTask,
     getTaskBySessionId,
+    getCachedTaskBySessionId,
     createTask,
     updateTask,
     deleteTask,

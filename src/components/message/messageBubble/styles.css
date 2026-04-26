@@ -24,11 +24,11 @@
 }
 
 .message-bubble--assistant.message-bubble--form-only {
-  --message-fixed-width: clamp(17rem, 30vw, 24rem);
+  --message-fixed-width: clamp(21rem, 42vw, 33rem);
   --message-min-width: 0;
-  --message-max-width: clamp(18rem, 36vw, 31rem);
-  --message-compact-max-width: clamp(17rem, 34vw, 28rem);
-  --thinking-display-width: clamp(16rem, 34vw, 26rem);
+  --message-max-width: clamp(22rem, 52vw, 40rem);
+  --message-compact-max-width: clamp(20rem, 44vw, 34rem);
+  --thinking-display-width: clamp(18rem, 40vw, 30rem);
 }
 
 .message-bubble__avatar {

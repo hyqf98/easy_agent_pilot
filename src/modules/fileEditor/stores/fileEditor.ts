@@ -187,6 +187,11 @@ export const useFileEditorStore = defineStore('fileEditor', () => {
     content.value = nextContent
   }
 
+  const replaceContentSnapshot = (nextContent: string): void => {
+    content.value = nextContent
+    originalContent.value = nextContent
+  }
+
   const setMarkdownMode = (nextMode: MarkdownEditorMode): void => {
     markdownMode.value = nextMode
   }
@@ -268,6 +273,7 @@ export const useFileEditorStore = defineStore('fileEditor', () => {
     effectiveMarkdownMode,
     openFile,
     updateContent,
+    replaceContentSnapshot,
     setMarkdownMode,
     updateSelection,
     saveFile,

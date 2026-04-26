@@ -516,6 +516,38 @@ export function usePlanListView(emit: PlanListEmit) {
   }
 
   async function startSplitTasks(plan: Plan) {
+    const hasPersistedSplitRuntime = Boolean(plan.splitAgentId)
+
+    if (hasPersistedSplitRuntime) {
+      if (plan.status !== 'planning') {
+        void planStore.updatePlan(plan.id, { status: 'planning' })
+      }
+
+      const openStartedAt = performance.now()
+      console.info('[PlanSplitPerf] planList:startSplitTasks:start', {
+        planId: plan.id,
+        name: plan.name,
+        status: plan.status,
+        hasPersistedSplitRuntime
+      })
+      const splitContext = {
+        planId: plan.id,
+        expertId: plan.splitExpertId,
+        agentId: plan.splitAgentId!,
+        modelId: plan.splitModelId ?? '',
+        entry: plan.status === 'planning' ? 'resume_split' : 'list_split'
+      } as const
+      planStore.openSplitDialog(splitContext)
+      const openMs = Math.round((performance.now() - openStartedAt) * 10) / 10
+      console.info('[PlanSplitPerf] planList:startSplitTasks:opened', {
+        planId: plan.id,
+        durationMs: openMs,
+        deferredSessionInit: true
+      })
+      ;(globalThis as { __EASY_AGENT_LAST_PLAN_SPLIT_OPEN_MS?: number }).__EASY_AGENT_LAST_PLAN_SPLIT_OPEN_MS = openMs
+      return
+    }
+
     await Promise.all([
       agentStore.loadAgents(),
       agentTeamsStore.loadExperts(true)

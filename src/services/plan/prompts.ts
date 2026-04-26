@@ -25,6 +25,8 @@ export interface TaskListOptimizePromptContext {
   tasks: AITaskItem[]
   userPrompt?: string
   targetIndex?: number
+  taskCountMode?: TaskCountMode
+  minTaskCount?: number
 }
 
 function t(key: string, params?: Record<string, unknown>): string {
@@ -108,43 +110,79 @@ export function buildTaskListOptimizeKickoffPrompt(context: TaskListOptimizeProm
   const userPromptSection = context.userPrompt
     ? `\n\n${t('prompts.plan.extraRequirements')}:\n${context.userPrompt}`
     : ''
+  const taskCountMode = context.taskCountMode ?? 'exact'
+  const minTaskCount = Math.max(1, context.minTaskCount ?? 1)
 
-  if (context.targetIndex !== undefined && context.targetIndex >= 0 && context.targetIndex < context.tasks.length) {
-    const targetTask = context.tasks[context.targetIndex]
-    const otherTasksHint = context.tasks
-      .map((task, i) => `${i + 1}. ${task.title}`)
-      .join('\n')
+  if (
+    taskCountMode === 'exact'
+    && context.targetIndex !== undefined
+    && context.targetIndex >= 0
+    && context.targetIndex < context.tasks.length
+  ) {
+    const targetIndex = context.targetIndex
+    const targetTask = context.tasks[targetIndex]
+    const otherTasksJson = context.tasks.map((task, i) => {
+      if (i === targetIndex) return null
+      return {
+        title: task.title,
+        description: task.description || '',
+        priority: task.priority,
+        expertId: task.expertId || '',
+        implementationSteps: task.implementationSteps || [],
+        testSteps: task.testSteps || [],
+        acceptanceCriteria: task.acceptanceCriteria || [],
+        dependsOn: task.dependsOn || []
+      }
+    })
+    const targetTaskJson = {
+      title: targetTask.title,
+      description: targetTask.description || '',
+      priority: targetTask.priority,
+      expertId: targetTask.expertId || '',
+      implementationSteps: targetTask.implementationSteps || [],
+      testSteps: targetTask.testSteps || [],
+      acceptanceCriteria: targetTask.acceptanceCriteria || [],
+      dependsOn: targetTask.dependsOn || []
+    }
     return [
-      `你将对任务列表中的指定任务（任务 ${context.targetIndex + 1}）进行优化，其他任务必须保持原样不变。`,
-      `要求：必须保留任务总数不变（${context.tasks.length} 个），仅修改目标任务的描述、实现步骤、测试步骤、验收标准。`,
-      '允许：重写目标任务的描述、实现步骤、测试步骤、验收标准；调整优先级。',
-      '禁止：新增任务、删除任务、修改其他任务的任何内容，或返回与当前任务数不一致的结果。',
+      `你只需要优化任务 ${targetIndex + 1}《${targetTask.title}》，其余任务必须逐字原样输出，不可做任何修改。`,
+      '如果用户没有明确要求整体优化或全量优化，你必须把这次请求理解为单任务局部修改，而不是整表优化。',
+      '',
+      '规则：',
+      `1. 任务总数必须严格等于 ${context.tasks.length}，不可增删。`,
+      `2. 仅允许修改任务 ${targetIndex + 1} 的字段内容。`,
+      `3. 其余任务（索引 0-${context.tasks.length - 1} 中排除 ${targetIndex} 的部分）的所有字段必须与下方「其余任务原始数据」完全一致，禁止改写、润色或重排。`,
+      '4. 对于目标任务，你可以重写标题、描述、实现步骤、测试步骤、验收标准，调整优先级。',
       '',
       `${t('prompts.plan.plan')}: ${context.planName}`,
       `${t('prompts.plan.description')}: ${context.planDescription?.trim() || t('prompts.plan.none')}`,
       '',
-      '目标任务（仅优化此任务）：',
-      `${context.targetIndex + 1}. ${targetTask.title}`,
-      `   ${t('prompts.plan.description')}: ${targetTask.description?.trim() || t('prompts.plan.none')}`,
-      `   ${t('prompts.plan.implementationSteps')}:`,
-      ...(targetTask.implementationSteps.length > 0
-        ? targetTask.implementationSteps.map((step, i) => `     ${i + 1}. ${step}`)
-        : [`     ${t('prompts.plan.none')}`]),
-      `   ${t('prompts.plan.testSteps')}:`,
-      ...(targetTask.testSteps.length > 0
-        ? targetTask.testSteps.map((step, i) => `     ${i + 1}. ${step}`)
-        : [`     ${t('prompts.plan.none')}`]),
-      `   ${t('prompts.plan.acceptanceCriteria')}:`,
-      ...(targetTask.acceptanceCriteria.length > 0
-        ? targetTask.acceptanceCriteria.map((c, i) => `     ${i + 1}. ${c}`)
-        : [`     ${t('prompts.plan.none')}`]),
-      `   ${t('prompts.plan.dependsOnDescription')}: ${targetTask.dependsOn?.join('、') || t('prompts.plan.none')}`,
+      `--- 目标任务（任务 ${targetIndex + 1}，可修改） ---`,
+      JSON.stringify(targetTaskJson, null, 2),
       '',
-      '完整任务列表（参考顺序，不可修改除目标任务外的其他任务）：',
-      otherTasksHint,
+      '--- 其余任务原始数据（必须原样输出，禁止修改） ---',
+      JSON.stringify(otherTasksJson),
       userPromptSection,
       '',
-      `输出 task_split（status=DONE），并保证 tasks 数量必须严格等于 ${context.tasks.length}，仅任务 ${context.targetIndex + 1} 可与原始内容不同。`
+      `输出 task_split（status=DONE），tasks 数组长度必须严格等于 ${context.tasks.length}，其中任务 ${targetIndex + 1} 是优化后的版本，其余任务与上方「其余任务原始数据」逐字段一致。`
+    ].join('\n').trim()
+  }
+
+  if (taskCountMode === 'min') {
+    return [
+      '你将根据用户的最新要求重新整理当前任务列表。',
+      `要求：可以新增、删除、合并、拆分或重排任务，但返回的 tasks 数量至少为 ${minTaskCount}。`,
+      '允许：重写任务标题、描述、实现步骤、测试步骤、验收标准、优先级与 dependsOn 依赖关系。',
+      '目标：输出一份更合理、可执行、可验证的最新任务列表，而不是机械保留旧列表。',
+      '',
+      `${t('prompts.plan.plan')}: ${context.planName}`,
+      `${t('prompts.plan.description')}: ${context.planDescription?.trim() || t('prompts.plan.none')}`,
+      '',
+      '当前任务列表：',
+      formatTaskList(context.tasks),
+      userPromptSection,
+      '',
+      `输出 task_split（status=DONE），并保证 tasks 数量不少于 ${minTaskCount}。`
     ].join('\n').trim()
   }
 
@@ -432,7 +470,7 @@ function buildCodexPlanSplitJsonSchema(minTaskCount: number, taskCountMode: Task
   // 同时把可选字段显式列出为 null，减少模型漏字段导致前端表单渲染不稳定。
   return {
     type: 'object',
-    required: ['type', 'question', 'forms', 'formSchema', 'status', 'tasks'],
+    required: ['type', 'question', 'forms', 'formSchema', 'status', 'summary', 'tasks'],
     properties: {
       type: { type: 'string', enum: ['form_request', 'task_split'] },
       question: { type: ['string', 'null'] },
@@ -452,6 +490,7 @@ function buildCodexPlanSplitJsonSchema(minTaskCount: number, taskCountMode: Task
           { type: 'null' }
         ]
       },
+      summary: { type: ['string', 'null'] },
       tasks: {
         type: ['array', 'null'],
         minItems: normalizedMinTaskCount,
@@ -475,6 +514,7 @@ function buildClaudePlanSplitJsonSchema(minTaskCount: number, taskCountMode: Tas
       question: { type: 'string' },
       formSchema: { type: 'object' },
       status: { type: 'string', enum: ['DONE'] },
+      summary: { type: 'string' },
       tasks: {
         type: 'array',
         items: { type: 'object' }
@@ -513,10 +553,11 @@ function buildClaudePlanSplitJsonSchema(minTaskCount: number, taskCountMode: Tas
           required: ['type']
         },
         then: {
-          required: ['type', 'status', 'tasks'],
+          required: ['type', 'status', 'summary', 'tasks'],
           properties: {
             type: { const: 'task_split' },
             status: { const: 'DONE' },
+            summary: { type: 'string', minLength: 1 },
             tasks: {
               type: 'array',
               minItems: normalizedMinTaskCount,

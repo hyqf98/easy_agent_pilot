@@ -291,41 +291,6 @@ function placeCaretAtStart(element: HTMLElement): void {
   selection.addRange(range)
 }
 
-function placeCaretAtEnd(element: HTMLElement): void {
-  const selection = window.getSelection()
-  if (!selection) {
-    return
-  }
-
-  const range = document.createRange()
-  range.selectNodeContents(element)
-  range.collapse(false)
-  selection.removeAllRanges()
-  selection.addRange(range)
-}
-
-function placeCaretAtOffset(element: HTMLElement, offset: number): void {
-  const selection = window.getSelection()
-  if (!selection || !element.firstChild) {
-    return
-  }
-
-  const textNode = element.firstChild.nodeType === Node.TEXT_NODE
-    ? element.firstChild
-    : element
-  const clamped = Math.min(offset, (textNode.textContent || '').length)
-
-  try {
-    const range = document.createRange()
-    range.setStart(textNode, clamped)
-    range.collapse(true)
-    selection.removeAllRanges()
-    selection.addRange(range)
-  } catch {
-    placeCaretAtEnd(element)
-  }
-}
-
 type Shortcut =
   | { type: 'heading'; level: number; content: string }
   | { type: 'quote'; content: string }
@@ -448,89 +413,6 @@ function handleListEnter(listInfo: { list: HTMLUListElement | HTMLOListElement; 
   return false
 }
 
-function shouldShowRaw(block: HTMLElement): boolean {
-  const tag = block.tagName.toLowerCase()
-  if (tag === 'table') {
-    return false
-  }
-
-  if (!['p', 'div'].includes(tag)) {
-    return true
-  }
-
-  return Array.from(block.childNodes).some(
-    node => isElementNode(node) && ['STRONG', 'B', 'EM', 'I', 'DEL', 'S', 'CODE', 'A'].includes(node.tagName)
-  )
-}
-
-function activateBlock(block: HTMLElement): void {
-  if (!editorRef.value || props.readOnly) {
-    return
-  }
-
-  const rawMarkdown = serializeBlock(block)
-  if (!rawMarkdown.trim()) {
-    activeBlockRef.value = block
-    return
-  }
-
-  const selection = window.getSelection()
-  let cursorRatio = 1
-  if (selection?.anchorNode) {
-    try {
-      const range = document.createRange()
-      range.selectNodeContents(block)
-      range.setEnd(selection.anchorNode, selection.anchorOffset)
-      const before = range.toString().length
-      const total = normalizeText(block.textContent || '').length
-      cursorRatio = total > 0 ? before / total : 1
-    } catch {
-      cursorRatio = 1
-    }
-  }
-
-  const rawParagraph = document.createElement('p')
-  rawParagraph.textContent = rawMarkdown
-  rawParagraph.dataset.raw = 'true'
-  block.replaceWith(rawParagraph)
-
-  activeBlockRef.value = rawParagraph
-  const rawOffset = Math.round(cursorRatio * rawMarkdown.length)
-  placeCaretAtOffset(rawParagraph, rawOffset)
-}
-
-function deactivateCurrentBlock(): void {
-  if (!activeBlockRef.value || !editorRef.value) {
-    return
-  }
-
-  const block = activeBlockRef.value
-  if (!editorRef.value.contains(block)) {
-    activeBlockRef.value = null
-    return
-  }
-
-  const rawText = normalizeText(block.textContent || '').trim()
-  if (!rawText) {
-    if (block.tagName.toLowerCase() !== 'p' || block.dataset.raw === 'true') {
-      const paragraph = createParagraphElement()
-      block.replaceWith(paragraph)
-    }
-    activeBlockRef.value = null
-    return
-  }
-
-  const html = md.render(rawText)
-  const temp = document.createElement('div')
-  temp.innerHTML = html
-  const fragment = document.createDocumentFragment()
-  while (temp.firstChild) {
-    fragment.append(temp.firstChild)
-  }
-  block.replaceWith(fragment)
-  activeBlockRef.value = null
-}
-
 function handleDocumentSelectionChange(): void {
   if (isUpdatingDom || isComposing.value || props.readOnly || !editorRef.value) {
     return
@@ -538,7 +420,6 @@ function handleDocumentSelectionChange(): void {
 
   const selection = window.getSelection()
   if (!selection?.anchorNode) {
-    deactivateCurrentBlock()
     return
   }
 
@@ -553,43 +434,17 @@ function handleDocumentSelectionChange(): void {
   }
 
   if (!insideEditor) {
-    deactivateCurrentBlock()
     return
   }
 
   const nextBlock = getBlockAncestor(selection.anchorNode, editorRef.value)
-  if (nextBlock === activeBlockRef.value) {
-    return
-  }
-
-  isUpdatingDom = true
-  try {
-    deactivateCurrentBlock()
-    if (nextBlock && shouldShowRaw(nextBlock)) {
-      activateBlock(nextBlock)
-    } else if (nextBlock) {
-      activeBlockRef.value = nextBlock
-    }
-  } finally {
-    isUpdatingDom = false
+  if (nextBlock) {
+    activeBlockRef.value = nextBlock
   }
 }
 
-function handleEditorFocusOut(event: FocusEvent): void {
-  if (!editorRef.value) {
-    return
-  }
-
-  const related = event.relatedTarget as HTMLElement | null
-  if (related && editorRef.value.contains(related)) {
-    return
-  }
-
-  setTimeout(() => {
-    if (editorRef.value && !editorRef.value.contains(document.activeElement)) {
-      deactivateCurrentBlock()
-    }
-  }, 10)
+function handleEditorFocusOut(_event: FocusEvent): void {
+  activeBlockRef.value = null
 }
 
 function handleEditorInput(): void {
@@ -601,6 +456,13 @@ function handleEditorKeydown(event: KeyboardEvent): void {
     event.preventDefault()
     emit('save-shortcut')
     return
+  }
+
+  if (event.key === 'Backspace' && !event.shiftKey && !isComposing.value && !props.readOnly) {
+    handleBackspaceInHeading(event)
+    if (event.defaultPrevented) {
+      return
+    }
   }
 
   if (event.key !== 'Enter' || event.shiftKey || isComposing.value || props.readOnly) {
@@ -622,6 +484,27 @@ function handleEditorKeydown(event: KeyboardEvent): void {
     return
   }
 
+  const tag = block.tagName.toLowerCase()
+  if (['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(tag)) {
+    event.preventDefault()
+    const trimmed = normalizeText(block.textContent || '').trim()
+    if (!trimmed) {
+      const paragraph = createParagraphElement()
+      block.replaceWith(paragraph)
+      placeCaretAtStart(paragraph)
+    } else {
+      const paragraph = createParagraphElement()
+      block.insertAdjacentElement('afterend', paragraph)
+      placeCaretAtStart(paragraph)
+    }
+    emitCurrentMarkdown()
+    return
+  }
+
+  if (tag === 'pre') {
+    return
+  }
+
   const rawText = normalizeText(block.textContent || '').trim()
   const shortcut = parseShortcut(rawText)
   if (!shortcut) {
@@ -639,6 +522,44 @@ function handleEditorKeydown(event: KeyboardEvent): void {
 
   const paragraph = createParagraphElement()
   replacement.insertAdjacentElement('afterend', paragraph)
+  placeCaretAtStart(paragraph)
+  emitCurrentMarkdown()
+}
+
+function handleBackspaceInHeading(event: KeyboardEvent): void {
+  const selection = window.getSelection()
+  if (!selection?.isCollapsed || !selection.anchorNode || !editorRef.value) {
+    return
+  }
+
+  const anchorNode = selection.anchorNode
+  const block = getBlockAncestor(anchorNode, editorRef.value)
+  if (!block) {
+    return
+  }
+
+  const tag = block.tagName.toLowerCase()
+  if (!['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(tag)) {
+    return
+  }
+
+  try {
+    const range = document.createRange()
+    range.selectNodeContents(block)
+    range.setEnd(anchorNode, selection.anchorOffset)
+    if (range.toString().length > 0) {
+      return
+    }
+  } catch {
+    return
+  }
+
+  event.preventDefault()
+  const text = normalizeText(block.textContent || '')
+  const paragraph = text
+    ? (() => { const p = document.createElement('p'); p.textContent = text; return p })()
+    : createParagraphElement()
+  block.replaceWith(paragraph)
   placeCaretAtStart(paragraph)
   emitCurrentMarkdown()
 }
@@ -767,8 +688,6 @@ onUnmounted(() => {
 .rich-markdown-editor :deep([data-raw='true']) {
   margin: 0.14em -8px;
   padding: 3px 8px;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--color-primary) 9%, transparent);
   color: var(--color-text-secondary);
   font-family: var(--font-family-mono, "SFMono-Regular", Consolas, monospace);
   font-size: 0.93em;

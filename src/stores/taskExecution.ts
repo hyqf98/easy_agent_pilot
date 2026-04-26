@@ -73,6 +73,7 @@ import {
   formatRuntimeNoticeAsSystemContent
 } from '@/utils/runtimeNotice'
 import {
+  isCumulativeUsageRuntime,
   normalizeRuntimeUsage,
   type UsageBaseline
 } from '@/utils/runtimeUsage'
@@ -363,36 +364,29 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
   function updateTaskTokenUsage(
     taskId: string,
     usage: Pick<StreamEvent, 'inputTokens' | 'outputTokens' | 'model'>,
-    requestedModelId?: string | null
+    requestedModelId?: string | null,
+    didResetUsageWindow: boolean = false
   ): void {
     const state = executionStates.value.get(taskId)
     if (!state) return
 
     const current = state.tokenUsage
-    const nextInputTokens = typeof usage.inputTokens === 'number'
-      ? usage.inputTokens
-      : current.inputTokens
-    const nextOutputTokens = typeof usage.outputTokens === 'number'
-      ? usage.outputTokens
-      : current.outputTokens
+    const nextInputTokens = current.inputTokens + (typeof usage.inputTokens === 'number'
+      ? Math.max(0, usage.inputTokens)
+      : 0)
+    const nextOutputTokens = current.outputTokens + (typeof usage.outputTokens === 'number'
+      ? Math.max(0, usage.outputTokens)
+      : 0)
     const resolvedModel = resolveRecordedModelId({
       reportedModelId: usage.model || current.model,
       requestedModelId
     }) ?? usage.model ?? current.model
-    const didReset = (
-      typeof usage.inputTokens === 'number'
-      || typeof usage.outputTokens === 'number'
-    ) && (
-      nextInputTokens < current.inputTokens
-      || nextOutputTokens < current.outputTokens
-      || (nextInputTokens + nextOutputTokens) < (current.inputTokens + current.outputTokens)
-    )
 
     state.tokenUsage = {
       inputTokens: nextInputTokens,
       outputTokens: nextOutputTokens,
       model: resolvedModel,
-      resetCount: didReset ? current.resetCount + 1 : current.resetCount,
+      resetCount: didResetUsageWindow ? current.resetCount + 1 : current.resetCount,
       lastUpdatedAt: new Date().toISOString()
     }
   }
@@ -863,7 +857,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
         resumeSessionId: resumableExternalSessionId
       }
 
-      if (!resumableExternalSessionId || agentProvider !== 'codex') {
+      if (!resumableExternalSessionId || !isCumulativeUsageRuntime(agentProvider)) {
         usageBaselines.delete(taskId)
       }
 
@@ -1128,7 +1122,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
     }
 
     if (normalizedEvent.inputTokens !== undefined || normalizedEvent.outputTokens !== undefined || normalizedEvent.model) {
-      updateTaskTokenUsage(taskId, normalizedEvent, requestedModelId)
+      updateTaskTokenUsage(taskId, normalizedEvent, requestedModelId, normalizedUsage.didReset)
     }
 
     switch (normalizedEvent.type) {

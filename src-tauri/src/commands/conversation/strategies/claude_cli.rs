@@ -13,7 +13,8 @@ use super::abnormal_completion::{
     classify_cli_completion, is_shared_benign_stderr_warning, CliTextFragment, CliTextSource,
 };
 use super::cli_common::{
-    build_content_event, build_error_event, build_execution_summary, build_system_event,
+    build_cli_failure_report, build_content_event, build_error_event, build_execution_summary,
+    build_system_event,
     build_timeout_error_message, describe_timeout_config, detect_cli_timeout, emit_cli_event,
     extract_error_from_json_blob, extract_result_content_from_json_blob,
     extract_runtime_system_notice, extract_structured_output_from_json_blob,
@@ -37,7 +38,6 @@ macro_rules! log_info {
         {
             let message = format!($($arg)*);
             crate::logging::write_log("INFO", "claude-cli", &message);
-            println!("[INFO][claude-cli] {}", message)
         }
     };
 }
@@ -64,6 +64,8 @@ struct StdoutReadOutcome {
     emitted_error: bool,
     emitted_non_error_event: bool,
     fragments: Vec<CliTextFragment>,
+    preview: Option<String>,
+    parse_error_count: usize,
 }
 
 impl StdoutReadOutcome {
@@ -73,6 +75,8 @@ impl StdoutReadOutcome {
             emitted_error: false,
             emitted_non_error_event: false,
             fragments: Vec::new(),
+            preview: None,
+            parse_error_count: 0,
         }
     }
 }
@@ -80,6 +84,8 @@ impl StdoutReadOutcome {
 struct StderrReadOutcome {
     emitted_error: bool,
     fragments: Vec<CliTextFragment>,
+    preview: Option<String>,
+    ignored_warning_count: u32,
 }
 
 impl StderrReadOutcome {
@@ -87,6 +93,8 @@ impl StderrReadOutcome {
         Self {
             emitted_error: false,
             fragments: Vec::new(),
+            preview: None,
+            ignored_warning_count: 0,
         }
     }
 }
@@ -588,19 +596,12 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                 let mut outcome = StdoutReadOutcome::none();
 
                 while let Ok(Some(line)) = lines.next_line().await {
-                    log_info!("[stdout] 原始行: {}", line);
-
                     if should_abort(&session_id_clone).await {
                         break;
                     }
 
                     match serde_json::from_str::<serde_json::Value>(&line) {
                         Ok(json_value) => {
-                            let event_type = json_value
-                                .get("type")
-                                .and_then(|t| t.as_str())
-                                .unwrap_or("unknown");
-                            log_info!("[stdout] JSON type: {}", event_type);
                             let event = parse_claude_json_output(&session_id_clone, &json_value);
                             if let Some(event) = event {
                                 outcome.emitted_non_error_event |=
@@ -608,25 +609,29 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                                 outcome.emitted_content |= event.event_type == "content";
                                 outcome.emitted_error |= event.event_type == "error";
                                 outcome.fragments.extend(collect_event_fragments(&event));
+                                if outcome.preview.is_none() {
+                                    outcome.preview = event
+                                        .content
+                                        .clone()
+                                        .or_else(|| event.error.clone())
+                                        .or_else(|| event.tool_result.clone());
+                                }
                                 stdout_monitor
                                     .note_activity(is_meaningful_event_type(&event.event_type));
-                                log_info!(
-                                    "[stdout] 发送事件: type={}, content_len={:?}",
-                                    event.event_type,
-                                    event.content.as_ref().map(|c| c.len())
-                                );
                                 emit_cli_event(
                                     &app_clone,
                                     &event_name_clone,
                                     plan_id_clone.as_ref(),
                                     &event,
                                 );
-                            } else {
-                                log_info!("[stdout] 解析返回 None");
                             }
                         }
-                        Err(e) => {
-                            log_error!("[stdout] JSON 解析失败: {:?}", e);
+                        Err(_parse_error) => {
+                            outcome.parse_error_count += 1;
+                            if outcome.preview.is_none() {
+                                outcome.preview = Some(line.clone());
+                            }
+                            log_debug!("[stdout] JSON 解析失败: {:?}", _parse_error);
                         }
                     }
                 }
@@ -644,7 +649,6 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                 "[stdout] 已读取完成，长度 {} 字符",
                 full_output.chars().count()
             );
-            log_info!("[stdout] 输出预览: {}", preview_text(&full_output, 500));
 
             if should_abort(&session_id_clone).await {
                 return StdoutReadOutcome::none();
@@ -657,15 +661,6 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
             }
 
             if let Some(event) = parse_claude_json_blob_output(&session_id_clone, normalized) {
-                log_info!(
-                    "[stdout] 发送事件: {}, event_type: {}",
-                    event_name_clone,
-                    event.event_type
-                );
-                log_info!(
-                    "[stdout] 事件内容长度: {:?}",
-                    event.content.as_ref().map(|c| c.len())
-                );
                 stdout_monitor.note_activity(is_meaningful_event_type(&event.event_type));
                 emit_cli_event(
                     &app_clone,
@@ -679,16 +674,18 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                     emitted_error: event.event_type == "error",
                     emitted_non_error_event: is_successful_event_type(&event.event_type),
                     fragments: collect_event_fragments(&event),
+                    preview: event
+                        .content
+                        .clone()
+                        .or_else(|| event.error.clone())
+                        .or_else(|| event.tool_result.clone())
+                        .or_else(|| Some(normalized.to_string())),
+                    parse_error_count: 0,
                 };
             }
 
             log_info!("[stdout] 无法解析为结构化输出，直接发送原始内容");
             let event = build_content_event(&session_id_clone, normalized.to_string());
-            log_info!(
-                "[stdout] 发送原始内容事件: {}, event_type: {}",
-                event_name_clone,
-                event.event_type
-            );
             stdout_monitor.note_activity(true);
             emit_cli_event(
                 &app_clone,
@@ -701,6 +698,8 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                 emitted_error: false,
                 emitted_non_error_event: true,
                 fragments: collect_event_fragments(&event),
+                preview: Some(normalized.to_string()),
+                parse_error_count: 0,
             }
         });
 
@@ -723,8 +722,6 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                 return StderrReadOutcome::none();
             }
 
-            log_error!("[stderr] {}", error_output);
-
             // 检查是否是真正的错误消息
             let error_lines: Vec<&str> = error_output
                 .lines()
@@ -735,6 +732,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                     }
                     if should_ignore_stderr_line(trimmed) {
                         stderr_monitor.note_stderr_warning();
+                        outcome.ignored_warning_count += 1;
                         return false;
                     }
                     stderr_monitor.note_activity(false);
@@ -748,6 +746,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
 
             if !error_lines.is_empty() {
                 let error_msg = error_lines.join("\n");
+                outcome.preview = Some(error_msg.clone());
                 for line in &error_lines {
                     if let Some(fragment) =
                         CliTextFragment::new(CliTextSource::Stderr, (*line).to_string())
@@ -755,7 +754,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                         outcome.fragments.push(fragment);
                     }
                 }
-                let event = build_error_event(&session_id_clone, error_msg);
+                let event = build_error_event(&session_id_clone, error_msg.clone());
                 emit_cli_event(
                     &app_clone,
                     &event_name_clone,
@@ -763,6 +762,16 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                     &event,
                 );
                 outcome.emitted_error = true;
+                log_error!(
+                    "[stderr] actionable_lines={}, preview={}",
+                    error_lines.len(),
+                    preview_text(&error_msg, 240)
+                );
+            } else if outcome.ignored_warning_count > 0 {
+                log_info!(
+                    "[stderr] ignored {} benign warning(s)",
+                    outcome.ignored_warning_count
+                );
             }
 
             outcome
@@ -864,6 +873,21 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
         drop(mcp_config_file);
 
         if let Some(error_message) = timeout_error_message {
+            log_error!(
+                "{}",
+                build_cli_failure_report(
+                    "Claude",
+                    &session_id,
+                    &full_command,
+                    resolved_working_dir.as_deref(),
+                    &error_message,
+                    &summary,
+                    stdout_outcome.preview.as_deref(),
+                    stderr_outcome.preview.as_deref(),
+                    stdout_outcome.parse_error_count,
+                    stderr_outcome.ignored_warning_count,
+                )
+            );
             return Err(anyhow::anyhow!(error_message));
         }
 
@@ -872,6 +896,21 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                 let error_event = build_error_event(&session_id, failure.message.clone());
                 emit_cli_event(&app, &event_name, plan_id.as_ref(), &error_event);
             }
+            log_error!(
+                "{}",
+                build_cli_failure_report(
+                    "Claude",
+                    &session_id,
+                    &full_command,
+                    resolved_working_dir.as_deref(),
+                    &failure.message,
+                    &summary,
+                    stdout_outcome.preview.as_deref(),
+                    stderr_outcome.preview.as_deref(),
+                    stdout_outcome.parse_error_count,
+                    stderr_outcome.ignored_warning_count,
+                )
+            );
             return Err(anyhow::anyhow!(failure.message));
         }
 
@@ -884,11 +923,23 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                 );
                 return Ok(());
             }
-            return Err(anyhow::anyhow!(
-                "CLI 执行失败，退出码: {:?}, {}",
-                status.code(),
-                summary
-            ));
+            let failure_message = format!("CLI 执行失败，退出码: {:?}, {}", status.code(), summary);
+            log_error!(
+                "{}",
+                build_cli_failure_report(
+                    "Claude",
+                    &session_id,
+                    &full_command,
+                    resolved_working_dir.as_deref(),
+                    &failure_message,
+                    &summary,
+                    stdout_outcome.preview.as_deref(),
+                    stderr_outcome.preview.as_deref(),
+                    stdout_outcome.parse_error_count,
+                    stderr_outcome.ignored_warning_count,
+                )
+            );
+            return Err(anyhow::anyhow!(failure_message));
         }
 
         Ok(())
@@ -912,14 +963,17 @@ fn parse_claude_json_blob_output(session_id: &str, output: &str) -> Option<CliSt
 
     let parsed = match parse_json_blob_with_fallback(output) {
         Ok(value) => value,
-        Err(e) => {
-            log_error!("[parse] JSON 解析失败: {:?}", e);
+        Err(_e) => {
+            log_debug!("[parse] JSON blob 解析失败: {:?}", _e);
             return None;
         }
     };
 
     if let Ok(pretty) = serde_json::to_string_pretty(&parsed) {
-        log_info!("CLI 返回完整内容:\n{}", pretty);
+        log_info!(
+            "[parse] JSON blob 解析成功, preview={}",
+            preview_text(&pretty, 320)
+        );
     }
 
     if let Some(content) = extract_runtime_system_notice(&parsed) {
@@ -967,7 +1021,7 @@ fn parse_claude_json_blob_output(session_id: &str, output: &str) -> Option<CliSt
         ));
     }
 
-    log_error!("[parse] 无法提取任何内容");
+    log_info!("[parse] 未提取到标准字段，放弃结构化解析");
     None
 }
 
@@ -1484,10 +1538,14 @@ mod tests {
             emitted_error: false,
             emitted_non_error_event: true,
             fragments: Vec::new(),
+            preview: None,
+            parse_error_count: 0,
         };
         let stderr_outcome = StderrReadOutcome {
             emitted_error: false,
             fragments: Vec::new(),
+            preview: None,
+            ignored_warning_count: 0,
         };
 
         assert!(should_treat_process_failure_as_success(
@@ -1503,10 +1561,14 @@ mod tests {
             emitted_error: false,
             emitted_non_error_event: true,
             fragments: Vec::new(),
+            preview: None,
+            parse_error_count: 0,
         };
         let stderr_outcome = StderrReadOutcome {
             emitted_error: true,
             fragments: Vec::new(),
+            preview: None,
+            ignored_warning_count: 0,
         };
 
         assert!(!should_treat_process_failure_as_success(

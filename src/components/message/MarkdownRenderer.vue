@@ -440,11 +440,14 @@ onUnmounted(() => {
 
 /* 行内代码样式 */
 .markdown-content :deep(code) {
-  padding: 0.2em 0.4em;
-  background-color: var(--color-bg-secondary);
-  border-radius: var(--radius-sm);
+  padding: 0.15em 0.38em;
+  background-color: color-mix(in srgb, var(--color-primary) 8%, var(--color-bg-secondary));
+  border-radius: 4px;
   font-family: var(--font-family-mono);
-  font-size: 0.9em;
+  font-size: 0.875em;
+  font-weight: 450;
+  letter-spacing: -0.01em;
+  color: var(--color-text-primary);
 }
 
 /* 代码块容器样式 */
@@ -452,7 +455,6 @@ onUnmounted(() => {
   margin: 0;
   padding: 0;
   background-color: transparent;
-  overflow-x: auto;
 }
 
 /* 代码块包装器样式 */
@@ -625,7 +627,7 @@ onUnmounted(() => {
 
 /* 粗体和斜体 */
 .markdown-content :deep(strong) {
-  font-weight: var(--font-weight-semibold);
+  font-weight: 550;
   color: var(--color-text-primary);
 }
 

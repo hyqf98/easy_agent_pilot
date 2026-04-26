@@ -472,43 +472,40 @@ export const useSessionStore = defineStore('session', () => {
       return false
     }
 
-    // 检查会话是否在其他窗口中打开
+    if (openSessionIds.value.includes(sessionId)) {
+      currentSessionId.value = sessionId
+      void windowManagerLockBackground(sessionId)
+      return true
+    }
+
     const windowManager = useWindowManagerStore()
     const lockedBy = await windowManager.isSessionLocked(sessionId)
 
     if (lockedBy && lockedBy !== windowManager.windowLabel) {
-      // 会话在其他窗口中打开，不允许在此窗口打开
       console.warn(`Session ${sessionId} is locked by window ${lockedBy}`)
       return false
     }
 
-    // 如果已经打开，只切换
-    if (openSessionIds.value.includes(sessionId)) {
-      currentSessionId.value = sessionId
-      return true
-    }
-
-    // 检查是否达到最大数量
     if (openSessionIds.value.length >= MAX_OPEN_SESSIONS) {
-      // 关闭最早打开的会话（列表第一个）
       const closedSessionId = openSessionIds.value[0]
-      // 释放会话锁定
       windowManager.releaseSession(closedSessionId).catch(console.error)
       openSessionIds.value.shift()
     }
 
-    // 添加到打开列表
     openSessionIds.value.push(sessionId)
     currentSessionId.value = sessionId
 
-    // 锁定会话到当前窗口
     await windowManager.lockSession(sessionId)
 
-    // 更新应用状态
     const appStateStore = useAppStateStore()
     appStateStore.setLastSessions([...openSessionIds.value])
 
     return true
+  }
+
+  function windowManagerLockBackground(sessionId: string) {
+    const windowManager = useWindowManagerStore()
+    windowManager.lockSession(sessionId).catch(console.error)
   }
 
   // 关闭会话（从标签栏移除）

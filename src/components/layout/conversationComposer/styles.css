@@ -20,6 +20,10 @@
 }
 
 .conversation-composer--main {
+  --conversation-composer-main-max-lines: 6;
+  --conversation-composer-main-line-height: 1.6;
+  --conversation-composer-main-padding-y: 14px;
+  --conversation-composer-main-padding-x: 16px;
   gap: 0;
   padding: 10px 16px 8px;
   border-top: none;
@@ -460,6 +464,7 @@
 }
 
 .conversation-composer__editor-shell {
+  display: grid;
   position: relative;
   min-height: 122px;
   border: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
@@ -469,8 +474,9 @@
 }
 
 .conversation-composer--main .conversation-composer__editor-shell {
-  min-height: 160px;
-  max-height: 320px;
+  height: calc(var(--font-size-sm) * var(--conversation-composer-main-line-height) * var(--conversation-composer-main-max-lines) + (var(--conversation-composer-main-padding-y) * 2));
+  min-height: calc(var(--font-size-sm) * var(--conversation-composer-main-line-height) * var(--conversation-composer-main-max-lines) + (var(--conversation-composer-main-padding-y) * 2));
+  max-height: calc(var(--font-size-sm) * var(--conversation-composer-main-line-height) * var(--conversation-composer-main-max-lines) + (var(--conversation-composer-main-padding-y) * 2));
   border: 1px solid var(--color-border);
   border-radius: 10px;
   background: var(--color-bg-primary);
@@ -484,8 +490,11 @@
 
 .conversation-composer__render,
 .conversation-composer__textarea {
+  grid-area: 1 / 1;
   width: 100%;
+  height: 100%;
   min-height: 122px;
+  max-height: 100%;
   padding: 16px 18px;
   box-sizing: border-box;
   font-family: inherit;
@@ -497,14 +506,17 @@
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .conversation-composer--main .conversation-composer__render,
 .conversation-composer--main .conversation-composer__textarea {
-  min-height: 160px;
-  padding: 14px 16px 48px;
+  min-height: 100%;
+  height: 100%;
+  padding: var(--conversation-composer-main-padding-y) var(--conversation-composer-main-padding-x);
   font-family: inherit;
-  line-height: 1.6;
+  line-height: var(--conversation-composer-main-line-height);
 }
 
 .conversation-composer__render {
@@ -514,6 +526,7 @@
   color: var(--color-text-primary);
   text-align: start;
   text-indent: 0;
+  scrollbar-width: none;
 }
 
 .conversation-composer__render--hidden {
@@ -521,8 +534,6 @@
 }
 
 .conversation-composer__textarea {
-  position: absolute;
-  inset: 0;
   z-index: 1;
   resize: none;
   background: transparent;
@@ -531,6 +542,8 @@
   caret-color: var(--color-text-primary);
   text-align: start;
   text-indent: 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.5) transparent;
 }
 
 .conversation-composer__textarea--overlay {
@@ -564,6 +577,27 @@
   color: transparent;
 }
 
+.conversation-composer__render::-webkit-scrollbar {
+  display: none;
+}
+
+.conversation-composer__textarea::-webkit-scrollbar {
+  width: 8px;
+}
+
+.conversation-composer__textarea::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.conversation-composer__textarea::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.5);
+}
+
+.conversation-composer__textarea::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.62);
+}
+
 .conversation-composer__placeholder {
   color: var(--color-text-tertiary);
 }
@@ -572,7 +606,7 @@
   color: var(--color-text-tertiary);
 }
 
-.conversation-composer__ghost-hints {
+:deep(.conversation-composer__ghost-hints) {
   position: absolute;
   left: 14px;
   right: 14px;
@@ -584,7 +618,7 @@
   pointer-events: none;
 }
 
-.conversation-composer__ghost-hint-pill {
+:deep(.conversation-composer__ghost-hint-pill) {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -604,7 +638,7 @@
   color: var(--color-text-tertiary);
 }
 
-.conversation-composer__file-tag {
+:deep(.conversation-composer__file-tag) {
   display: inline;
   color: var(--color-primary);
   font-weight: var(--font-weight-medium);
@@ -613,7 +647,7 @@
   text-underline-offset: 2px;
 }
 
-.conversation-composer__slash-tag {
+:deep(.conversation-composer__slash-tag) {
   display: inline;
   color: color-mix(in srgb, var(--color-warning) 82%, var(--color-text-primary));
   font: inherit;
@@ -633,7 +667,7 @@
   box-decoration-break: clone;
 }
 
-.conversation-composer__memory-tag {
+:deep(.conversation-composer__memory-tag) {
   display: inline;
   color: color-mix(in srgb, var(--color-primary) 70%, var(--color-text-primary));
   font-weight: var(--font-weight-medium);
@@ -1031,7 +1065,8 @@
   }
 
   .conversation-composer--main .conversation-composer__editor-shell {
-    min-height: 140px;
+    height: calc(var(--font-size-sm) * var(--conversation-composer-main-line-height) * var(--conversation-composer-main-max-lines) + (var(--conversation-composer-main-padding-y) * 2));
+    min-height: calc(var(--font-size-sm) * var(--conversation-composer-main-line-height) * var(--conversation-composer-main-max-lines) + (var(--conversation-composer-main-padding-y) * 2));
   }
 
   .conversation-composer__memory-card {
@@ -1058,8 +1093,9 @@
 
   .conversation-composer--main .conversation-composer__render,
   .conversation-composer--main .conversation-composer__textarea {
-    min-height: 140px;
-    padding: 16px 16px 10px;
+    min-height: 100%;
+    height: 100%;
+    padding: var(--conversation-composer-main-padding-y) var(--conversation-composer-main-padding-x);
   }
 }
 
@@ -1250,9 +1286,9 @@
   color: #94a3b8;
 }
 
-:global([data-theme='dark']) .conversation-composer__slash-tag,
-:global(.dark) .conversation-composer__slash-tag,
-.conversation-composer--dark .conversation-composer__slash-tag {
+:global([data-theme='dark']) :deep(.conversation-composer__slash-tag),
+:global(.dark) :deep(.conversation-composer__slash-tag),
+.conversation-composer--dark :deep(.conversation-composer__slash-tag) {
   color: #fbbf24;
   background:
     linear-gradient(
@@ -1265,16 +1301,16 @@
   text-decoration-color: rgba(245, 158, 11, 0.34);
 }
 
-:global([data-theme='dark']) .conversation-composer__file-tag,
-:global(.dark) .conversation-composer__file-tag,
-.conversation-composer--dark .conversation-composer__file-tag {
+:global([data-theme='dark']) :deep(.conversation-composer__file-tag),
+:global(.dark) :deep(.conversation-composer__file-tag),
+.conversation-composer--dark :deep(.conversation-composer__file-tag) {
   color: #7dd3fc;
   text-decoration-color: rgba(125, 211, 252, 0.4);
 }
 
-:global([data-theme='dark']) .conversation-composer__memory-tag,
-:global(.dark) .conversation-composer__memory-tag,
-.conversation-composer--dark .conversation-composer__memory-tag {
+:global([data-theme='dark']) :deep(.conversation-composer__memory-tag),
+:global(.dark) :deep(.conversation-composer__memory-tag),
+.conversation-composer--dark :deep(.conversation-composer__memory-tag) {
   background: linear-gradient(135deg, rgba(14, 165, 233, 0.18), rgba(16, 185, 129, 0.22));
   color: #bae6fd;
 }

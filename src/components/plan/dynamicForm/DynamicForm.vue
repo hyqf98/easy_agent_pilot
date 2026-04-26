@@ -9,6 +9,8 @@ const props = defineProps<{
   disabled?: boolean
   variant?: 'active' | 'submitted' | 'archived'
   cancelText?: string
+  showHeader?: boolean
+  showSubmittedState?: boolean
 }>()
 
 const emit = defineEmits<DynamicFormEmits>()
@@ -42,10 +44,14 @@ defineExpose({
     class="dynamic-form dynamic-form--compact"
     :class="[
       `dynamic-form--${props.variant || 'active'}`,
+      { 'dynamic-form--headerless': props.showHeader === false },
       { 'dynamic-form--dark': isDarkTheme }
     ]"
   >
-    <div class="form-header">
+    <div
+      v-if="props.showHeader !== false"
+      class="form-header"
+    >
       <h3 class="form-title">
         {{ schema.title }}
       </h3>
@@ -56,7 +62,7 @@ defineExpose({
         {{ question }}
       </p>
       <span
-        v-if="props.variant === 'submitted'"
+        v-if="props.variant === 'submitted' && props.showSubmittedState !== false"
         class="form-state-badge"
       >
         已提交

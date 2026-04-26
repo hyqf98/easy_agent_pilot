@@ -399,6 +399,12 @@ export default {
       changedFiles: 'Changed Files',
       deletedFiles: 'Deleted Files'
     },
+    runtimeNotice: {
+      runtime: 'Runtime',
+      model: 'Model',
+      input: 'In',
+      output: 'Out'
+    },
     // Message status
     status: {
       pending: 'Pending',
@@ -410,6 +416,7 @@ export default {
       userError: 'Send failed',
       userCompleted: 'Sent',
       assistantStreaming: 'Generating',
+      assistantStopped: 'Stopped',
       assistantError: 'Generation failed',
       assistantCompleted: 'Completed'
     },
@@ -2219,21 +2226,24 @@ Rules:
 5. A form_request should collect the currently missing high-value information in one round when possible. Prefer 3-8 focused fields and provide suggestion, suggestionReason, optionReasons, and allowOther whenever useful.
 6. select / radio / multiselect options must be [{'{' } "label": "...", "value": "..." {'}'}], and keep allowOther. You may also provide suggestion, suggestionReason, and optionReasons.
 7. Conditional display may only use condition: {'{' } field, value {'}'}.
-8. task_split must include status:"DONE", tasks, and dependsOn. Every task must contain title, description, priority, implementationSteps, testSteps, and acceptanceCriteria.
+8. task_split must include status:"DONE", summary, and tasks. summary must be a 1-3 sentence natural-language recap of the split result or rationale. Every task must contain title, description, priority, implementationSteps, testSteps, and acceptanceCriteria.
 9. Tasks must have clear boundaries, be directly executable, and must not hide unresolved user decisions behind vague task wording.
 10. description must not be a generic one-liner. It must clearly state the business goal, the affected pages/modules/services/data, and what technology or implementation approach will be used to achieve the outcome.
 11. implementationSteps must be action-oriented and execution-ready. They must cover change location, core logic, key data/state flow, and edge-case handling. Avoid vague phrases such as "improve feature", "handle logic", or "complete development".
 12. If the task is frontend-related, description or implementationSteps must mention the relevant pages/components/state management/API interactions. If it is backend-related, mention the API/service/storage/scheduler/permission/transaction/error-handling aspects. If it is cross-stack, make the collaboration boundary explicit.
 13. testSteps must not say only "test that it works". They must describe how to verify the task: setup/preconditions, operation steps, sample inputs, and expected results. Distinguish manual verification, automated tests, API checks, and regression checks when relevant.
 14. acceptanceCriteria must be observable and pass/fail oriented. Prefer business outcomes, UI/API behavior, error-path expectations, and performance/stability constraints. Do not repeat implementation steps as acceptance criteria.
-15. Prefer fewer but more complete high-quality tasks over many vague tasks. Each task should let an executor understand what to do, how to do it, how to test it, and when it is considered done without repeated clarification.
-16. Top-level keys must strictly follow the canonical structure: form_request may only use type, question, and forms; task_split may only use type, status, and tasks. Do not use alias keys such as action, reason, state, phase, payload, or data.
-17. forms must be an array of form schemas. Do not place a raw field array directly into forms; each form must include formId, title, and fields.
-18. Before responding, self-check that the output can be parsed by JSON.parse directly, contains no markdown code fences, no extra prose outside JSON, and no single quotes or trailing commas.`,
+15. When the user is continuing or optimizing an existing task list, default to the smallest possible change set: only modify the task(s) the user explicitly pointed to, and do not opportunistically rewrite other tasks.
+16. If the user clearly references a specific task (for example via an @ reference, an explicit task number, a uniquely identifiable task title, or wording such as "only optimize task 1"), you must treat it as a local edit request. Do not modify any other task unless the user explicitly asks for whole-list optimization such as "optimize all tasks", "full optimization", or "rework the entire list".
+17. For local edit requests, all non-target tasks must remain unchanged in the returned tasks array. Do not polish, reorder, expand, or improve them. If the instruction is still ambiguous, output form_request to clarify instead of silently expanding the scope to the whole list.
+18. Prefer fewer but more complete high-quality tasks over many vague tasks. Each task should let an executor understand what to do, how to do it, how to test it, and when it is considered done without repeated clarification.
+19. Top-level keys must strictly follow the canonical structure: form_request may only use type, question, and forms; task_split may only use type, status, summary, and tasks. Do not use alias keys such as action, reason, state, phase, payload, or data.
+20. forms must be an array of form schemas. Do not place a raw field array directly into forms; each form must include formId, title, and fields.
+21. Before responding, self-check that the output can be parsed by JSON.parse directly, contains no markdown code fences, no extra prose outside JSON, and no single quotes or trailing commas.`,
       kickoffPlanName: 'Plan Name',
       kickoffPlanDescription: 'Plan Description',
       kickoffMinTaskCount: 'Minimum Task Count',
-      kickoffStart: 'Start by checking information completeness first. If goal, scope, environment, dependencies, or acceptance criteria are still unclear, output form_request first. Output task_split only when every task can be written with a clear technical approach, implementation steps, test steps, and acceptance criteria.',
+      kickoffStart: 'Start by checking information completeness first. If goal, scope, environment, dependencies, or acceptance criteria are still unclear, output form_request first. Output task_split only when every task can be written with a clear technical approach, implementation steps, test steps, and acceptance criteria, and include a 1-3 sentence summary.',
       none: '(none)',
       resplitIntro: 'Continue splitting the following task into at least {minTaskCount} subtasks:',
       plan: 'Plan',
@@ -2243,12 +2253,12 @@ Rules:
       testSteps: 'Test Steps',
       acceptanceCriteria: 'Acceptance Criteria',
       extraRequirements: 'Additional User Requirements',
-      directTaskSplitDone: 'Output task_split directly (status=DONE) only when every task already has a clear technical implementation description, implementation steps, test steps, and acceptance criteria.',
+      directTaskSplitDone: 'Output task_split directly (status=DONE) only when every task already has a clear technical implementation description, implementation steps, test steps, and acceptance criteria. task_split must include both summary and tasks.',
       formResponse: 'Form {formId} response: {valueStr}',
-      formResponseContinue: 'Continue: if more information is needed, output form_request; if sufficient, output task_split (status=DONE).',
+      formResponseContinue: 'Continue: if more information is needed, output form_request; if sufficient, output task_split (status=DONE) with both summary and tasks.',
       outputCorrection: `Output format is invalid. Re-output strict JSON:
 - form_request: may only use type, question, and forms, and forms must be an array of form schemas
-- task_split: may only use type, status, and tasks, and must contain status:DONE with tasks >= {minTaskCount}
+- task_split: may only use type, status, summary, and tasks, and must contain status:DONE, a non-empty summary, and tasks >= {minTaskCount}
 - Do not use alias keys such as action, reason, state, phase, payload, or data
 - Do not output markdown fences, extra prose, single quotes, or trailing commas
 - Before responding again, verify the full string can be parsed by JSON.parse directly`,
@@ -2318,6 +2328,9 @@ Rules:
     // Footer & input
     hide: 'Hide',
     close: 'Close',
+    closeConfirmTitle: 'Confirm Close',
+    closeConfirmMessage: 'A split is currently running. Closing will stop the current task. Are you sure?',
+    closeConfirmStop: 'Stop & Close',
     stopTask: 'Stop Task',
     continueSplit: 'Continue Split',
     discardOptimize: 'Discard Optimization',
@@ -2352,7 +2365,11 @@ Rules:
     hintSessionStopped: 'Session stopped. You can continue splitting from the last confirmed context.',
     hintSessionRunning: 'Splitting in background, you can close the dialog and check back later.',
     hintWaitingFormInput: 'Please fill in the AI dynamic form above to supplement requirements.',
-    hintNoFormData: 'No pending form data for this session.',
+    attachmentUploadAction: 'Upload attachments',
+    attachmentDeleteAction: 'Delete attachment',
+    attachmentRefineFallbackPrompt: 'Please continue adjusting the current task split result based on the attachments.',
+    formDataTitle: 'Submitted Data',
+    formSubmitted: 'Submitted',
     // Runtime status
     runtimeThinking: 'Thinking and splitting tasks...',
     runtimeThinkingStart: 'Entering thinking phase...',
@@ -2445,5 +2462,41 @@ Rules:
       edit: 'Edit',
       delete: 'Delete'
     }
+  },
+
+  // Trace Pane
+  trace: {
+    eyebrow: 'AI Edit Trace',
+    title: 'File Tracking',
+    hideFileList: 'Hide Files',
+    fileListCount: 'Files {count}',
+    autoFollow: 'Auto Follow',
+    manualBrowse: 'Manual',
+    fullEditor: 'Full Editor',
+    hide: 'Hide',
+    editedFiles: 'Edited Files',
+    editsInRound: '{count} edits in round',
+    changeCount: '{count} changes',
+    changeCreate: 'Created',
+    changeModify: 'Modified',
+    changeDelete: 'Deleted',
+    tracePreview: 'Trace Preview',
+    noFileSelected: 'No file selected',
+    lineRange: 'L{start}-{end}',
+    revisionLabel: 'Version {version}',
+    codePreview: 'Code Preview',
+    rollbackToBefore: 'Rollback',
+    oldRecordNoRollback: 'Cannot rollback',
+    historyNote: 'This old record is missing a complete before/after snapshot. Only the currently locatable fragment is shown below, which may not represent the actual historical diff.',
+    emptyMessage: 'No file changes to track for this message',
+    rollbackWarningTitle: 'Rollback is unavailable',
+    rollbackWarningMessage: 'This change record is missing a complete snapshot, so it cannot be safely restored.',
+    rollbackUnavailableTitle: 'Cannot rollback',
+    rollbackUnavailableMessage: 'This history record lacks a complete snapshot. Please use rollback on newer file changes.',
+    rollbackSuccessTitle: 'File rolled back',
+    rollbackSuccessMessage: '{path} has been restored to its state before this change',
+    rollbackFailedTitle: 'Rollback failed',
+    editorRefreshWarningTitle: 'Editor not refreshed',
+    editorRefreshWarningMessage: 'This file still has unsaved changes in the editor. Reopen it manually after reviewing the rollback.'
   }
 }

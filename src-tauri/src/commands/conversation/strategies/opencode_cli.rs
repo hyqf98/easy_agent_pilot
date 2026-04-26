@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
@@ -7,13 +6,13 @@ use async_trait::async_trait;
 use tauri::AppHandle;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::time::sleep;
-use uuid::Uuid;
 
 use super::abnormal_completion::{
     classify_cli_completion, is_shared_benign_stderr_warning, CliTextFragment, CliTextSource,
 };
 use super::cli_common::{
-    build_content_event, build_error_event, build_execution_summary, build_system_event,
+    build_cli_failure_report, build_content_event, build_error_event, build_execution_summary,
+    build_system_event,
     build_timeout_error_message, describe_timeout_config, detect_cli_timeout, emit_cli_event,
     extract_image_paths, preview_text, render_cli_message, shell_escape,
     timeout_config_for_execution_mode, CliExecutionMonitor,
@@ -28,44 +27,11 @@ use crate::commands::mcp_shared::parse_args_string;
 
 pub struct OpenCodeCliStrategy;
 
-struct TempPromptFile {
-    path: PathBuf,
-}
-
-impl TempPromptFile {
-    async fn create(prompt: &str) -> Result<Self> {
-        let path = std::env::temp_dir().join(format!("opencode-prompt-{}.md", Uuid::new_v4()));
-        tokio::fs::write(&path, prompt).await?;
-        Ok(Self { path })
-    }
-
-    fn to_path_string(&self) -> String {
-        self.path.to_string_lossy().to_string()
-    }
-}
-
-impl Drop for TempPromptFile {
-    fn drop(&mut self) {
-        if let Err(error) = std::fs::remove_file(&self.path) {
-            if error.kind() != std::io::ErrorKind::NotFound {
-                let message = format!(
-                    "清理 OpenCode 临时提示文件失败: {} ({})",
-                    self.path.display(),
-                    error
-                );
-                crate::logging::write_log("ERROR", "opencode-cli", &message);
-                eprintln!("[ERROR][opencode-cli] {}", message);
-            }
-        }
-    }
-}
-
 macro_rules! log_info {
     ($($arg:tt)*) => {
         {
             let message = format!($($arg)*);
             crate::logging::write_log("INFO", "opencode-cli", &message);
-            println!("[INFO][opencode-cli] {}", message)
         }
     };
 }
@@ -80,11 +46,19 @@ macro_rules! log_error {
     };
 }
 
+macro_rules! log_debug {
+    ($($arg:tt)*) => {
+        let _ = format!($($arg)*);
+    };
+}
+
 struct StdoutReadOutcome {
     emitted_content: bool,
     emitted_error: bool,
     emitted_non_error_event: bool,
     fragments: Vec<CliTextFragment>,
+    preview: Option<String>,
+    parse_error_count: usize,
 }
 
 impl StdoutReadOutcome {
@@ -94,6 +68,8 @@ impl StdoutReadOutcome {
             emitted_error: false,
             emitted_non_error_event: false,
             fragments: Vec::new(),
+            preview: None,
+            parse_error_count: 0,
         }
     }
 }
@@ -101,6 +77,8 @@ impl StdoutReadOutcome {
 struct StderrReadOutcome {
     emitted_error: bool,
     fragments: Vec<CliTextFragment>,
+    preview: Option<String>,
+    ignored_warning_count: u32,
 }
 
 impl StderrReadOutcome {
@@ -108,6 +86,8 @@ impl StderrReadOutcome {
         Self {
             emitted_error: false,
             fragments: Vec::new(),
+            preview: None,
+            ignored_warning_count: 0,
         }
     }
 }
@@ -176,34 +156,6 @@ fn collect_event_fragments(event: &CliStreamEvent) -> Vec<CliTextFragment> {
     }
 
     fragments
-}
-
-fn should_use_prompt_file(_request: &ExecutionRequest, input_text: &str) -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        // Windows 下 opencode 的 npm/cmd 包装层在 `-f <temp prompt>` 场景会出现
-        // task_split 直接退出（主会话走 stdin 正常）。为了统一稳定行为，
-        // Windows 始终优先使用 stdin 传递提示词，仅保留图片附件走 `-f`。
-        let _ = (_request, input_text);
-        return false;
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        input_text.chars().count() > 12_000
-    }
-}
-
-fn build_prompt_file_instruction(execution_mode: Option<&str>) -> &'static str {
-    match execution_mode {
-        Some("task_split") => {
-            "Read the attached prompt file first and follow it exactly. Return the final result in the requested structured format."
-        }
-        Some("task_execution") | Some("solo_execution") => {
-            "Read the attached prompt file first and follow it exactly. Use the attached files when needed."
-        }
-        _ => "Read the attached prompt file first and follow it exactly.",
-    }
 }
 
 fn build_opencode_mcp_config_env(servers: &[McpServerConfig]) -> String {
@@ -342,13 +294,11 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
             .map(render_cli_message)
             .collect::<Vec<_>>()
             .join("\n\n");
-        let use_prompt_file = should_use_prompt_file(&request, &input_text);
-        let mut prompt_file: Option<TempPromptFile> = None;
+        let image_paths = extract_image_paths(&messages);
 
         let mut args = vec!["run".to_string()];
         args.push("--format".to_string());
         args.push("json".to_string());
-        // OpenCode CLI 默认不会输出 reasoning block，需要显式开启。
         args.push("--thinking".to_string());
 
         if let Some(model_id) = &model_id {
@@ -368,20 +318,6 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
             if !custom_args.is_empty() {
                 args.extend(custom_args.iter().cloned());
             }
-        }
-
-        let image_paths = extract_image_paths(&messages);
-        if use_prompt_file {
-            let temp_file = TempPromptFile::create(&input_text).await?;
-            let prompt_file_path = temp_file.to_path_string();
-            log_info!(
-                "OpenCode CLI 使用临时提示文件承载输入: {}",
-                prompt_file_path
-            );
-            args.push("-f".to_string());
-            args.push(prompt_file_path);
-            args.push(build_prompt_file_instruction(request.execution_mode.as_deref()).to_string());
-            prompt_file = Some(temp_file);
         }
 
         if !image_paths.is_empty() {
@@ -405,13 +341,9 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
             log_info!("设置工作目录: {}", work_dir);
         }
 
-        if use_prompt_file {
-            cmd.stdin(Stdio::null());
-        } else {
-            cmd.stdin(Stdio::piped());
-        }
-
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
         if let Some(servers) = &mcp_servers {
             if !servers.is_empty() {
@@ -424,15 +356,7 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
             }
         }
 
-        let full_command = build_full_opencode_command(
-            &cli_path,
-            &args,
-            if use_prompt_file {
-                None
-            } else {
-                Some(input_text.len())
-            },
-        );
+        let full_command = build_full_opencode_command(&cli_path, &args, Some(input_text.len()));
         log_info!("OpenCode CLI command: {}", full_command);
 
         let execution_started_at = Instant::now();
@@ -456,9 +380,7 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
             ))
         })?;
 
-        let stdin_write_handle = if use_prompt_file {
-            None
-        } else {
+        let stdin_write_handle = {
             let stdin_payload = input_text.clone();
             let mut stdin = child
                 .stdin
@@ -503,8 +425,6 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
             let mut outcome = StdoutReadOutcome::none();
 
             while let Ok(Some(line)) = lines.next_line().await {
-                log_info!("[stdout] 原始行: {}", line);
-
                 if should_abort(&session_id_clone).await {
                     break;
                 }
@@ -533,13 +453,15 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
                                 outcome.emitted_content |= event.event_type == "content";
                                 outcome.emitted_error |= event.event_type == "error";
                                 outcome.fragments.extend(collect_event_fragments(&event));
+                                if outcome.preview.is_none() {
+                                    outcome.preview = event
+                                        .content
+                                        .clone()
+                                        .or_else(|| event.error.clone())
+                                        .or_else(|| event.tool_result.clone());
+                                }
                                 stdout_monitor
                                     .note_activity(is_meaningful_event_type(&event.event_type));
-                                log_info!(
-                                    "[stdout] 发送事件: type={}, content_len={:?}",
-                                    event.event_type,
-                                    event.content.as_ref().map(|c| c.len())
-                                );
                                 emit_cli_event(
                                     &app_clone,
                                     &event_name_clone,
@@ -550,11 +472,11 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
                         }
                     }
                     Err(e) => {
-                        log_error!(
-                            "[stdout] JSON 解析失败: {:?} | line: {}",
-                            e,
-                            preview_text(&line, 200)
-                        );
+                        outcome.parse_error_count += 1;
+                        if outcome.preview.is_none() {
+                            outcome.preview = Some(line.clone());
+                        }
+                        log_debug!("[stdout] JSON 解析失败: {:?}", e);
                     }
                 }
             }
@@ -580,8 +502,6 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
                 return StderrReadOutcome::none();
             }
 
-            log_error!("[stderr] {}", error_output);
-
             let error_lines: Vec<&str> = error_output
                 .lines()
                 .filter(|line| {
@@ -591,6 +511,7 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
                     }
                     if should_ignore_stderr_line(trimmed) {
                         stderr_monitor.note_stderr_warning();
+                        outcome.ignored_warning_count += 1;
                         return false;
                     }
                     stderr_monitor.note_activity(false);
@@ -603,6 +524,7 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
 
             if !error_lines.is_empty() {
                 let error_msg = error_lines.join("\n");
+                outcome.preview = Some(error_msg.clone());
                 for line in &error_lines {
                     if let Some(fragment) =
                         CliTextFragment::new(CliTextSource::Stderr, (*line).to_string())
@@ -610,7 +532,7 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
                         outcome.fragments.push(fragment);
                     }
                 }
-                let event = build_error_event(&session_id_clone, error_msg);
+                let event = build_error_event(&session_id_clone, error_msg.clone());
                 emit_cli_event(
                     &app_clone,
                     &event_name_clone,
@@ -618,6 +540,16 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
                     &event,
                 );
                 outcome.emitted_error = true;
+                log_error!(
+                    "[stderr] actionable_lines={}, preview={}",
+                    error_lines.len(),
+                    preview_text(&error_msg, 240)
+                );
+            } else if outcome.ignored_warning_count > 0 {
+                log_info!(
+                    "[stderr] ignored {} benign warning(s)",
+                    outcome.ignored_warning_count
+                );
             }
 
             outcome
@@ -715,6 +647,21 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
         clear_abort_flag(&session_id).await;
 
         if let Some(error_message) = timeout_error_message {
+            log_error!(
+                "{}",
+                build_cli_failure_report(
+                    "OpenCode",
+                    &session_id,
+                    &full_command,
+                    working_directory.as_deref(),
+                    &error_message,
+                    &summary,
+                    stdout_outcome.preview.as_deref(),
+                    stderr_outcome.preview.as_deref(),
+                    stdout_outcome.parse_error_count,
+                    stderr_outcome.ignored_warning_count,
+                )
+            );
             return Err(anyhow::anyhow!(error_message));
         }
 
@@ -723,6 +670,21 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
                 let error_event = build_error_event(&session_id, failure.message.clone());
                 emit_cli_event(&app, &event_name, plan_id.as_ref(), &error_event);
             }
+            log_error!(
+                "{}",
+                build_cli_failure_report(
+                    "OpenCode",
+                    &session_id,
+                    &full_command,
+                    working_directory.as_deref(),
+                    &failure.message,
+                    &summary,
+                    stdout_outcome.preview.as_deref(),
+                    stderr_outcome.preview.as_deref(),
+                    stdout_outcome.parse_error_count,
+                    stderr_outcome.ignored_warning_count,
+                )
+            );
             return Err(anyhow::anyhow!(failure.message));
         }
 
@@ -735,14 +697,26 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
                 );
                 return Ok(());
             }
-            return Err(anyhow::anyhow!(
-                "OpenCode CLI 执行失败，退出码: {:?}, {}",
-                status.code(),
-                summary
-            ));
+            let failure_message =
+                format!("OpenCode CLI 执行失败，退出码: {:?}, {}", status.code(), summary);
+            log_error!(
+                "{}",
+                build_cli_failure_report(
+                    "OpenCode",
+                    &session_id,
+                    &full_command,
+                    working_directory.as_deref(),
+                    &failure_message,
+                    &summary,
+                    stdout_outcome.preview.as_deref(),
+                    stderr_outcome.preview.as_deref(),
+                    stdout_outcome.parse_error_count,
+                    stderr_outcome.ignored_warning_count,
+                )
+            );
+            return Err(anyhow::anyhow!(failure_message));
         }
 
-        drop(prompt_file);
         Ok(())
     }
 }

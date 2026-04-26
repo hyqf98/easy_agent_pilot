@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { EaButton, EaIcon } from '@/components/common'
 import { useNotificationStore } from '@/stores/notification'
 import { useAiEditTraceStore, useMessageStore, useProjectStore, useSessionStore } from '@/stores'
 import { useTracePreviewStore } from '@/stores/tracePreview'
 import { useFileEditorStore } from '@/modules/fileEditor'
-import { deleteProjectFile, writeProjectFile } from '@/modules/fileEditor/services/fileEditorService'
+import { deleteProjectFile, readProjectFile, writeProjectFile } from '@/modules/fileEditor/services/fileEditorService'
 import TraceDiffStack from './TraceDiffStack.vue'
 import type { FileEditTrace } from '@/types/fileTrace'
+
+const { t } = useI18n()
 
 interface FileTraceGroup {
   filePath: string
@@ -34,7 +37,7 @@ const aiEditTraceStore = useAiEditTraceStore()
 const tracePreviewStore = useTracePreviewStore()
 const fileEditorStore = useFileEditorStore()
 const notificationStore = useNotificationStore()
-const isFileDrawerVisible = ref(false)
+const isFileDrawerVisible = ref(!props.mobile)
 const isRollingBack = ref(false)
 
 const sessionState = computed(() => aiEditTraceStore.getSessionState(props.sessionId))
@@ -136,8 +139,10 @@ const selectedTraceRevisionLabel = computed(() => {
     return null
   }
 
-  return `版本 ${selectedGroup.value.traces.length - revisionIndex}`
+  return t('trace.revisionLabel', { version: selectedGroup.value.traces.length - revisionIndex })
 })
+
+const shouldShowRevisionChips = computed(() => (selectedGroup.value?.traces.length ?? 0) > 1)
 
 const isSelectedTraceDiffReliable = computed(() => {
   if (!selectedTrace.value || selectedTrace.value.changeType !== 'modify') {
@@ -203,6 +208,35 @@ const toggleFileDrawer = () => {
   isFileDrawerVisible.value = !isFileDrawerVisible.value
 }
 
+const refreshEditorIfNeeded = async (trace: FileEditTrace) => {
+  if (!currentProject.value) {
+    return
+  }
+
+  if (
+    fileEditorStore.activeProjectPath !== currentProject.value.path
+    || fileEditorStore.activeFilePath !== trace.filePath
+  ) {
+    return
+  }
+
+  if (fileEditorStore.isDirty) {
+    notificationStore.warning(
+      t('trace.editorRefreshWarningTitle'),
+      t('trace.editorRefreshWarningMessage')
+    )
+    return
+  }
+
+  if (trace.changeType === 'create') {
+    fileEditorStore.closeEditor()
+    return
+  }
+
+  const nextContent = await readProjectFile(currentProject.value.path, trace.filePath)
+  fileEditorStore.replaceContentSnapshot(nextContent.content)
+}
+
 const handleRollbackTrace = async () => {
   if (!currentProject.value || !selectedTrace.value || isRollingBack.value) {
     return
@@ -211,32 +245,36 @@ const handleRollbackTrace = async () => {
   isRollingBack.value = true
 
   try {
-    if (selectedTrace.value.changeType === 'create') {
-      await deleteProjectFile(selectedTrace.value.filePath)
+    const trace = selectedTrace.value
+
+    if (trace.changeType === 'create') {
+      await deleteProjectFile(trace.filePath)
     } else {
       const rollbackContent = selectedTraceRollbackContent.value
       if (rollbackContent === null) {
         notificationStore.warning(
-          '无法回滚当前记录',
-          '这条历史记录缺少完整快照，请对新产生的文件变更使用回滚功能'
+          t('trace.rollbackWarningTitle'),
+          t('trace.rollbackWarningMessage')
         )
         return
       }
 
       await writeProjectFile({
         projectPath: currentProject.value.path,
-        filePath: selectedTrace.value.filePath,
+        filePath: trace.filePath,
         content: rollbackContent
       })
     }
 
+    await refreshEditorIfNeeded(trace)
+
     notificationStore.success(
-      '文件已回滚',
-      `${selectedTrace.value.relativePath} 已恢复到本次修改前的状态`
+      t('trace.rollbackSuccessTitle'),
+      t('trace.rollbackSuccessMessage', { path: trace.relativePath })
     )
   } catch (error) {
     notificationStore.error(
-      '回滚失败',
+      t('trace.rollbackFailedTitle'),
       error instanceof Error ? error.message : String(error)
     )
   } finally {
@@ -247,11 +285,11 @@ const handleRollbackTrace = async () => {
 const formatChangeType = (changeType: FileEditTrace['changeType']) => {
   switch (changeType) {
     case 'create':
-      return '新建'
+      return t('trace.changeCreate')
     case 'delete':
-      return '删除'
+      return t('trace.changeDelete')
     default:
-      return '修改'
+      return t('trace.changeModify')
   }
 }
 </script>
@@ -260,9 +298,9 @@ const formatChangeType = (changeType: FileEditTrace['changeType']) => {
   <section class="trace-pane">
     <header class="trace-pane__toolbar">
       <div class="trace-pane__toolbar-copy">
-        <span class="trace-pane__eyebrow">AI Edit Trace</span>
+        <span class="trace-pane__eyebrow">{{ t('trace.eyebrow') }}</span>
         <h3 class="trace-pane__title">
-          文件追踪
+          {{ t('trace.title') }}
         </h3>
       </div>
       <div class="trace-pane__toolbar-actions">
@@ -275,7 +313,7 @@ const formatChangeType = (changeType: FileEditTrace['changeType']) => {
             :name="isFileDrawerVisible ? 'panel-left-close' : 'panel-left-open'"
             :size="14"
           />
-          {{ isFileDrawerVisible ? '隐藏文件列表' : `文件列表 ${groupedFiles.length}` }}
+          {{ isFileDrawerVisible ? t('trace.hideFileList') : t('trace.fileListCount', { count: groupedFiles.length }) }}
         </EaButton>
         <EaButton
           type="ghost"
@@ -286,7 +324,7 @@ const formatChangeType = (changeType: FileEditTrace['changeType']) => {
             :name="sessionState.isAutoFollow ? 'locate-fixed' : 'locate-off'"
             :size="14"
           />
-          {{ sessionState.isAutoFollow ? '跟随最新' : '手动浏览' }}
+          {{ sessionState.isAutoFollow ? t('trace.autoFollow') : t('trace.manualBrowse') }}
         </EaButton>
         <EaButton
           v-if="selectedTrace && currentProject"
@@ -298,7 +336,7 @@ const formatChangeType = (changeType: FileEditTrace['changeType']) => {
             name="square-pen"
             :size="14"
           />
-          完整编辑器
+          {{ t('trace.fullEditor') }}
         </EaButton>
         <EaButton
           type="ghost"
@@ -309,7 +347,7 @@ const formatChangeType = (changeType: FileEditTrace['changeType']) => {
             name="panel-left-close"
             :size="14"
           />
-          隐藏
+          {{ t('trace.hide') }}
         </EaButton>
       </div>
     </header>
@@ -325,10 +363,10 @@ const formatChangeType = (changeType: FileEditTrace['changeType']) => {
         <div class="trace-pane__drawer-header">
           <div>
             <div class="trace-pane__drawer-eyebrow">
-              Edited Files
+              {{ t('trace.editedFiles') }}
             </div>
             <div class="trace-pane__drawer-title">
-              本轮改动 {{ groupedFiles.length }}
+              {{ t('trace.editsInRound', { count: groupedFiles.length }) }}
             </div>
           </div>
           <button
@@ -360,7 +398,7 @@ const formatChangeType = (changeType: FileEditTrace['changeType']) => {
               </span>
             </div>
             <div class="trace-pane__file-meta">
-              <span>{{ group.traces.length }} 处变更</span>
+              <span>{{ t('trace.changeCount', { count: group.traces.length }) }}</span>
               <span>{{ group.latestTrace.range.startLine }}-{{ group.latestTrace.range.endLine }}</span>
             </div>
           </button>
@@ -370,9 +408,9 @@ const formatChangeType = (changeType: FileEditTrace['changeType']) => {
       <div class="trace-pane__viewer">
         <div class="trace-pane__viewer-hero">
           <div class="trace-pane__viewer-copy">
-            <span class="trace-pane__viewer-kicker">Trace Preview</span>
+            <span class="trace-pane__viewer-kicker">{{ t('trace.tracePreview') }}</span>
             <div class="trace-pane__viewer-path">
-              {{ tracePreviewStore.activeRelativePath || '未选择文件' }}
+              {{ tracePreviewStore.activeRelativePath || t('trace.noFileSelected') }}
             </div>
             <div class="trace-pane__viewer-summary">
               <span
@@ -383,7 +421,7 @@ const formatChangeType = (changeType: FileEditTrace['changeType']) => {
                 {{ formatChangeType(selectedTrace.changeType) }}
               </span>
               <span v-if="selectedTrace">
-                第 {{ selectedTrace.range.startLine }} - {{ selectedTrace.range.endLine }} 行
+                {{ t('trace.lineRange', { start: selectedTrace.range.startLine, end: selectedTrace.range.endLine }) }}
               </span>
               <span v-if="selectedTraceRevisionLabel">{{ selectedTraceRevisionLabel }}</span>
             </div>
@@ -391,7 +429,7 @@ const formatChangeType = (changeType: FileEditTrace['changeType']) => {
         </div>
 
         <div
-          v-if="selectedGroup"
+          v-if="selectedGroup && shouldShowRevisionChips"
           class="trace-pane__hunks"
         >
           <button
@@ -407,7 +445,7 @@ const formatChangeType = (changeType: FileEditTrace['changeType']) => {
 
         <div class="trace-pane__editor">
           <div class="trace-pane__editor-meta">
-            <span class="trace-pane__editor-path">{{ selectedTrace?.hunkHeader || '代码预览' }}</span>
+            <span class="trace-pane__editor-path">{{ selectedTrace?.hunkHeader || t('trace.codePreview') }}</span>
             <div class="trace-pane__editor-actions">
               <span
                 v-if="tracePreviewStore.loadError"
@@ -427,7 +465,7 @@ const formatChangeType = (changeType: FileEditTrace['changeType']) => {
                   name="rotate-ccw"
                   :size="14"
                 />
-                {{ canRollbackSelectedTrace ? '回滚到修改前' : '旧记录不可回滚' }}
+                {{ canRollbackSelectedTrace ? t('trace.rollbackToBefore') : t('trace.oldRecordNoRollback') }}
               </EaButton>
             </div>
           </div>
@@ -440,7 +478,7 @@ const formatChangeType = (changeType: FileEditTrace['changeType']) => {
               name="triangle-alert"
               :size="14"
             />
-            <span>这条旧记录缺少完整前后快照，下面仅展示当前可定位的片段，不代表真实历史差异。</span>
+            <span>{{ t('trace.historyNote') }}</span>
           </div>
 
           <TraceDiffStack
@@ -461,7 +499,7 @@ const formatChangeType = (changeType: FileEditTrace['changeType']) => {
         name="file-search"
         :size="18"
       />
-      <span>当前消息还没有可追踪的文件修改</span>
+      <span>{{ t('trace.emptyMessage') }}</span>
     </div>
   </section>
 </template>
@@ -630,8 +668,8 @@ const formatChangeType = (changeType: FileEditTrace['changeType']) => {
 .trace-pane__viewer-path {
   margin-top: 6px;
   font-family: var(--font-family-mono);
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
   color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -686,9 +724,9 @@ const formatChangeType = (changeType: FileEditTrace['changeType']) => {
 }
 
 .trace-pane__file-meta {
-  font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
-  font-size: 11.5px;
-  font-weight: 600;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
   font-variant-numeric: tabular-nums;
   color: var(--color-text-tertiary);
 }

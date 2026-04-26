@@ -12,6 +12,7 @@ import type { RuntimeNotice } from '@/utils/runtimeNotice'
 export type MessageRole = 'user' | 'assistant' | 'system' | 'compression'
 export type MessageStatus = 'pending' | 'streaming' | 'completed' | 'error' | 'interrupted'
 export type ToolCallStatus = 'pending' | 'running' | 'success' | 'error'
+export const MANUAL_STOP_ERROR_MARKER = '__manual_stop__'
 
 export interface ToolCall {
   id: string
@@ -296,17 +297,26 @@ function buildVisibleAssistantEditTracesByMessage(
 function shouldReconcileStreamingMessage(
   message: Message,
   currentStreamingMessageId: string | null,
-  isSending: boolean
+  isSessionBusy: boolean,
+  hasLocalActivity: boolean
 ): boolean {
   if (message.role !== 'assistant' || message.status !== 'streaming') {
     return false
   }
 
-  if (!isSending) {
+  if (isSessionBusy) {
+    return false
+  }
+
+  if (hasLocalActivity) {
+    return false
+  }
+
+  if (!currentStreamingMessageId) {
     return true
   }
 
-  return Boolean(currentStreamingMessageId) && message.id !== currentStreamingMessageId
+  return message.id !== currentStreamingMessageId
 }
 
 function transformMessage(rustMsg: RustMessage): Message {
@@ -668,11 +678,21 @@ export const useMessageStore = defineStore('message', () => {
 
       const currentExecutionState = sessionExecutionStore.getExecutionState(sessionId)
       const nextSessionMessages = result.messages.map(transformMessage)
+      const currentSessionMessageMap = new Map(
+        (sessionMessages.value.get(sessionId) ?? EMPTY_MESSAGES).map(message => [message.id, message] as const)
+      )
+      const isSessionBusy = currentExecutionState.isSending
+        || currentExecutionState.isStreaming
+        || currentExecutionState.isAwaitingRetry
+        || currentExecutionState.isQueueDraining
       const streamingMessagesToReconcile = nextSessionMessages.filter(message => (
         shouldReconcileStreamingMessage(
           message,
           currentExecutionState.currentStreamingMessageId,
-          currentExecutionState.isSending
+          isSessionBusy,
+          currentSessionMessageMap.get(message.id)?.status === 'streaming'
+            || pendingMessageUpdates.has(message.id)
+            || inFlightMessageFlushes.has(message.id)
         )
       ))
 

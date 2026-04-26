@@ -2,6 +2,8 @@
  * 计划模式相关类型定义
  */
 
+import type { MessageAttachment } from '@/stores/message'
+
 // 计划状态
 export type PlanStatus = 'draft' | 'planning' | 'ready' | 'executing' | 'completed' | 'paused'
 
@@ -349,6 +351,7 @@ export interface AIFormRequest {
 // AI 任务拆分结果
 export interface AITaskSplitResult {
   type: 'task_split'
+  summary?: string
   tasks: AITaskItem[]
 }
 
@@ -378,6 +381,7 @@ export interface SplitMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
+  attachments?: MessageAttachment[]
   rawContent?: string
   formSchema?: DynamicFormSchema
   formValues?: Record<string, any>
@@ -452,6 +456,7 @@ export interface PlanSplitStreamPayload {
   inputTokens?: number
   outputTokens?: number
   model?: string
+  externalSessionId?: string
   metadata?: string | null
   createdAt?: string
   session?: PlanSplitSessionRecord
@@ -463,6 +468,8 @@ export interface PlanSplitStreamPayload {
 export interface TaskResplitConfig {
   taskIndex: number
   customPrompt?: string
+  displayContent?: string
+  attachments?: MessageAttachment[]
   granularity: number
   expertId?: string
   agentId?: string
@@ -471,10 +478,14 @@ export interface TaskResplitConfig {
 
 export interface TaskListOptimizeConfig {
   customPrompt?: string
+  displayContent?: string
+  attachments?: MessageAttachment[]
   expertId?: string
   agentId?: string
   modelId?: string
   targetIndex?: number
+  taskCountMode?: TaskCountMode
+  minTaskCount?: number
 }
 
 export type TaskSplitRefinementMode = 'task_resplit' | 'list_optimize'

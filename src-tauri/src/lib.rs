@@ -342,6 +342,7 @@ pub fn run() {
             commands::plan::cancel_plan_schedule,
             commands::plan_split::get_plan_split_session,
             commands::plan_split::list_plan_split_logs,
+            commands::plan_split::list_recent_plan_split_logs,
             commands::plan_split::create_plan_split_log,
             commands::plan_split::update_plan_split_log,
             commands::plan_split::start_plan_split,

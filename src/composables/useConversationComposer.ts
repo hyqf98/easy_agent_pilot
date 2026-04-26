@@ -1787,11 +1787,13 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       displayPreviewContent?: string
       memoryReferences?: ComposerMemoryReference[]
       reuseAssistantMessageId?: string
+      targetSessionId?: string
     }
   ): Promise<boolean> => {
-    const sessionId = currentSessionId.value
+    const sessionId = options?.targetSessionId ?? currentSessionId.value
     if ((!userInput.trim() && attachments.length === 0) || !sessionId || isSending.value) return false
 
+    const targetSession = sessionStore.sessions.find(session => session.id === sessionId) || null
     const expert = currentExpert.value
     const executionAgent = getExecutionAgentConfig()
     if (!expert || !executionAgent) {
@@ -1806,7 +1808,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     }
 
     try {
-      if (currentSession.value?.expertId !== expert.id || currentSession.value?.agentId !== executionAgent.id) {
+      if (targetSession?.expertId !== expert.id || targetSession?.agentId !== executionAgent.id) {
         await sessionStore.updateSession(sessionId, {
           expertId: expert.id,
           agentId: executionAgent.id,
@@ -1820,7 +1822,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
         sessionId,
         userInput,
         executionAgent.id,
-        currentSession.value?.projectId,
+        targetSession?.projectId,
         attachments,
         {
           workingDirectory: currentWorkingDirectory.value || undefined,
@@ -1950,26 +1952,54 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       return
     }
 
-    dispatchingSessionId.value = sessionId
+    const executionAgent = getExecutionAgentConfig()
+    if (!executionAgent) {
+      return
+    }
+
+    let sendSessionId = sessionId
 
     try {
-      clearComposerDraft(sessionId)
+      if (compressionService.shouldAutoCompressSession(sessionId)) {
+        isCompressing.value = true
+        const result = await compressionService.compressSession(
+          sessionId,
+          executionAgent.id,
+          { strategy: settingsStore.settings.compressionStrategy as CompressionStrategy }
+        )
+        isCompressing.value = false
+
+        if (!result.success || !result.newSessionId) {
+          notificationStore.error(t('compression.failed'), result.error)
+          focusInput()
+          return
+        }
+
+        notificationStore.success(t('compression.success'))
+        sendSessionId = result.newSessionId
+        await nextTick()
+      }
+
+      dispatchingSessionId.value = sendSessionId
+      clearComposerDraft(sendSessionId)
       await nextTick()
 
       const success = await sendWithCurrentAgent(userInput, attachments, {
         displayPreviewContent: annotatedMessage.previewContent,
-        memoryReferences: orderedMemoryReferences
+        memoryReferences: orderedMemoryReferences,
+        targetSessionId: sendSessionId
       })
       if (success) {
         focusInput()
       } else {
         inputText.value = rawInput
-        sessionExecutionStore.setMemoryReferences(sessionId, orderedMemoryReferences)
+        sessionExecutionStore.setMemoryReferences(sendSessionId, orderedMemoryReferences)
         await restorePendingImages(attachments)
         focusInput()
       }
     } finally {
-      if (dispatchingSessionId.value === sessionId) {
+      isCompressing.value = false
+      if (dispatchingSessionId.value === sendSessionId) {
         dispatchingSessionId.value = null
       }
     }
@@ -2012,9 +2042,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
         await messageStore.deleteMessage(replaceMessageId)
       }
 
-      tokenStore.rebuildSessionTokenCacheFromMessages(sessionId, {
-        clearRealtime: true
-      })
+      tokenStore.clearRealtimeTokens(sessionId)
 
       await conversationService.sendMessage(
         sessionId,
@@ -2047,8 +2075,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
   const handleMessageFormSubmit = async (
     formId: string,
-    values: Record<string, unknown>,
-    assistantMessageId?: string
+    values: Record<string, unknown>
   ) => {
     if (!currentSessionId.value || !currentAgent.value || isSending.value || isCurrentSessionDispatching.value) {
       return
@@ -2060,9 +2087,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       values
     }, null, 2)
 
-    await sendWithCurrentAgent(payload, [], {
-      reuseAssistantMessageId: assistantMessageId
-    })
+    await sendWithCurrentAgent(payload, [])
   }
 
   const handleKeyDown = (event: KeyboardEvent) => {

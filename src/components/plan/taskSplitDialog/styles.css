@@ -14,24 +14,16 @@
 
 .split-dialog {
   --split-dialog-bg:
-    radial-gradient(circle at 12% 0%, rgba(14, 165, 233, 0.12), transparent 26%),
-    radial-gradient(circle at 88% 100%, rgba(99, 102, 241, 0.1), transparent 30%),
-    var(--color-surface, #fff);
-  --split-dialog-border: rgba(148, 163, 184, 0.2);
+    var(--color-bg-primary, #f8fafc);
+  --split-dialog-border: var(--color-border, #e2e8f0);
   --split-dialog-shadow: var(--shadow-xl, 0 20px 25px -5px rgba(0, 0, 0, 0.1));
-  --split-dialog-header-bg-color: rgba(255, 255, 255, 0.92);
-  --split-dialog-header-bg: linear-gradient(90deg, rgba(239, 246, 255, 0.92), rgba(238, 242, 255, 0.9));
-  --split-dialog-footer-bg: linear-gradient(180deg, #f8fbff, #f1f5ff);
+  --split-dialog-header-bg-color: var(--color-surface, #fff);
+  --split-dialog-header-bg: none;
+  --split-dialog-footer-bg: var(--color-surface, #fff);
   --split-pane-bg: var(--color-surface, #fff);
-  --split-pane-border: rgba(125, 148, 188, 0.22);
-  --split-pane-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
-  --split-messages-bg:
-    radial-gradient(circle at top left, rgba(59, 130, 246, 0.06), transparent 42%),
-    linear-gradient(to bottom, var(--color-bg-secondary, #f8fafc), var(--color-surface, #fff) 35%);
-  --split-assistant-message-bg: linear-gradient(180deg, #ffffff, #f8fbff);
-  --split-assistant-message-border: rgba(148, 163, 184, 0.26);
-  --split-assistant-message-text: var(--color-text-primary, #1e293b);
-  --split-loading-text: var(--color-text-secondary, #64748b);
+  --split-pane-border: var(--color-border, #e2e8f0);
+  --split-pane-shadow: none;
+  --split-messages-bg: var(--conversation-workspace-bg, var(--color-bg-primary, #f8fafc));
   background-color: var(--color-surface, #fff);
   border-radius: 1.15rem;
   width: min(96vw, 92rem);
@@ -90,6 +82,12 @@
   box-shadow: 0 8px 18px rgba(79, 70, 229, 0.3);
 }
 
+.dialog-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
 .btn-close {
   display: flex;
   align-items: center;
@@ -122,6 +120,39 @@
 .dialog-body {
   flex: 1;
   overflow: hidden;
+}
+
+.dialog-tabs {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.7rem 1rem 0;
+  border-bottom: 1px solid var(--color-border, #e2e8f0);
+  background: var(--color-surface, #fff);
+  flex-shrink: 0;
+}
+
+.dialog-tab {
+  appearance: none;
+  border: 1px solid var(--color-border, #e2e8f0);
+  background: var(--color-surface, #fff);
+  color: var(--color-text-secondary, #475569);
+  border-radius: 0.7rem 0.7rem 0 0;
+  padding: 0.5rem 0.85rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all var(--transition-fast, 150ms);
+}
+
+.dialog-tab:hover {
+  color: var(--color-text-primary, #1e293b);
+  background: var(--color-surface-hover, #f8fafc);
+}
+
+.dialog-tab--active {
+  color: var(--color-primary, #2563eb);
+  background: var(--color-surface, #fff);
+  border-color: var(--color-border-strong, #cbd5e1);
+  box-shadow: inset 0 -2px 0 var(--color-primary, #2563eb);
 }
 
 .split-content {
@@ -185,157 +216,49 @@
 }
 
 .messages-container {
-  --timeline-panel-width: 50%;
-  --timeline-panel-max-width: 58%;
-  --timeline-tool-call-shell-max-height: min(32rem, calc(100vh - 21rem));
   flex: 1;
-  overflow-y: auto;
-  padding: var(--spacing-4, 1rem);
-  padding-bottom: var(--spacing-3, 0.75rem);
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2, 0.5rem);
   background: var(--split-messages-bg);
   min-height: 0;
 }
 
-.message {
-  display: flex;
-  width: 100%;
-}
-
-.message.user {
-  justify-content: flex-end;
-}
-
-.message.assistant {
-  justify-content: flex-start;
-}
-
-.message-content {
-  padding: var(--spacing-3, 0.75rem) var(--spacing-4, 1rem);
-  border-radius: 1rem;
-  font-size: var(--font-size-sm, 13px);
-  line-height: 1.6;
-  width: fit-content;
-  max-width: min(85%, 42rem);
-  border: 1px solid transparent;
-  box-shadow: 0 8px 16px rgba(15, 23, 42, 0.05);
-}
-
-.message.user .message-content {
-  background: linear-gradient(135deg, #0ea5e9, #6366f1);
-  color: white;
-  border-bottom-right-radius: 0.38rem;
-  box-shadow: 0 12px 20px rgba(79, 70, 229, 0.25);
-}
-
-.message.assistant .message-content {
-  background: var(--split-assistant-message-bg);
-  color: var(--split-assistant-message-text);
-  border-bottom-left-radius: 0.38rem;
-  border-color: var(--split-assistant-message-border);
-}
-
-.message-content p {
-  margin: 0;
-  white-space: pre-line;
-  word-break: break-word;
-}
-
-.message-form {
-  margin-top: -0.18rem;
-}
-
-.form-message-content {
-  width: 100%;
-  max-width: min(85%, 44rem);
-  background: transparent !important;
-  border: none !important;
-  padding: 0;
-  box-shadow: none;
-}
-
-.form-message-content.disabled {
-  opacity: 0.72;
-  pointer-events: none;
-}
-
-.message-content.loading {
-  display: flex;
-  gap: 4px;
+.messages-container :deep(.message-list) {
+  --message-list-top-safe-space: 0px;
+  --message-list-bottom-safe-space: 0px;
+  height: 100%;
   padding: var(--spacing-4, 1rem);
-  box-shadow: none;
+  background: transparent;
 }
 
-.message-loading-status {
-  margin-top: -0.35rem;
-  padding: 0 var(--spacing-4, 1rem) var(--spacing-4, 1rem);
-  font-size: 0.78rem;
-  color: var(--split-loading-text);
+.messages-container :deep(.message-bubble) {
+  --message-fixed-width: clamp(16.5rem, 24vw, 21rem);
+  --message-min-width: 0;
+  --message-max-width: clamp(18rem, 28vw, 23rem);
+  --message-compact-max-width: clamp(16.5rem, 24vw, 21rem);
+  --message-trace-max-width: clamp(20rem, 30vw, 26rem);
+  --thinking-display-width: clamp(16.5rem, 24vw, 21rem);
 }
 
-.message-content.loading .dot {
-  width: 8px;
-  height: 8px;
-  background-color: var(--color-text-tertiary, #94a3b8);
-  border-radius: 50%;
-  animation: bounce 1.4s ease-in-out infinite both;
+.messages-container :deep(.message-bubble--assistant.message-bubble--form-only) {
+  --message-fixed-width: clamp(15.5rem, 22vw, 19rem);
+  --message-max-width: clamp(16.5rem, 24vw, 21rem);
+  --message-compact-max-width: clamp(15.5rem, 22vw, 19rem);
+  --thinking-display-width: clamp(15.5rem, 22vw, 19rem);
 }
 
-.message-content.loading .dot:nth-child(1) {
-  animation-delay: -0.32s;
+.messages-container :deep(.message-bubble__content) {
+  padding: var(--spacing-2) var(--spacing-2);
 }
 
-.message-content.loading .dot:nth-child(2) {
-  animation-delay: -0.16s;
+.messages-container :deep(.message-bubble--assistant .message-bubble__content--form-only) {
+  max-width: min(100%, var(--message-max-width));
 }
 
-@keyframes bounce {
-  0%, 80%, 100% {
-    transform: scale(0);
-  }
-  40% {
-    transform: scale(1);
-  }
+.messages-container :deep(.structured-content__form--standalone) {
+  max-width: min(100%, var(--message-max-width));
 }
 
-.submitted-values {
-  margin-top: var(--spacing-3, 0.75rem);
-  padding: var(--spacing-3, 0.75rem);
-  background: rgba(255, 255, 255, 0.3);
-  border-radius: 0.7rem;
-  border: 1px dashed rgba(255, 255, 255, 0.34);
-}
-
-.submitted-value-item {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--spacing-2, 0.5rem);
-  font-size: var(--font-size-sm, 13px);
-}
-
-.submitted-value-item .field-label {
-  color: rgba(255, 255, 255, 0.8);
-  flex-shrink: 0;
-}
-
-.submitted-value-item .field-value {
-  color: white;
-  font-weight: var(--font-weight-medium, 500);
-}
-
-.message.assistant .submitted-values {
-  background: linear-gradient(180deg, #f1f5f9, #e7eef8);
-  border: 1px dashed rgba(99, 102, 241, 0.25);
-}
-
-.message.assistant .submitted-value-item .field-label {
-  color: #64748b;
-}
-
-.message.assistant .submitted-value-item .field-value {
-  color: #0f172a;
+.messages-container :deep(.dynamic-form--compact) {
+  max-width: min(100%, var(--message-max-width));
 }
 
 .dialog-footer {
@@ -519,8 +442,9 @@
 
 .instruction-input {
   width: 100%;
-  min-height: 3.25rem;
-  max-height: 10rem;
+  height: 4.15rem;
+  min-height: 4.15rem;
+  max-height: 4.15rem;
   padding: 0;
   border: none;
   background: transparent;
@@ -823,31 +747,41 @@
 
 :global([data-theme='dark']) .split-dialog,
 :global(.dark) .split-dialog {
-  --split-dialog-bg:
-    radial-gradient(circle at 12% 0%, rgba(14, 165, 233, 0.16), transparent 26%),
-    radial-gradient(circle at 88% 100%, rgba(99, 102, 241, 0.14), transparent 30%),
-    linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(15, 23, 42, 0.96));
-  --split-dialog-border: rgba(71, 85, 105, 0.72);
+  --split-dialog-bg: var(--color-bg-primary, rgba(15, 23, 42, 0.98));
+  --split-dialog-border: var(--color-border, rgba(71, 85, 105, 0.72));
   --split-dialog-shadow: 0 28px 56px rgba(2, 6, 23, 0.48);
-  --split-dialog-header-bg-color: rgba(17, 24, 39, 0.98);
-  --split-dialog-header-bg: linear-gradient(90deg, rgba(30, 64, 175, 0.2), rgba(49, 46, 129, 0.22));
-  --split-dialog-footer-bg: linear-gradient(180deg, rgba(17, 24, 39, 0.98), rgba(15, 23, 42, 0.96));
+  --split-dialog-header-bg-color: var(--color-surface, rgba(17, 24, 39, 0.98));
+  --split-dialog-header-bg: none;
+  --split-dialog-footer-bg: var(--color-surface, rgba(17, 24, 39, 0.98));
   --split-pane-bg: rgba(15, 23, 42, 0.86);
-  --split-pane-border: rgba(71, 85, 105, 0.76);
-  --split-pane-shadow: 0 16px 34px rgba(2, 6, 23, 0.28);
-  --split-messages-bg:
-    radial-gradient(circle at top left, rgba(59, 130, 246, 0.12), transparent 42%),
-    linear-gradient(to bottom, rgba(15, 23, 42, 0.98), rgba(17, 24, 39, 0.94) 35%);
-  --split-assistant-message-bg: linear-gradient(180deg, rgba(17, 24, 39, 0.96), rgba(15, 23, 42, 0.92));
-  --split-assistant-message-border: rgba(71, 85, 105, 0.62);
-  --split-assistant-message-text: #e2e8f0;
-  --split-loading-text: #94a3b8;
+  --split-pane-border: var(--color-border, rgba(71, 85, 105, 0.76));
+  --split-pane-shadow: none;
+  --split-messages-bg: var(--conversation-workspace-bg, rgba(15, 23, 42, 0.98));
 }
 
 :global([data-theme='dark']) .split-dialog .btn-close:hover,
 :global(.dark) .split-dialog .btn-close:hover {
   background-color: rgba(51, 65, 85, 0.72);
   color: #f8fafc;
+}
+
+:global([data-theme='dark']) .split-dialog .dialog-tabs,
+:global(.dark) .split-dialog .dialog-tabs {
+  background: var(--color-surface, rgba(15, 23, 42, 0.88));
+  border-bottom-color: var(--color-border, rgba(71, 85, 105, 0.68));
+}
+
+:global([data-theme='dark']) .split-dialog .dialog-tab,
+:global(.dark) .split-dialog .dialog-tab {
+  background: var(--color-surface, rgba(15, 23, 42, 0.88));
+  color: #94a3b8;
+  border-color: var(--color-border, rgba(71, 85, 105, 0.68));
+}
+
+:global([data-theme='dark']) .split-dialog .dialog-tab--active,
+:global(.dark) .split-dialog .dialog-tab--active {
+  background: var(--color-surface, rgba(30, 41, 59, 0.96));
+  color: #e2e8f0;
 }
 
 .message.cancelled {

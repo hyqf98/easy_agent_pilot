@@ -14,51 +14,68 @@ export interface NormalizeRuntimeUsageResult {
   inputTokens?: number
   outputTokens?: number
   nextBaseline: UsageBaseline | null
+  didReset: boolean
 }
 
-function isCumulativeUsageRuntime(provider?: string | null): boolean {
-  const normalized = provider?.trim().toLowerCase() ?? ''
-  return normalized.includes('codex') || normalized.includes('opencode')
-}
+const CUMULATIVE_USAGE_RUNTIME_KEYWORDS = ['claude', 'codex', 'opencode'] as const
 
-function normalizeCumulativeCounter(nextValue: number | undefined, previousValue: number): number | undefined {
-  if (typeof nextValue !== 'number') {
+function normalizeTokenValue(value?: number): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
     return undefined
   }
 
-  if (previousValue > 0 && nextValue >= previousValue) {
-    const delta = nextValue - previousValue
-    return delta > 0 ? delta : undefined
-  }
-
-  return nextValue
+  return Math.max(0, Math.floor(value))
 }
 
-/**
- * Codex / OpenCode CLI 在 resume 多轮时可能返回线程累计 usage。
- * 这里统一转换成当前轮次的增量，避免 UI 将累计值误认为上下文窗口占用。
- */
+export function isCumulativeUsageRuntime(provider?: string | null): boolean {
+  const normalized = provider?.trim().toLowerCase() ?? ''
+  return CUMULATIVE_USAGE_RUNTIME_KEYWORDS.some(keyword => normalized.includes(keyword))
+}
+
 export function normalizeRuntimeUsage(
   options: NormalizeRuntimeUsageOptions
 ): NormalizeRuntimeUsageResult {
-  const { provider, inputTokens, outputTokens, baseline } = options
-  if (!isCumulativeUsageRuntime(provider)) {
+  const inputTokens = normalizeTokenValue(options.inputTokens)
+  const outputTokens = normalizeTokenValue(options.outputTokens)
+  const baseline = options.baseline ?? null
+
+  if (!isCumulativeUsageRuntime(options.provider)) {
     return {
       inputTokens,
       outputTokens,
-      nextBaseline: baseline ?? null
+      nextBaseline: null,
+      didReset: false
     }
   }
 
   const previousInputTokens = baseline?.rawInputTokens ?? 0
   const previousOutputTokens = baseline?.rawOutputTokens ?? 0
+  const didReset = (
+    (typeof inputTokens === 'number' && inputTokens < previousInputTokens)
+    || (typeof outputTokens === 'number' && outputTokens < previousOutputTokens)
+  )
+
+  const normalizedInputTokens = typeof inputTokens === 'number'
+    ? (didReset ? inputTokens : Math.max(0, inputTokens - previousInputTokens))
+    : undefined
+  const normalizedOutputTokens = typeof outputTokens === 'number'
+    ? (didReset ? outputTokens : Math.max(0, outputTokens - previousOutputTokens))
+    : undefined
+  const hasRawUsage = typeof inputTokens === 'number' || typeof outputTokens === 'number'
 
   return {
-    inputTokens: normalizeCumulativeCounter(inputTokens, previousInputTokens),
-    outputTokens: normalizeCumulativeCounter(outputTokens, previousOutputTokens),
-    nextBaseline: {
-      rawInputTokens: typeof inputTokens === 'number' ? inputTokens : previousInputTokens,
-      rawOutputTokens: typeof outputTokens === 'number' ? outputTokens : previousOutputTokens
-    }
+    inputTokens: normalizedInputTokens,
+    outputTokens: normalizedOutputTokens,
+    nextBaseline: hasRawUsage
+      ? {
+          rawInputTokens: typeof inputTokens === 'number'
+            ? inputTokens
+            : baseline?.rawInputTokens ?? 0,
+          rawOutputTokens: typeof outputTokens === 'number'
+            ? outputTokens
+            : baseline?.rawOutputTokens ?? 0
+        }
+      : baseline,
+    didReset
   }
 }

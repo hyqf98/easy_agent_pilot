@@ -5,7 +5,6 @@
  */
 import { computed, ref, watch } from 'vue'
 import { useTokenStore, type TokenLevel, formatTokenCount } from '@/stores/token'
-import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 
 const props = withDefaults(defineProps<{
@@ -21,7 +20,6 @@ const emit = defineEmits<{
 }>()
 
 const tokenStore = useTokenStore()
-const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
 
 // 是否显示 tooltip
@@ -46,25 +44,11 @@ const realtimeUsage = computed(() => {
   return tokenStore.realtimeTokens.get(targetSessionId.value) ?? null
 })
 
-const messageSignature = computed(() => {
-  if (!targetSessionId.value) {
-    return ''
-  }
-
-  const messages = messageStore.messagesBySession(targetSessionId.value)
-  return messages
-    .map(message => `${message.id}:${message.tokens ?? 0}:${message.content.length}`)
-    .join('|')
-})
-
 watch(
-  () => [targetSessionId.value, messageSignature.value] as const,
-  ([sessionId]) => {
-    if (!sessionId) {
-      return
-    }
-
-    tokenStore.updateSessionTokenCache(sessionId)
+  targetSessionId,
+  () => {
+    // Token usage is now driven entirely by CLI response data.
+    // No local estimation or cache refresh needed on mount.
   },
   { immediate: true }
 )

@@ -43,7 +43,8 @@ const {
   isCurrentStreamingMessage,
   isError,
   isInterrupted,
-  canRetry,
+  canRetryCurrentAssistant,
+  canRetryCurrentUser,
   formattedTime,
   userFormResponseDisplay,
   processedUserMessage,
@@ -59,7 +60,7 @@ const {
   shouldClampToolCalls,
   sortedToolCalls,
   isAssistantFormOnly,
-  resolvedFormResponse,
+  resolvedFormResponsesById,
   handleStop,
   handleRetry,
   handleFormSubmit,
@@ -121,10 +122,10 @@ const {
         <StructuredContentRenderer
           v-if="!isUser"
           :content="message.content"
-          :interactive-forms="isAssistant && !resolvedFormResponse"
-          :form-disabled="Boolean(resolvedFormResponse)"
+          :interactive-forms="isAssistant"
+          :form-disabled="false"
           :animate="isAssistant && isStreaming"
-          :resolved-form-values="resolvedFormResponse?.values ?? null"
+          :resolved-form-values-by-form-id="resolvedFormResponsesById"
           @form-submit="handleFormSubmit"
         />
         <div
@@ -359,7 +360,7 @@ const {
         </button>
         <!-- 重试按钮 - 用户消息失败/中断 -->
         <button
-          v-if="isUser && canRetry"
+          v-if="canRetryCurrentUser"
           class="message-bubble__retry"
           :title="isInterrupted ? t('message.status.interrupted') : errorMessage"
           @click="handleRetry"
@@ -368,7 +369,7 @@ const {
         </button>
         <!-- 重试按钮 - AI 消息 -->
         <button
-          v-if="isAssistant && !isStreaming && (canRetry || message.content)"
+          v-if="canRetryCurrentAssistant"
           class="message-bubble__retry"
           :title="t('message.retry')"
           @click="handleRetry"

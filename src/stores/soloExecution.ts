@@ -18,6 +18,11 @@ import {
   buildUsageNotice,
   formatRuntimeNoticeAsSystemContent
 } from '@/utils/runtimeNotice'
+import {
+  isCumulativeUsageRuntime,
+  normalizeRuntimeUsage,
+  type UsageBaseline
+} from '@/utils/runtimeUsage'
 import { recordAgentCliUsageInBackground, resolveRecordedModelId } from '@/services/usage/agentCliUsageRecorder'
 import {
   buildExpertCatalogPrompt,
@@ -230,6 +235,7 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
   const executionStates = ref<Map<string, SoloExecutionState>>(new Map())
   const stopRequestedRunIds = ref<Set<string>>(new Set())
   const pendingLogWrites = new Map<string, Set<Promise<unknown>>>()
+  const usageBaselines = new Map<string, UsageBaseline>()
 
   const getSteps = computed(() => (runId: string) => stepsByRun.value.get(runId) ?? [])
   const getExecutionState = computed(() => (runId: string) => executionStates.value.get(runId))
@@ -331,18 +337,26 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
     const rawLogs = await invoke<RustSoloLog[]>('list_solo_logs', { runId, stepId: null })
     const state = initExecutionState(runId)
     state.logs = rawLogs.map(transformLog)
-    const latestUsageMetadata = [...state.logs]
-      .reverse()
-      .find((log) =>
-        typeof log.metadata?.inputTokens === 'number'
-        || typeof log.metadata?.outputTokens === 'number'
-        || typeof log.metadata?.model === 'string'
-      )?.metadata
+
+    let totalInput = 0
+    let totalOutput = 0
+    let lastModel: string | undefined
+    for (const log of state.logs) {
+      if (typeof log.metadata?.inputTokens === 'number') {
+        totalInput += log.metadata.inputTokens
+      }
+      if (typeof log.metadata?.outputTokens === 'number') {
+        totalOutput += log.metadata.outputTokens
+      }
+      if (typeof log.metadata?.model === 'string' && log.metadata.model.trim()) {
+        lastModel = log.metadata.model.trim()
+      }
+    }
 
     state.tokenUsage = {
-      inputTokens: latestUsageMetadata?.inputTokens ?? 0,
-      outputTokens: latestUsageMetadata?.outputTokens ?? 0,
-      model: latestUsageMetadata?.model,
+      inputTokens: totalInput,
+      outputTokens: totalOutput,
+      model: lastModel,
       resetCount: 0,
       lastUpdatedAt: state.logs[state.logs.length - 1]?.timestamp ?? null
     }
@@ -429,28 +443,29 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
     })
   }
 
-  function updateTokenUsage(runId: string, usage: Pick<StreamEvent, 'inputTokens' | 'outputTokens' | 'model'>, requestedModelId?: string | null) {
+  function updateTokenUsage(
+    runId: string,
+    usage: Pick<StreamEvent, 'inputTokens' | 'outputTokens' | 'model'>,
+    requestedModelId?: string | null,
+    didResetUsageWindow: boolean = false
+  ) {
     const state = initExecutionState(runId)
     const current = state.tokenUsage
-    const nextInputTokens = typeof usage.inputTokens === 'number' ? usage.inputTokens : current.inputTokens
-    const nextOutputTokens = typeof usage.outputTokens === 'number' ? usage.outputTokens : current.outputTokens
+    const nextInputTokens = current.inputTokens + (typeof usage.inputTokens === 'number'
+      ? Math.max(0, usage.inputTokens)
+      : 0)
+    const nextOutputTokens = current.outputTokens + (typeof usage.outputTokens === 'number'
+      ? Math.max(0, usage.outputTokens)
+      : 0)
     const resolvedModel = resolveRecordedModelId({
       reportedModelId: usage.model || current.model,
       requestedModelId
     }) ?? usage.model ?? current.model
-    const didReset = (
-      typeof usage.inputTokens === 'number'
-      || typeof usage.outputTokens === 'number'
-    ) && (
-      nextInputTokens < current.inputTokens
-      || nextOutputTokens < current.outputTokens
-      || (nextInputTokens + nextOutputTokens) < (current.inputTokens + current.outputTokens)
-    )
     state.tokenUsage = {
       inputTokens: nextInputTokens,
       outputTokens: nextOutputTokens,
       model: resolvedModel,
-      resetCount: didReset ? current.resetCount + 1 : current.resetCount,
+      resetCount: didResetUsageWindow ? current.resetCount + 1 : current.resetCount,
       lastUpdatedAt: new Date().toISOString()
     }
   }
@@ -685,6 +700,10 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
       resumeSessionId
     }
 
+    if (!resumeSessionId || !isCumulativeUsageRuntime(inferAgentProvider(agent))) {
+      usageBaselines.delete(run.id)
+    }
+
     let fullContent: string
 
     try {
@@ -700,21 +719,47 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
 
         try {
           await agentExecutor.execute(context, (event) => {
-            if (event.inputTokens !== undefined || event.outputTokens !== undefined || event.model) {
-              updateTokenUsage(run.id, event, agent.modelId)
-              if (typeof event.inputTokens === 'number') turnTokens.inputTokens = event.inputTokens
-              if (typeof event.outputTokens === 'number') turnTokens.outputTokens = event.outputTokens
-              if (event.model) turnTokens.model = event.model
+            const normalizedUsage = normalizeRuntimeUsage({
+              provider: inferAgentProvider(agent),
+              inputTokens: event.inputTokens,
+              outputTokens: event.outputTokens,
+              baseline: usageBaselines.get(run.id) ?? null
+            })
+            const normalizedEvent: StreamEvent = {
+              ...event,
+              inputTokens: normalizedUsage.inputTokens,
+              outputTokens: normalizedUsage.outputTokens
             }
 
-            if (event.externalSessionId?.trim()) {
-              latestExternalSessionId = event.externalSessionId.trim()
+            if (normalizedUsage.nextBaseline) {
+              usageBaselines.set(run.id, normalizedUsage.nextBaseline)
+            } else {
+              usageBaselines.delete(run.id)
+            }
+
+            if (
+              normalizedEvent.inputTokens !== undefined
+              || normalizedEvent.outputTokens !== undefined
+              || normalizedEvent.model
+            ) {
+              updateTokenUsage(run.id, normalizedEvent, agent.modelId, normalizedUsage.didReset)
+              if (typeof normalizedEvent.inputTokens === 'number') {
+                turnTokens.inputTokens += Math.max(0, normalizedEvent.inputTokens)
+              }
+              if (typeof normalizedEvent.outputTokens === 'number') {
+                turnTokens.outputTokens += Math.max(0, normalizedEvent.outputTokens)
+              }
+              if (normalizedEvent.model) turnTokens.model = normalizedEvent.model
+            }
+
+            if (normalizedEvent.externalSessionId?.trim()) {
+              latestExternalSessionId = normalizedEvent.externalSessionId.trim()
               if (runtimeBindingKey) {
                 void upsertSoloRuntimeBinding(run.id, runtimeBindingKey, latestExternalSessionId)
               }
             }
 
-            handleStreamEvent(run.id, event, { stepId, scope, persistContentLogs, fullContentRef: (value) => { fullContent = value } })
+            handleStreamEvent(run.id, normalizedEvent, { stepId, scope, persistContentLogs, fullContentRef: (value) => { fullContent = value } })
           })
 
           await waitForPendingLogWrites(run.id)
@@ -831,15 +876,6 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
         if (event.content) {
           state.accumulatedContent += event.content
           options.fullContentRef(state.accumulatedContent)
-          // 流式输出期间估算 output tokens（CLI 不在 content 事件中携带 token 数据）
-          const estimatedOutputTokens = Math.ceil(state.accumulatedContent.length / 4)
-          if (state.tokenUsage.outputTokens < estimatedOutputTokens) {
-            state.tokenUsage = {
-              ...state.tokenUsage,
-              outputTokens: estimatedOutputTokens,
-              lastUpdatedAt: new Date().toISOString()
-            }
-          }
           if (options.persistContentLogs) {
             trackPendingLogWrite(runId, addLog({
               runId,

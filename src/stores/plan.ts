@@ -85,7 +85,17 @@ export const usePlanStore = defineStore('plan', () => {
   const isLoading = ref(false)
   const loadError = ref<string | null>(null)
   const splitDialogVisible = ref(false)
-  const splitDialogContext = ref<PlanSplitDialogContext | null>(null)
+  const splitDialogContexts = ref<Map<string, PlanSplitDialogContext>>(new Map())
+  const activeSplitPlanId = ref<string | null>(null)
+
+  const splitDialogContext = computed<PlanSplitDialogContext | null>(() => {
+    if (!activeSplitPlanId.value) return null
+    return splitDialogContexts.value.get(activeSplitPlanId.value) ?? null
+  })
+
+  const splitDialogPlanIds = computed<string[]>(() =>
+    Array.from(splitDialogContexts.value.keys())
+  )
 
   // Getters
   const currentPlan = computed(() =>
@@ -362,14 +372,32 @@ export const usePlanStore = defineStore('plan', () => {
 
   // 打开任务拆分对话框
   function openSplitDialog(context: PlanSplitDialogContext) {
-    splitDialogContext.value = context
+    splitDialogContexts.value.set(context.planId, context)
+    activeSplitPlanId.value = context.planId
     splitDialogVisible.value = true
   }
 
-  // 关闭任务拆分对话框
+  function switchSplitDialogTab(planId: string) {
+    if (splitDialogContexts.value.has(planId)) {
+      activeSplitPlanId.value = planId
+    }
+  }
+
+  function closeSplitDialogTab(planId: string) {
+    splitDialogContexts.value.delete(planId)
+    if (activeSplitPlanId.value === planId) {
+      const remaining = Array.from(splitDialogContexts.value.keys())
+      activeSplitPlanId.value = remaining.length > 0 ? remaining[remaining.length - 1] : null
+    }
+    if (splitDialogContexts.value.size === 0) {
+      splitDialogVisible.value = false
+    }
+  }
+
   function closeSplitDialog() {
     splitDialogVisible.value = false
-    splitDialogContext.value = null
+    activeSplitPlanId.value = null
+    splitDialogContexts.value.clear()
   }
 
   // 取消计划定时
@@ -397,18 +425,18 @@ export const usePlanStore = defineStore('plan', () => {
   }
 
   return {
-    // State
     plans,
     currentPlanId,
     isLoading,
     loadError,
     splitDialogVisible,
+    splitDialogContexts,
     splitDialogContext,
-    // Getters
+    activeSplitPlanId,
+    splitDialogPlanIds,
     currentPlan,
     plansByProject,
     plansByStatus,
-    // Actions
     loadPlans,
     getPlan,
     createPlan,
@@ -417,17 +445,16 @@ export const usePlanStore = defineStore('plan', () => {
     clearProjectPlans,
     setCurrentPlan,
     getPlansByStatus,
-    // 执行控制
     markPlanAsReady,
     startPlanExecution,
     pausePlanExecution,
     resumePlanExecution,
     completePlanExecution,
     setCurrentTask,
-    // 拆分对话框
     openSplitDialog,
     closeSplitDialog,
-    // 定时计划
+    switchSplitDialogTab,
+    closeSplitDialogTab,
     cancelPlanSchedule
   }
 })

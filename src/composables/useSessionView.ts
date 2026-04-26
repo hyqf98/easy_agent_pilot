@@ -27,7 +27,6 @@ export function useSessionView() {
       projectStore.setCurrentProject(session.projectId)
       projectStore.expandProject(session.projectId)
       layoutStore.setProjectTab(session.projectId, 'sessions')
-      await sessionStore.loadSessions(session.projectId, { force: true })
     }
 
     if (session?.agentType === 'planner') {
@@ -38,7 +37,7 @@ export function useSessionView() {
       return
     }
 
-    const task = await taskStore.getTaskBySessionId(id)
+    const task = taskStore.getCachedTaskBySessionId(id)
     if (task?.planId) {
       if (session?.projectId && planStore.plansByProject(session.projectId).length === 0) {
         await planStore.loadPlans(session.projectId)
@@ -52,6 +51,10 @@ export function useSessionView() {
     uiStore.setAppMode('chat')
     uiStore.setMainContentMode('chat')
     await sessionStore.openSession(id)
+
+    if (session?.projectId) {
+      void sessionStore.loadSessions(session.projectId, { force: true }).catch(() => {})
+    }
   }
 
   function getStatusIcon(status: SessionStatus) {

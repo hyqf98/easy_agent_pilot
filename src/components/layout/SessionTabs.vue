@@ -112,6 +112,11 @@ const getStatusIcon = (status: SessionStatus): string => {
 const switchToSession = async (sessionId: string) => {
   if (sessionId === sessionStore.currentSessionId) return
 
+  if (sessionStore.isSessionOpen(sessionId)) {
+    sessionStore.setCurrentSession(sessionId)
+    return
+  }
+
   switchingTabId.value = sessionId
 
   try {

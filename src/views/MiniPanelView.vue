@@ -109,6 +109,7 @@ onUnmounted(() => {
         </div>
 
         <MessageList
+          :key="miniPanelStore.sessionId || 'mini-panel-empty'"
           class="mini-panel__messages"
           :session-id="miniPanelStore.sessionId || undefined"
           @retry="handleRetry"

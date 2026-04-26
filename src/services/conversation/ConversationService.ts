@@ -1,4 +1,4 @@
-import { useMessageStore, type Message, type MessageAttachment, type ToolCall } from '@/stores/message'
+import { MANUAL_STOP_ERROR_MARKER, useMessageStore, type Message, type MessageAttachment, type ToolCall } from '@/stores/message'
 import { useSessionStore, type Session } from '@/stores/session'
 import { useSessionExecutionStore, type ComposerMemoryReference } from '@/stores/sessionExecution'
 import { useProjectStore } from '@/stores/project'
@@ -9,7 +9,6 @@ import { useMemoryStore } from '@/stores/memory'
 import { useAgentTeamsStore } from '@/stores/agentTeams'
 import { agentExecutor } from './AgentExecutor'
 import type { ConversationContext, McpServerConfig, StreamEvent } from './strategies/types'
-import { compressionService } from '@/services/compression/CompressionService'
 import { buildConversationMessages } from './buildConversationMessages'
 import { loadMountedMemoryPrompt } from '@/services/memory/mountedMemoryPrompt'
 import type { FileEditTrace } from '@/types/fileTrace'
@@ -49,6 +48,7 @@ import {
   upsertSessionRuntimeBinding
 } from './runtimeBindings'
 import {
+  isCumulativeUsageRuntime,
   normalizeRuntimeUsage,
   type UsageBaseline
 } from '@/utils/runtimeUsage'
@@ -117,24 +117,6 @@ function resolveRequestedUsageModel(options: {
     reportedModelId: normalizedReported,
     requestedModelId: normalizedRequested
   }) ?? normalizedRequested ?? normalizedReported
-}
-
-function estimateTextTokens(content: string): number {
-  const normalized = content.trim()
-  if (!normalized) {
-    return 0
-  }
-
-  return Math.ceil(normalized.length / 4)
-}
-
-function estimateConversationInputTokens(messages: Message[]): number {
-  return messages.reduce((total, message) => total + estimateTextTokens(message.content), 0)
-}
-
-function isCumulativeUsageRuntime(provider?: string | null): boolean {
-  const normalized = provider?.trim().toLowerCase() ?? ''
-  return normalized.includes('codex') || normalized.includes('opencode')
 }
 
 function isSnapshotProneContentRuntime(provider?: string | null): boolean {
@@ -316,7 +298,10 @@ export class ConversationService {
     this.activeSendSessions.add(sessionId)
     sessionExecutionStore.startSending(sessionId)
     this.clearConversationRetryState(sessionId)
-    tokenStore.clearRealtimeTokens(sessionId)
+    const isRetry = Boolean(options?.existingUserMessageId?.trim() || options?.reuseAssistantMessageId?.trim())
+    if (!isRetry) {
+      tokenStore.clearRealtimeTokens(sessionId)
+    }
 
     try {
       const existingUserMessageId = options?.existingUserMessageId?.trim()
@@ -498,24 +483,6 @@ export class ConversationService {
       const userMessages = messages.filter(message => message.role === 'user')
       const systemMessages = messages.filter(message => message.role === 'system')
       const assistantMessages = messages.filter(message => message.role === 'assistant')
-      const estimatedInputTokens = estimateConversationInputTokens(messages)
-      if (estimatedInputTokens > 0 || requestedUsageModel) {
-        tokenStore.updateRealtimeTokens(
-          sessionId,
-          estimatedInputTokens > 0 ? estimatedInputTokens : undefined,
-          0,
-          requestedUsageModel
-        )
-        const currentMessage = messageStore.messagesBySession(sessionId)
-          .find(message => message.id === aiMessage.id)
-        messageStore.updateMessageBuffered(aiMessage.id, {
-          runtimeNotices: upsertRuntimeNotice(currentMessage?.runtimeNotices, buildUsageNotice({
-            model: requestedUsageModel,
-            inputTokens: estimatedInputTokens > 0 ? estimatedInputTokens : undefined,
-            outputTokens: 0
-          }))
-        })
-      }
       const selectedExpert = resolveExpertById(session?.expertId, useAgentTeamsStore().experts)
       const contextStrategyNotice = buildContextStrategyNotice({
         strategy: reusableCliSessionId ? 'CLI Resume + Delta Prompt' : 'Full Conversation Context',
@@ -663,11 +630,17 @@ export class ConversationService {
   }
 
   private async resetSessionRuntimeAfterAbort(sessionId: string): Promise<void> {
-    await Promise.allSettled(
-      this.cliRuntimeKeys.map(runtimeKey => deleteSessionRuntimeBinding(sessionId, runtimeKey))
-    )
-
     const sessionStore = useSessionStore()
+    const session = sessionStore.sessions.find(s => s.id === sessionId)
+    const currentProvider = session?.cliSessionProvider?.trim()
+
+    if (currentProvider) {
+      const runtimeKey = this.cliRuntimeKeys.find(key => key === currentProvider)
+      if (runtimeKey) {
+        await deleteSessionRuntimeBinding(sessionId, runtimeKey).catch(console.error)
+      }
+    }
+
     await sessionStore.updateSession(sessionId, {
       cliSessionId: '',
       cliSessionProvider: ''
@@ -1231,13 +1204,6 @@ export class ConversationService {
           onContent: (content) => {
             markMetric('firstContentAt')
             accumulatedContent = mergeStreamingText(accumulatedContent, content, runtimeProvider)
-            // 流式输出期间估算 output tokens（CLI 不在 content 事件中携带 token 数据）
-            const estimatedOutputTokens = Math.ceil(accumulatedContent.length / 4)
-            if ((usageState.outputTokens ?? 0) < estimatedOutputTokens) {
-              usageState.outputTokens = estimatedOutputTokens
-              tokenStore.updateRealtimeOutputEstimate(sessionId, estimatedOutputTokens)
-              syncRealtimeUsageNotice()
-            }
             bufferMessageUpdate({
               content: accumulatedContent
             })
@@ -1348,10 +1314,10 @@ export class ConversationService {
               usageState.model = normalizedUsageModel
             }
             if (usage.inputTokens !== undefined) {
-              usageState.inputTokens = Math.max(usageState.inputTokens ?? 0, usage.inputTokens)
+              usageState.inputTokens = (usageState.inputTokens ?? 0) + usage.inputTokens
             }
             if (usage.outputTokens !== undefined) {
-              usageState.outputTokens = Math.max(usageState.outputTokens ?? 0, usage.outputTokens)
+              usageState.outputTokens = (usageState.outputTokens ?? 0) + usage.outputTokens
             }
 
             syncRealtimeUsageNotice()
@@ -1405,9 +1371,6 @@ export class ConversationService {
               )
             }
             this.finalizeSend(sessionId)
-
-            // 自动压缩检查
-            compressionService.checkAndAutoCompress(sessionId, context.agent.id)
 
             registerPersistenceTask(
               messageStore.flushBufferedMessageUpdate(aiMessage.id, { notifyOnFailure: true })
@@ -1803,7 +1766,10 @@ export class ConversationService {
       // 中断指定会话
       const streamingMessageId = sessionExecutionStore.getExecutionState(sessionId).currentStreamingMessageId
       if (messageId && streamingMessageId && messageId !== streamingMessageId) {
-        void messageStore.updateMessage(messageId, { status: 'interrupted' })
+        void messageStore.updateMessage(messageId, {
+          status: 'interrupted',
+          errorMessage: MANUAL_STOP_ERROR_MARKER
+        })
         return
       }
 
@@ -1812,11 +1778,17 @@ export class ConversationService {
 
       // 2. 更新消息状态为 interrupted
       if (messageId) {
-        messageStore.updateMessage(messageId, { status: 'interrupted' })
+        messageStore.updateMessage(messageId, {
+          status: 'interrupted',
+          errorMessage: MANUAL_STOP_ERROR_MARKER
+        })
       } else {
         // 如果没有传入 messageId，从 sessionExecutionStore 获取当前流式消息 ID
         if (streamingMessageId) {
-          messageStore.updateMessage(streamingMessageId, { status: 'interrupted' })
+          messageStore.updateMessage(streamingMessageId, {
+            status: 'interrupted',
+            errorMessage: MANUAL_STOP_ERROR_MARKER
+          })
         }
       }
 

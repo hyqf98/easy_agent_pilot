@@ -373,7 +373,7 @@ const toolSummary = computed(() => {
   box-sizing: border-box;
   border-top: 1px solid var(--tool-call-content-border);
   padding: var(--spacing-2) var(--spacing-3);
-  overflow: visible;
+  overflow: hidden;
 }
 
 .tool-call--running .tool-call__content {

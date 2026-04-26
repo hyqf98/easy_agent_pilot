@@ -10,6 +10,7 @@ import type {
   FormRequest,
   FormResponse
 } from '@/types/plan'
+import { extractFirstFormRequest } from '@/utils/structuredContent'
 
 // 预定义模板库
 export const FORM_TEMPLATES: FormTemplate[] = [
@@ -350,26 +351,15 @@ export class FormEngine {
    * 从 AI 消息中提取表单请求
    */
   extractFormRequest(message: string): FormRequest | null {
-    try {
-      // 尝试解析 JSON 格式的表单请求
-      const jsonMatch = message.match(/```json\n([\s\S]*?)\n```/)
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[1])
-        if (parsed.type === 'form_request') {
-          return parsed as FormRequest
-        }
+    const structuredForm = extractFirstFormRequest(message)
+    if (structuredForm?.forms?.[0]) {
+      return {
+        type: 'form_request',
+        mode: 'schema',
+        schema: structuredForm.forms[0]
       }
-
-      // 尝试直接解析整个消息
-      const parsed = JSON.parse(message)
-      if (parsed.type === 'form_request') {
-        return parsed as FormRequest
-      }
-    } catch {
-      // 不是 JSON 格式，尝试其他格式
     }
 
-    // 尝试解析 XML 格式
     const xmlMatch = message.match(/<form_request[^>]*>([\s\S]*?)<\/form_request>/)
     if (xmlMatch) {
       return this.parseXmlFormRequest(xmlMatch[1])

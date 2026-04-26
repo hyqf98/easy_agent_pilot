@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 import type { RuntimeNotice } from '@/utils/runtimeNotice'
 import { getUsageNoticeSummary, summarizeRuntimeNotice } from '@/utils/runtimeNotice'
@@ -19,6 +20,7 @@ const props = withDefaults(defineProps<{
   defaultExpanded: false,
   fallbackUsage: null
 })
+const { t } = useI18n()
 
 const expandedIds = ref<Set<string>>(new Set(
   props.defaultExpanded ? props.notices.map(notice => notice.id) : []
@@ -138,19 +140,23 @@ function formatChipLabel(notice: RuntimeNotice, chip: string) {
           class="runtime-notice__summary-runtime"
           @click="toggleNotice(primaryRegularNotice.id)"
         >
-          <span class="runtime-notice__eyebrow">Runtime</span>
-          <span class="runtime-notice__title">{{ primaryRegularNotice.title }}</span>
-          <div
-            v-if="noticeChips(primaryRegularNotice).length > 0"
-            class="runtime-notice__chips"
-          >
-            <span
-              v-for="chip in noticeChips(primaryRegularNotice)"
-              :key="chip"
-              class="runtime-notice__chip"
+          <div class="runtime-notice__summary-runtime-main">
+            <div class="runtime-notice__header-main">
+              <span class="runtime-notice__eyebrow">{{ t('message.runtimeNotice.runtime') }}</span>
+              <span class="runtime-notice__title">{{ primaryRegularNotice.title }}</span>
+            </div>
+            <div
+              v-if="noticeChips(primaryRegularNotice).length > 0"
+              class="runtime-notice__chips runtime-notice__chips--leading"
             >
-              {{ chip }}
-            </span>
+              <span
+                v-for="chip in noticeChips(primaryRegularNotice)"
+                :key="chip"
+                class="runtime-notice__chip"
+              >
+                {{ chip }}
+              </span>
+            </div>
           </div>
           <span
             class="runtime-notice__chevron"
@@ -158,21 +164,19 @@ function formatChipLabel(notice: RuntimeNotice, chip: string) {
           >▼</span>
         </button>
 
-        <div class="runtime-notice__summary-divider" />
-
         <div class="runtime-notice__summary-usage">
           <div class="runtime-notice__usage-main">
-            <span class="runtime-notice__usage-label">Model</span>
+            <span class="runtime-notice__usage-label">{{ t('message.runtimeNotice.model') }}</span>
             <span class="runtime-notice__usage-model">
               {{ usageModelLabel(primaryUsageNotice) }}
             </span>
           </div>
           <div class="runtime-notice__usage-stats">
             <span class="runtime-notice__usage-chip runtime-notice__usage-chip--input">
-              In {{ usageSummary(primaryUsageNotice)?.input || '—' }}
+              {{ t('message.runtimeNotice.input') }} {{ usageSummary(primaryUsageNotice)?.input || '—' }}
             </span>
             <span class="runtime-notice__usage-chip runtime-notice__usage-chip--output">
-              Out {{ usageSummary(primaryUsageNotice)?.output || '—' }}
+              {{ t('message.runtimeNotice.output') }} {{ usageSummary(primaryUsageNotice)?.output || '—' }}
             </span>
           </div>
         </div>
@@ -199,7 +203,7 @@ function formatChipLabel(notice: RuntimeNotice, chip: string) {
           @click="toggleNotice(notice.id)"
         >
           <div class="runtime-notice__header-main">
-            <span class="runtime-notice__eyebrow">Runtime</span>
+            <span class="runtime-notice__eyebrow">{{ t('message.runtimeNotice.runtime') }}</span>
             <span class="runtime-notice__title">{{ notice.title }}</span>
           </div>
           <div class="runtime-notice__header-side">
@@ -238,17 +242,17 @@ function formatChipLabel(notice: RuntimeNotice, chip: string) {
       >
         <div class="runtime-notice__usage">
           <div class="runtime-notice__usage-main">
-            <span class="runtime-notice__usage-label">Model</span>
+            <span class="runtime-notice__usage-label">{{ t('message.runtimeNotice.model') }}</span>
             <span class="runtime-notice__usage-model">
               {{ usageModelLabel(notice) }}
             </span>
           </div>
           <div class="runtime-notice__usage-stats">
             <span class="runtime-notice__usage-chip runtime-notice__usage-chip--input">
-              In {{ usageSummary(notice)?.input || '—' }}
+              {{ t('message.runtimeNotice.input') }} {{ usageSummary(notice)?.input || '—' }}
             </span>
             <span class="runtime-notice__usage-chip runtime-notice__usage-chip--output">
-              Out {{ usageSummary(notice)?.output || '—' }}
+              {{ t('message.runtimeNotice.output') }} {{ usageSummary(notice)?.output || '—' }}
             </span>
           </div>
         </div>
@@ -270,17 +274,17 @@ function formatChipLabel(notice: RuntimeNotice, chip: string) {
           class="runtime-notice__usage"
         >
           <div class="runtime-notice__usage-main">
-            <span class="runtime-notice__usage-label">Model</span>
+            <span class="runtime-notice__usage-label">{{ t('message.runtimeNotice.model') }}</span>
             <span class="runtime-notice__usage-model">
               {{ usageModelLabel(notice) }}
             </span>
           </div>
           <div class="runtime-notice__usage-stats">
             <span class="runtime-notice__usage-chip runtime-notice__usage-chip--input">
-              In {{ usageSummary(notice)?.input || '—' }}
+              {{ t('message.runtimeNotice.input') }} {{ usageSummary(notice)?.input || '—' }}
             </span>
             <span class="runtime-notice__usage-chip runtime-notice__usage-chip--output">
-              Out {{ usageSummary(notice)?.output || '—' }}
+              {{ t('message.runtimeNotice.output') }} {{ usageSummary(notice)?.output || '—' }}
             </span>
           </div>
         </div>
@@ -292,7 +296,7 @@ function formatChipLabel(notice: RuntimeNotice, chip: string) {
             @click="toggleNotice(notice.id)"
           >
             <div class="runtime-notice__header-main">
-              <span class="runtime-notice__eyebrow">Runtime</span>
+              <span class="runtime-notice__eyebrow">{{ t('message.runtimeNotice.runtime') }}</span>
               <span class="runtime-notice__title">{{ notice.title }}</span>
             </div>
             <div class="runtime-notice__header-side">
@@ -365,9 +369,9 @@ function formatChipLabel(notice: RuntimeNotice, chip: string) {
 }
 
 .runtime-notice__summary {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(10.5rem, auto);
-  align-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: 0.55rem;
   padding: 0.55rem 0.7rem;
 }
@@ -390,6 +394,7 @@ function formatChipLabel(notice: RuntimeNotice, chip: string) {
 .runtime-notice__summary-runtime {
   padding: 0;
   min-width: 0;
+  align-items: flex-start;
 }
 
 .runtime-notice__summary-runtime:hover,
@@ -402,6 +407,14 @@ function formatChipLabel(notice: RuntimeNotice, chip: string) {
   display: flex;
   align-items: baseline;
   gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.runtime-notice__summary-runtime-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
 }
 
 .runtime-notice__eyebrow,
@@ -441,6 +454,10 @@ function formatChipLabel(notice: RuntimeNotice, chip: string) {
   min-width: 0;
 }
 
+.runtime-notice__chips--leading {
+  justify-content: flex-start;
+}
+
 .runtime-notice__chip,
 .runtime-notice__usage-chip {
   max-width: 100%;
@@ -464,12 +481,6 @@ function formatChipLabel(notice: RuntimeNotice, chip: string) {
   transform: rotate(180deg);
 }
 
-.runtime-notice__summary-divider {
-  width: 1px;
-  height: 1.65rem;
-  background: var(--runtime-notice-content-border);
-}
-
 .runtime-notice__content {
   padding: 0 0.9rem 0.85rem;
   border-top: 1px solid var(--runtime-notice-content-border);
@@ -482,10 +493,16 @@ function formatChipLabel(notice: RuntimeNotice, chip: string) {
   justify-content: space-between;
   gap: 0.55rem;
   min-width: 0;
+  flex-wrap: wrap;
 }
 
 .runtime-notice__usage {
   padding: 0.58rem 0.72rem;
+}
+
+.runtime-notice__summary-usage {
+  padding-top: 0.18rem;
+  border-top: 1px solid var(--runtime-notice-content-border);
 }
 
 .runtime-notice__usage-main {
@@ -511,6 +528,7 @@ function formatChipLabel(notice: RuntimeNotice, chip: string) {
   justify-content: flex-end;
   gap: 0.28rem;
   min-width: 0;
+  flex-wrap: wrap;
 }
 
 .runtime-notice__usage-chip {
@@ -522,14 +540,6 @@ function formatChipLabel(notice: RuntimeNotice, chip: string) {
 }
 
 @media (max-width: 768px) {
-  .runtime-notice__summary {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .runtime-notice__summary-divider {
-    display: none;
-  }
-
   .runtime-notice__summary-usage,
   .runtime-notice__usage,
   .runtime-notice__header,

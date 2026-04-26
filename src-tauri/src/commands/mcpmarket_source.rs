@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 use tokio::process::Command;
 
-use crate::commands::cli_support::find_cli_executable;
+use crate::commands::cli_support::{configure_windows_tokio_command, find_cli_executable};
 
 pub const DEFAULT_MARKETPLACE_SOURCE_ID: &str = "mcpmarket";
 const MCPMARKET_SOURCE_LABEL: &str = "MCP Market";
@@ -347,6 +347,7 @@ where
         .map_err(|e| format!("Failed to serialize helper payload: {}", e))?;
 
     let mut command = Command::new(&node_binary);
+    configure_windows_tokio_command(&mut command);
     command.arg(script_path).arg(mode).arg(payload_json);
 
     if let Some(playwright_core_path) = resolve_playwright_core_path(app) {

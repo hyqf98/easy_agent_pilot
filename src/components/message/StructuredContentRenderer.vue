@@ -12,11 +12,13 @@ const props = withDefaults(defineProps<{
   formDisabled?: boolean
   animate?: boolean
   resolvedFormValues?: Record<string, unknown> | null
+  resolvedFormValuesByFormId?: Record<string, Record<string, unknown>> | null
 }>(), {
   interactiveForms: false,
   formDisabled: false,
   animate: false,
-  resolvedFormValues: null
+  resolvedFormValues: null,
+  resolvedFormValuesByFormId: null
 })
 
 const emit = defineEmits<{
@@ -34,6 +36,18 @@ const blocks = computed(() => parseStructuredContent(displayedText.value))
 const isFormOnly = computed(() =>
   blocks.value.length > 0 && blocks.value.every(block => block.type === 'form')
 )
+
+function getResolvedFormValues(formId: string): Record<string, unknown> | null {
+  return props.resolvedFormValuesByFormId?.[formId] ?? props.resolvedFormValues ?? null
+}
+
+function isFormResolved(formId: string): boolean {
+  return Boolean(getResolvedFormValues(formId))
+}
+
+function isFormDisabled(formId: string): boolean {
+  return !props.interactiveForms || props.formDisabled || isFormResolved(formId)
+}
 
 function handleFormSubmit(formId: string, values: Record<string, unknown>) {
   emit('form-submit', formId, values)
@@ -70,7 +84,7 @@ function handleFormCancel(formId: string) {
         v-else-if="block.type === 'form'"
         class="structured-content__form"
         :class="{
-          'structured-content__form--disabled': !interactiveForms || formDisabled,
+          'structured-content__form--disabled': isFormDisabled(block.formSchema.formId),
           'structured-content__form--standalone': isFormOnly
         }"
       >
@@ -83,9 +97,11 @@ function handleFormCancel(formId: string) {
         <DynamicForm
           :schema="block.formSchema"
           :question="isFormOnly ? block.question : undefined"
-          :disabled="!interactiveForms || formDisabled"
-          :initial-values="resolvedFormValues ?? undefined"
-          :variant="resolvedFormValues ? 'submitted' : 'active'"
+          :disabled="isFormDisabled(block.formSchema.formId)"
+          :initial-values="getResolvedFormValues(block.formSchema.formId) ?? undefined"
+          :variant="isFormResolved(block.formSchema.formId) ? 'submitted' : 'active'"
+          :show-header="false"
+          :show-submitted-state="false"
           @submit="handleFormSubmit(block.formSchema.formId, $event)"
           @cancel="handleFormCancel(block.formSchema.formId)"
         />
@@ -126,34 +142,28 @@ function handleFormCancel(formId: string) {
 
 .structured-content__form--standalone :deep(.dynamic-form) {
   width: 100%;
-  border-radius: 1.1rem;
-}
-
-.structured-content__form--standalone :deep(.form-header) {
-  padding: clamp(0.64rem, 3cqi, 0.85rem) clamp(0.72rem, 4.2cqi, 1rem) clamp(0.62rem, 3.4cqi, 0.75rem);
-}
-
-.structured-content__form--standalone :deep(.form-title) {
-  font-size: clamp(0.78rem, 2.4cqi, 0.92rem);
-}
-
-.structured-content__form--standalone :deep(.form-question) {
-  font-size: clamp(0.7rem, 2.15cqi, 0.82rem);
-  line-height: 1.6;
-}
-
-.structured-content__form--standalone :deep(.form-description) {
-  font-size: clamp(0.64rem, 1.9cqi, 0.74rem);
+  border-radius: 1.2rem;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 20%, rgba(148, 163, 184, 0.32));
+  background:
+    radial-gradient(circle at top right, rgba(59, 130, 246, 0.1), transparent 32%),
+    linear-gradient(180deg, rgba(248, 250, 252, 0.98), rgba(239, 246, 255, 0.96));
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.08);
 }
 
 .structured-content__form--standalone :deep(.form-body) {
-  padding: clamp(0.68rem, 3.6cqi, 0.95rem) clamp(0.72rem, 4.2cqi, 1rem) clamp(0.72rem, 4.2cqi, 1rem);
+  padding: clamp(0.82rem, 4.2cqi, 1.1rem) clamp(0.84rem, 4.6cqi, 1.12rem) clamp(0.88rem, 4.6cqi, 1.08rem);
   max-height: min(52vh, 34rem);
-  gap: 0.55rem;
+  gap: 0.7rem;
 }
 
 .structured-content__form--standalone :deep(.form-footer) {
-  padding: clamp(0.58rem, 3.2cqi, 0.8rem) clamp(0.72rem, 4.2cqi, 1rem) clamp(0.7rem, 4cqi, 0.95rem);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 0.55rem;
+  padding: 0 clamp(0.84rem, 4.6cqi, 1.12rem) clamp(0.9rem, 4.6cqi, 1rem);
+  border-top: 0;
+  background: transparent;
 }
 
 .structured-content__form--standalone :deep(.form-field) {
@@ -161,16 +171,16 @@ function handleFormCancel(formId: string) {
 }
 
 .structured-content__form--standalone :deep(.field-label) {
-  font-size: clamp(0.68rem, 2.05cqi, 0.78rem);
-  margin-bottom: 0.35rem;
+  font-size: clamp(0.72rem, 2.1cqi, 0.82rem);
+  margin-bottom: 0.38rem;
 }
 
 .structured-content__form--standalone :deep(.input),
 .structured-content__form--standalone :deep(.textarea),
 .structured-content__form--standalone :deep(.select) {
-  padding: clamp(0.4rem, 2.3cqi, 0.6rem) clamp(0.52rem, 2.9cqi, 0.75rem);
-  font-size: clamp(0.72rem, 2.2cqi, 0.84rem);
-  border-radius: clamp(0.62rem, 2.1cqi, 0.8rem);
+  padding: clamp(0.52rem, 2.5cqi, 0.72rem) clamp(0.62rem, 3.2cqi, 0.86rem);
+  font-size: clamp(0.74rem, 2.2cqi, 0.86rem);
+  border-radius: clamp(0.72rem, 2.2cqi, 0.88rem);
 }
 
 .structured-content__form--standalone :deep(.textarea) {
@@ -184,9 +194,15 @@ function handleFormCancel(formId: string) {
 }
 
 .structured-content__form--standalone :deep(.btn) {
-  min-width: clamp(4.2rem, 22cqi, 5.25rem);
-  padding: clamp(0.34rem, 2cqi, 0.48rem) clamp(0.6rem, 3.8cqi, 0.9rem);
-  font-size: clamp(0.68rem, 2cqi, 0.8rem);
+  width: 100%;
+  min-width: 0;
+  padding: clamp(0.42rem, 2.2cqi, 0.56rem) clamp(0.78rem, 4.1cqi, 1rem);
+  font-size: clamp(0.72rem, 2cqi, 0.82rem);
+}
+
+.structured-content__form--standalone :deep(.btn-secondary) {
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(10px);
 }
 
 .structured-content__label {
@@ -200,6 +216,15 @@ function handleFormCancel(formId: string) {
 :global(.dark) .structured-content__form {
   border-color: rgba(96, 165, 250, 0.22);
   background: linear-gradient(180deg, rgba(17, 24, 39, 0.94), rgba(15, 23, 42, 0.96));
+}
+
+:global(.dark) .structured-content__form--standalone :deep(.dynamic-form),
+:global([data-theme='dark']) .structured-content__form--standalone :deep(.dynamic-form) {
+  border-color: rgba(96, 165, 250, 0.24);
+  background:
+    radial-gradient(circle at top right, rgba(56, 189, 248, 0.12), transparent 30%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(17, 24, 39, 0.94));
+  box-shadow: 0 16px 38px rgba(2, 6, 23, 0.28);
 }
 
 :global([data-theme='dark']) .structured-content__result,

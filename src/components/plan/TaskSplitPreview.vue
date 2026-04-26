@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { AITaskItem, TaskPriority } from '@/types/plan'
 import { useConfirmDialog } from '@/composables'
@@ -18,10 +18,14 @@ const emit = defineEmits<{
   (e: 'add', task: AITaskItem): void
 }>()
 
+const PENDING_ADD_INDEX = -1
+
 const editingIndex = ref<number | null>(null)
 const editorRef = ref<InstanceType<typeof TaskSplitPreviewEditor> | null>(null)
 const confirmDialog = useConfirmDialog()
 const { t } = useI18n()
+
+const pendingNewTask = ref<AITaskItem | null>(null)
 
 const priorityOptions = computed(() => [
   { label: t('taskSplit.priority.low'), value: 'low' as const },
@@ -36,9 +40,8 @@ const priorityColors: Record<TaskPriority, string> = {
 }
 
 const editingTask = computed(() => {
-  if (editingIndex.value === null) {
-    return null
-  }
+  if (editingIndex.value === null) return null
+  if (editingIndex.value === PENDING_ADD_INDEX) return pendingNewTask.value
   return props.tasks[editingIndex.value] ?? null
 })
 
@@ -50,11 +53,17 @@ function startEdit(index: number) {
 }
 
 function cancelEdit() {
+  pendingNewTask.value = null
   editingIndex.value = null
 }
 
 function saveEdit(index: number, updates: Partial<AITaskItem>) {
-  emit('update', index, updates)
+  if (index === PENDING_ADD_INDEX) {
+    emit('add', { ...pendingNewTask.value!, ...updates })
+    pendingNewTask.value = null
+  } else {
+    emit('update', index, updates)
+  }
   editingIndex.value = null
 }
 
@@ -86,8 +95,8 @@ function addTask() {
     return
   }
 
-  const newTask: AITaskItem = {
-    title: t('taskSplit.newTask'),
+  pendingNewTask.value = {
+    title: '',
     description: '',
     priority: 'medium',
     memoryLibraryIds: [],
@@ -96,11 +105,17 @@ function addTask() {
     acceptanceCriteria: [],
     dependsOn: []
   }
-
-  const nextIndex = props.tasks.length
-  emit('add', newTask)
-  editingIndex.value = nextIndex
+  editingIndex.value = PENDING_ADD_INDEX
 }
+
+watch(
+  () => props.disableActions,
+  (disabled) => {
+    if (disabled && editingIndex.value !== null) {
+      cancelEdit()
+    }
+  }
+)
 </script>
 
 <template>

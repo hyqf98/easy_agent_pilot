@@ -132,6 +132,8 @@
 .file-editor-workspace__content {
   flex: 1;
   min-height: 0;
+  display: flex;
+  overflow: hidden;
 }
 
 .file-editor-workspace__empty {

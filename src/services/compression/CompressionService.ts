@@ -46,6 +46,12 @@ export interface CompressionResult {
   error?: string
 }
 
+interface AutoCompressionDecision {
+  allowed: boolean
+  usagePercentage: number
+  threshold: number
+}
+
 /**
  * 会话压缩服务
  * 负责压缩会话消息，生成摘要，释放 token 空间
@@ -513,45 +519,17 @@ export class CompressionService {
    * @returns 是否执行了压缩
    */
   async checkAndAutoCompress(sessionId: string, agentId: string): Promise<boolean> {
-    const settingsStore = useSettingsStore()
-    const tokenStore = useTokenStore()
     const notificationStore = useNotificationStore()
-    const messageStore = useMessageStore()
+    const settingsStore = useSettingsStore()
+    const decision = this.getAutoCompressionDecision(sessionId)
 
-    const meaningfulMessages = messageStore
-      .messagesBySession(sessionId)
-      .filter(message => message.role !== 'compression')
-
-    // 短会话自动压缩会引入额外的 CLI 调用，先用消息数做硬门槛避免误触发。
-    if (meaningfulMessages.length < 8) {
-      console.log(
-        `[CompressionService] 跳过自动压缩: 消息数不足 (${meaningfulMessages.length}/8)`
-      )
+    if (!decision.allowed) {
       return false
     }
 
-    // 检查是否启用自动压缩
-    if (!settingsStore.settings.autoCompressionEnabled) {
-      return false
-    }
-
-    // 检查是否需要压缩
-    if (!tokenStore.needsCompression(sessionId)) {
-      return false
-    }
-
-    // 获取当前 token 使用情况
-    const usage = tokenStore.getTokenUsage(sessionId)
-    const threshold = settingsStore.settings.compressionThreshold
-
-    if (usage.used < 8000) {
-      console.log(
-        `[CompressionService] 跳过自动压缩: token 使用量不足 (${usage.used}/8000)`
-      )
-      return false
-    }
-
-    console.log(`[CompressionService] 检查自动压缩: ${usage.percentage.toFixed(1)}% >= ${threshold}%`)
+    console.log(
+      `[CompressionService] 检查自动压缩: ${decision.usagePercentage.toFixed(1)}% >= ${decision.threshold}%`
+    )
 
     // 执行压缩
     try {
@@ -572,6 +550,56 @@ export class CompressionService {
     } catch (error) {
       console.error('[CompressionService] 自动压缩出错:', error)
       return false
+    }
+  }
+
+  shouldAutoCompressSession(sessionId: string): boolean {
+    return this.getAutoCompressionDecision(sessionId).allowed
+  }
+
+  private getAutoCompressionDecision(sessionId: string): AutoCompressionDecision {
+    const settingsStore = useSettingsStore()
+    const tokenStore = useTokenStore()
+    const messageStore = useMessageStore()
+    const threshold = settingsStore.settings.compressionThreshold
+    const usage = tokenStore.getTokenUsage(sessionId)
+
+    const disallowedDecision = {
+      allowed: false,
+      usagePercentage: usage.percentage,
+      threshold
+    }
+
+    const meaningfulMessages = messageStore
+      .messagesBySession(sessionId)
+      .filter(message => message.role !== 'compression')
+
+    if (meaningfulMessages.length < 8) {
+      console.log(
+        `[CompressionService] 跳过自动压缩: 消息数不足 (${meaningfulMessages.length}/8)`
+      )
+      return disallowedDecision
+    }
+
+    if (!settingsStore.settings.autoCompressionEnabled) {
+      return disallowedDecision
+    }
+
+    if (!tokenStore.needsCompression(sessionId)) {
+      return disallowedDecision
+    }
+
+    if (usage.used < 8000) {
+      console.log(
+        `[CompressionService] 跳过自动压缩: token 使用量不足 (${usage.used}/8000)`
+      )
+      return disallowedDecision
+    }
+
+    return {
+      allowed: true,
+      usagePercentage: usage.percentage,
+      threshold
     }
   }
 

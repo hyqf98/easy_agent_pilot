@@ -21,6 +21,7 @@ const {
   listRef,
   currentMessages,
   resolvedSessionId,
+  isExternalMessagesMode,
   hasMoreMessages,
   isLoadingMore,
   shouldVirtualize,
@@ -33,6 +34,7 @@ const {
   handleRetry,
   handleFormSubmit,
   handleOpenEditTrace,
+  handleStop,
   handleScrollToBottom
 } = useMessageList(props, emit)
 </script>
@@ -69,14 +71,22 @@ const {
           v-for="message in currentMessages"
           :key="message.id"
         >
-          <MessageBubble
-            :message="message"
-            :session-id="resolvedSessionId || undefined"
-            :hide-context-strategy-notice="props.hideContextStrategyNotice"
-            @retry="handleRetry"
-            @form-submit="handleFormSubmit"
-            @open-edit-trace="handleOpenEditTrace"
-          />
+          <div
+            :ref="(element) => bindMessageElement(message.id, element as Element | null)"
+            class="message-list__virtual-item"
+          >
+            <MessageBubble
+              :message="message"
+              :session-id="resolvedSessionId || undefined"
+              :session-messages="isExternalMessagesMode ? currentMessages : undefined"
+              :is-current-streaming-message-override="isExternalMessagesMode ? props.currentStreamingMessageId === message.id : undefined"
+              :hide-context-strategy-notice="props.hideContextStrategyNotice"
+              @retry="handleRetry"
+              @form-submit="handleFormSubmit"
+              @open-edit-trace="handleOpenEditTrace"
+              @stop="handleStop"
+            />
+          </div>
         </template>
       </TransitionGroup>
     </template>
@@ -102,10 +112,13 @@ const {
           <MessageBubble
             :message="item.message"
             :session-id="resolvedSessionId || undefined"
+            :session-messages="isExternalMessagesMode ? currentMessages : undefined"
+            :is-current-streaming-message-override="isExternalMessagesMode ? props.currentStreamingMessageId === item.message.id : undefined"
             :hide-context-strategy-notice="props.hideContextStrategyNotice"
             @retry="handleRetry"
             @form-submit="handleFormSubmit"
             @open-edit-trace="handleOpenEditTrace"
+            @stop="handleStop"
           />
         </div>
       </template>

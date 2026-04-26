@@ -69,6 +69,54 @@ function normalizeStringArray(value: unknown): string[] {
     .filter(Boolean)
 }
 
+function normalizeTextListItem(value: unknown): string[] {
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    const text = String(value).trim()
+    return text ? [text] : []
+  }
+
+  if (!isRecord(value)) {
+    return []
+  }
+
+  const lines = [
+    readString(value, 'title'),
+    readString(value, 'name'),
+    readString(value, 'step'),
+    readString(value, 'content'),
+    readString(value, 'description')
+  ].filter((item): item is string => Boolean(item?.trim()))
+
+  const steps = normalizeStringArray(value.steps ?? value.items)
+  const expectedResults = normalizeStringArray(value.expectedResults ?? value.expected_results)
+  const precondition = readString(value, 'precondition')
+  const expectedResult = readString(value, 'expectedResult', 'expected_result')
+
+  if (precondition) {
+    lines.unshift(`前置条件：${precondition.trim()}`)
+  }
+
+  if (steps.length > 0) {
+    lines.push(...steps)
+  }
+
+  if (expectedResults.length > 0) {
+    lines.push(...expectedResults.map(item => `预期：${item}`))
+  } else if (expectedResult) {
+    lines.push(`预期：${expectedResult.trim()}`)
+  }
+
+  return uniqueStrings(lines.map(item => item.trim()).filter(Boolean))
+}
+
+function normalizeTextList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return uniqueStrings(value.flatMap(normalizeTextListItem))
+  }
+
+  return normalizeTextListItem(value)
+}
+
 function normalizeStringMap(value: unknown): Record<string, string> | undefined {
   if (!isRecord(value)) {
     return undefined
@@ -160,6 +208,28 @@ function isTaskPriority(value: unknown): value is TaskPriority {
   return value === 'low' || value === 'medium' || value === 'high'
 }
 
+function normalizeTaskPriority(value: unknown): TaskPriority {
+  if (isTaskPriority(value)) {
+    return value
+  }
+
+  if (typeof value === 'number') {
+    if (value === 1) return 'high'
+    if (value === 2) return 'medium'
+    if (value === 3) return 'low'
+  }
+
+  const normalized = String(value ?? '').trim().toLowerCase()
+  if (normalized === '1' || normalized === '高') return 'high'
+  if (normalized === '2' || normalized === '中') return 'medium'
+  if (normalized === '3' || normalized === '低') return 'low'
+  if (normalized === 'high' || normalized === 'medium' || normalized === 'low') {
+    return normalized as TaskPriority
+  }
+
+  return 'medium'
+}
+
 function normalizeTaskSplitItem(value: unknown): AITaskItem | null {
   if (!isRecord(value)) {
     return null
@@ -171,7 +241,7 @@ function normalizeTaskSplitItem(value: unknown): AITaskItem | null {
   }
 
   const description = readString(value, 'description')?.trim() ?? ''
-  const priority = isTaskPriority(value.priority) ? value.priority : 'medium'
+  const priority = normalizeTaskPriority(value.priority)
 
   return {
     title,
@@ -181,9 +251,9 @@ function normalizeTaskSplitItem(value: unknown): AITaskItem | null {
     agentId: readString(value, 'agentId', 'agent_id'),
     modelId: readString(value, 'modelId', 'model_id'),
     memoryLibraryIds: normalizeStringArray(value.memoryLibraryIds ?? value.memory_library_ids),
-    implementationSteps: normalizeStringArray(value.implementationSteps ?? value.implementation_steps),
-    testSteps: normalizeStringArray(value.testSteps ?? value.test_steps),
-    acceptanceCriteria: normalizeStringArray(value.acceptanceCriteria ?? value.acceptance_criteria),
+    implementationSteps: normalizeTextList(value.implementationSteps ?? value.implementation_steps),
+    testSteps: normalizeTextList(value.testSteps ?? value.test_steps),
+    acceptanceCriteria: normalizeTextList(value.acceptanceCriteria ?? value.acceptance_criteria),
     dependsOn: normalizeStringArray(value.dependsOn ?? value.depends_on)
   }
 }
@@ -208,6 +278,7 @@ function toTaskSplitResult(value: unknown): AITaskSplitResult | null {
 
   return {
     type: 'task_split',
+    summary: readString(value, 'summary')?.trim(),
     tasks: normalizedTasks
   }
 }
@@ -218,8 +289,8 @@ function normalizeFormField(value: unknown): FormField | null {
   }
 
   const type = readString(value, 'type')
-  const name = readString(value, 'name')
-  const label = readString(value, 'label')
+  const name = readString(value, 'name', 'field')
+  const label = readString(value, 'label', 'question')
 
   if (!type || !VALID_FIELD_TYPES.has(type as FieldType) || !name || !label) {
     return null
@@ -376,7 +447,15 @@ function tryParseFormResponse(rawJson: string): StructuredFormResponse | null {
   try {
     return toFormResponse(JSON.parse(rawJson) as unknown)
   } catch {
-    return null
+    try {
+      const repaired = repairJsonStructure(rawJson)
+      if (repaired === rawJson) {
+        return null
+      }
+      return toFormResponse(JSON.parse(repaired) as unknown)
+    } catch {
+      return null
+    }
   }
 }
 
@@ -384,8 +463,67 @@ function tryParseTaskSplitResult(rawJson: string): AITaskSplitResult | null {
   try {
     return toTaskSplitResult(JSON.parse(rawJson) as unknown)
   } catch {
+    try {
+      const repaired = repairJsonStructure(rawJson)
+      if (repaired === rawJson) {
+        return null
+      }
+      return toTaskSplitResult(JSON.parse(repaired) as unknown)
+    } catch {
+      return null
+    }
+  }
+}
+
+function extractTaskSplitSummaryFromValue(value: unknown): string | null {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const summary = extractTaskSplitSummaryFromValue(item)
+      if (summary) {
+        return summary
+      }
+    }
     return null
   }
+
+  if (!isRecord(value)) {
+    return null
+  }
+
+  const directSummary = readString(value, 'summary')?.trim()
+  if (directSummary && toTaskSplitResult(value)) {
+    return directSummary
+  }
+
+  const nestedKeys = ['structured_output', 'structuredOutput', 'payload', 'data', 'response']
+  for (const key of nestedKeys) {
+    const summary = extractTaskSplitSummaryFromValue(value[key])
+    if (summary) {
+      return summary
+    }
+  }
+
+  const result = value.result
+  if (typeof result === 'string') {
+    const trimmed = result.trim()
+    if (trimmed) {
+      return trimmed
+    }
+  }
+
+  if (isRecord(result) && Array.isArray(result.content)) {
+    const textParts = result.content
+      .filter((item): item is Record<string, unknown> => isRecord(item))
+      .filter(item => item.type === 'text')
+      .map(item => readString(item, 'text')?.trim() ?? '')
+      .filter(Boolean)
+
+    if (textParts.length > 0) {
+      return textParts.join('\n\n')
+    }
+  }
+
+  return null
 }
 
 function pushMarkdownBlock(blocks: StructuredContentBlock[], content: string): void {
@@ -399,12 +537,94 @@ function pushMarkdownBlock(blocks: StructuredContentBlock[], content: string): v
   })
 }
 
+function normalizeJsonLikeText(raw: string): string {
+  return raw
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/：/g, ':')
+    .replace(/，/g, ',')
+    .replace(/（/g, '(')
+    .replace(/）/g, ')')
+    .replace(/【/g, '[')
+    .replace(/】/g, ']')
+    .replace(/｛/g, '{')
+    .replace(/｝/g, '}')
+    .replace(/［/g, '[')
+    .replace(/］/g, ']')
+}
+
+function repairJsonStructure(raw: string): string {
+  const normalized = normalizeJsonLikeText(raw)
+  let inString = false
+  let escaped = false
+  const stack: string[] = []
+  let repaired = ''
+
+  for (let index = 0; index < normalized.length; index += 1) {
+    const char = normalized[index]
+
+    if (inString) {
+      repaired += char
+      if (escaped) {
+        escaped = false
+        continue
+      }
+      if (char === '\\') {
+        escaped = true
+        continue
+      }
+      if (char === '"') {
+        inString = false
+      }
+      continue
+    }
+
+    if (char === '"') {
+      inString = true
+      repaired += char
+      continue
+    }
+
+    if (char === '{' || char === '[') {
+      stack.push(char)
+      repaired += char
+      continue
+    }
+
+    if (char === '}' || char === ']') {
+      const expected = char === '}' ? '{' : '['
+      if (stack[stack.length - 1] === expected) {
+        stack.pop()
+        repaired += char
+      }
+      continue
+    }
+
+    repaired += char
+  }
+
+  while (stack.length > 0) {
+    repaired += stack.pop() === '{' ? '}' : ']'
+  }
+
+  return repaired
+}
+
 function tryParseStructuredBlocks(rawJson: string): StructuredContentBlock[] | null {
   try {
     const parsed = JSON.parse(rawJson) as unknown
     return parseStructuredJsonValue(parsed)
   } catch {
-    return null
+    try {
+      const repaired = repairJsonStructure(rawJson)
+      if (repaired === rawJson) {
+        return null
+      }
+      const parsed = JSON.parse(repaired) as unknown
+      return parseStructuredJsonValue(parsed)
+    } catch {
+      return null
+    }
   }
 }
 
@@ -676,6 +896,111 @@ export function extractTaskSplitResult(content: string): AITaskSplitResult | nul
     const nestedResult = tryParseTaskSplitResult(content.slice(start, end))
     if (nestedResult) {
       return nestedResult
+    }
+  }
+
+  return null
+}
+
+export function extractTaskSplitSummary(content: string): string | null {
+  const trimmed = content.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown
+    const summary = extractTaskSplitSummaryFromValue(parsed)
+    if (summary) {
+      return summary
+    }
+  } catch {
+    try {
+      const normalized = normalizeJsonLikeText(trimmed)
+      if (normalized !== trimmed) {
+        const parsed = JSON.parse(normalized) as unknown
+        const summary = extractTaskSplitSummaryFromValue(parsed)
+        if (summary) {
+          return summary
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  for (const { start, end } of extractBalancedJsonRanges(content)) {
+    const candidate = content.slice(start, end)
+    const summary = extractTaskSplitSummary(candidate)
+    if (summary) {
+      return summary
+    }
+  }
+
+  return null
+}
+
+export function stripTaskSplitResultFromContent(content: string): string {
+  const summaryFromJson = extractTaskSplitSummary(content)
+  let stripped = content
+
+  const codeBlockPattern = /```(?:json|JSON)?\s*([\s\S]*?)```/g
+  stripped = stripped.replace(codeBlockPattern, (fullMatch, rawJson) => (
+    extractTaskSplitResult(String(rawJson ?? '').trim()) ? '' : fullMatch
+  ))
+
+  const ranges = extractBalancedJsonRanges(stripped)
+  if (ranges.length > 0) {
+    let nextContent = ''
+    let cursor = 0
+
+    for (const { start, end } of ranges) {
+      const candidate = stripped.slice(start, end)
+      if (!extractTaskSplitResult(candidate)) {
+        continue
+      }
+
+      nextContent += stripped.slice(cursor, start)
+      cursor = end
+    }
+
+    nextContent += stripped.slice(cursor)
+    stripped = nextContent
+  }
+
+  const normalized = stripped
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+
+  return normalized || summaryFromJson || ''
+}
+
+export function extractFirstFormRequestFromContents(contents: Array<string | null | undefined>): AIFormRequest | null {
+  for (let index = contents.length - 1; index >= 0; index -= 1) {
+    const content = contents[index]?.trim()
+    if (!content) {
+      continue
+    }
+
+    const formRequest = extractFirstFormRequest(content)
+    if (formRequest) {
+      return formRequest
+    }
+  }
+
+  return null
+}
+
+export function extractTaskSplitResultFromContents(contents: Array<string | null | undefined>): AITaskSplitResult | null {
+  for (let index = contents.length - 1; index >= 0; index -= 1) {
+    const content = contents[index]?.trim()
+    if (!content) {
+      continue
+    }
+
+    const taskSplitResult = extractTaskSplitResult(content)
+    if (taskSplitResult) {
+      return taskSplitResult
     }
   }
 

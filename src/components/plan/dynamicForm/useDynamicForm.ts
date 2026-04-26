@@ -21,6 +21,8 @@ export interface DynamicFormProps {
   disabled?: boolean
   variant?: 'active' | 'submitted' | 'archived'
   cancelText?: string
+  showHeader?: boolean
+  showSubmittedState?: boolean
 }
 
 export interface DynamicFormEmits {

@@ -94,6 +94,9 @@ export function findLatestUsageSnapshot(
   logs: Pick<PlanSplitLogRecord, 'type' | 'metadata'>[]
 ): UsageSnapshot {
   const usageState: UsageSnapshot = {}
+  let totalInput = 0
+  let totalOutput = 0
+  let hasAnyUsage = false
 
   for (const log of logs) {
     if (log.type !== 'usage' && log.type !== 'message_start') {
@@ -115,14 +118,21 @@ export function findLatestUsageSnapshot(
         usageState.modelId = metadata.model.trim()
       }
       if (typeof metadata.inputTokens === 'number') {
-        usageState.inputTokens = metadata.inputTokens
+        totalInput += metadata.inputTokens
+        hasAnyUsage = true
       }
       if (typeof metadata.outputTokens === 'number') {
-        usageState.outputTokens = metadata.outputTokens
+        totalOutput += metadata.outputTokens
+        hasAnyUsage = true
       }
     } catch {
       continue
     }
+  }
+
+  if (hasAnyUsage) {
+    usageState.inputTokens = totalInput
+    usageState.outputTokens = totalOutput
   }
 
   return usageState

@@ -1,44 +1,48 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
+import EaConfirmDialog from '@/components/common/EaConfirmDialog.vue'
 import TaskSplitPreview from '../TaskSplitPreview.vue'
-import ExecutionTimeline from '@/components/message/ExecutionTimeline.vue'
+import MessageList from '@/components/message/messageList/MessageList.vue'
 import { useTaskSplitDialog } from './useTaskSplitDialog'
+
 const { t } = useI18n()
- 
+
 const {
   planStore,
+  splitDialogTabs,
+  activeSplitPlanId,
   taskSplitStore,
   isDarkTheme,
   isConfirming,
-  messagesContainerRef,
   userInstruction,
   instructionInputRef,
   showMentionSuggestions,
   mentionSuggestions,
   selectedMentionOptionIndex,
   showPreview,
-  showRecoveryInput,
-  refinementMode,
   hasPendingRefinement,
   isSubSplitActive,
   subSplitTargetTitle,
   previewActionsDisabled,
   canApplyRefinement,
   isSessionRunning,
-  showStopButton,
-  showLoadingIndicator,
   canRetrySplit,
   canContinueSplit,
   retryButtonLabel,
   isAutoRetryPending,
   primaryActionLabel,
-  footerHint,
-  runningStatusText,
-  timelineEntries,
+  splitChatSessionId,
+  splitChatMessages,
+  splitCurrentStreamingMessageId,
+  isSplitHistoryLoading,
   restartSplit,
-  handleTimelineFormSubmit,
+  handleActiveFormSubmit,
   confirmSplit,
-  closeDialog,
+  handleCloseClick,
+  cancelCloseConfirm,
+  confirmCloseAndStop,
+  handleMinimizeClick,
+  showCloseConfirm,
   stopSplitTask,
   retrySplitTask,
   continueSplitTask,
@@ -69,58 +73,74 @@ const {
             <span class="dialog-icon">✂️</span>
             {{ t('taskSplit.dialogTitle') }}
           </h4>
-          <button
-            class="btn-close"
-            @click="closeDialog"
-          >
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
+          <div class="dialog-header-actions">
+            <button
+              class="btn-close"
+              :title="t('taskSplit.hide')"
+              @click="handleMinimizeClick"
             >
-              <path d="M18 6L6 18M6 6l12 12" />
-            </svg>
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <path d="M5 12h14" />
+              </svg>
+            </button>
+            <button
+              class="btn-close"
+              :title="t('taskSplit.close')"
+              @click="handleCloseClick"
+            >
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div
+          v-if="splitDialogTabs.length > 1"
+          class="dialog-tabs"
+        >
+          <button
+            v-for="tab in splitDialogTabs"
+            :key="tab.planId"
+            type="button"
+            class="dialog-tab"
+            :class="{ 'dialog-tab--active': tab.planId === activeSplitPlanId }"
+            @click.stop="planStore.switchSplitDialogTab(tab.planId)"
+          >
+            {{ tab.label }}
           </button>
         </div>
 
         <div class="dialog-body">
           <div class="split-content">
             <div class="conversation-pane">
-              <div
-                ref="messagesContainerRef"
-                class="messages-container"
-              >
-                <ExecutionTimeline
-                  :entries="timelineEntries"
-                  group-tool-calls
-                  :form-cancel-text="t('taskSplit.hide')"
-                  @form-submit="handleTimelineFormSubmit"
-                  @form-cancel="closeDialog"
-                  @message-form-submit="(_formId, values) => handleTimelineFormSubmit('', values)"
+              <div class="messages-container">
+                <MessageList
+                  :session-id="splitChatSessionId"
+                  :messages="splitChatMessages"
+                  :external-is-sending="isSessionRunning || isSplitHistoryLoading"
+                  :current-streaming-message-id="splitCurrentStreamingMessageId"
+                  hide-context-strategy-notice
+                  @form-submit="handleActiveFormSubmit"
+                  @stop="stopSplitTask"
                 />
-
-                <div
-                  v-if="showLoadingIndicator"
-                  class="message assistant"
-                >
-                  <div class="message-content loading">
-                    <span class="dot" />
-                    <span class="dot" />
-                    <span class="dot" />
-                  </div>
-                  <div class="message-loading-status">
-                    {{ runningStatusText }}
-                  </div>
-                </div>
               </div>
 
-              <div
-                v-if="showPreview || showRecoveryInput"
-                class="conversation-input-area"
-              >
+              <div class="conversation-input-area">
                 <div
                   v-if="isSubSplitActive && isSessionRunning"
                   class="footer-resplit-hint"
@@ -134,7 +154,7 @@ const {
                       ref="instructionInputRef"
                       v-model="userInstruction"
                       class="instruction-input"
-                      :disabled="isSessionRunning || isConfirming"
+                      :disabled="isConfirming"
                       :placeholder="t('taskSplit.instructionPlaceholder')"
                       rows="2"
                       @keydown="handleInstructionKeydown"
@@ -186,111 +206,65 @@ const {
           </div>
         </div>
 
-        <div class="dialog-footer">
-          <template v-if="showPreview">
-            <div class="footer-actions footer-actions--confirm">
-              <button
-                v-if="hasPendingRefinement"
-                class="btn btn-secondary"
-                @click="closeDialog"
-              >
-                {{ t(refinementMode === 'list_optimize' ? 'taskSplit.discardOptimize' : 'taskSplit.discardResplit') }}
-              </button>
-              <button
-                v-if="showStopButton"
-                class="btn btn-danger"
-                @click="stopSplitTask"
-              >
-                {{ t('taskSplit.stopTask') }}
-              </button>
-              <button
-                v-if="canRetrySplit"
-                class="btn btn-secondary btn-retry"
-                :class="{ 'btn-retry--pending': isAutoRetryPending }"
-                @click="retrySplitTask"
-              >
-                <span
-                  v-if="isAutoRetryPending"
-                  class="btn-retry__pulse"
-                />
-                {{ retryButtonLabel }}
-              </button>
-              <button
-                v-if="canContinueSplit"
-                class="btn btn-secondary btn-continue"
-                @click="continueSplitTask"
-              >
-                {{ t('taskSplit.continueSplit') }}
-              </button>
-              <button
-                class="btn btn-secondary"
-                :disabled="isConfirming || isSessionRunning"
-                @click="closeDialog"
-              >
-                {{ t('taskSplit.close') }}
-              </button>
-              <button
-                class="btn btn-secondary"
-                :disabled="isSessionRunning"
-                @click="restartSplit"
-              >
-                {{ t('taskSplit.restart') }}
-              </button>
-              <button
-                class="btn btn-primary"
-                :disabled="isConfirming || isSessionRunning || (hasPendingRefinement && !canApplyRefinement)"
-                @click="confirmSplit"
-              >
-                {{ primaryActionLabel }}
-              </button>
-            </div>
-          </template>
-
-          <template v-else>
-            <div class="footer-bar">
+        <div
+          v-if="showPreview"
+          class="dialog-footer"
+        >
+          <div class="footer-actions footer-actions--confirm">
+            <button
+              v-if="canRetrySplit"
+              class="btn btn-secondary btn-retry"
+              :class="{ 'btn-retry--pending': isAutoRetryPending }"
+              @click="retrySplitTask"
+            >
               <span
-                class="idle-hint"
-                :class="{ 'idle-hint--error': canRetrySplit }"
-              >
-                {{ footerHint }}
-              </span>
-              <div class="footer-actions">
-                <button
-                  v-if="canRetrySplit"
-                  class="btn btn-secondary btn-retry"
-                  :class="{ 'btn-retry--pending': isAutoRetryPending }"
-                  @click="retrySplitTask"
-                >
-                  <span
-                    v-if="isAutoRetryPending"
-                    class="btn-retry__pulse"
-                  />
-                  {{ retryButtonLabel }}
-                </button>
-                <button
-                  v-if="canContinueSplit"
-                  class="btn btn-secondary btn-continue"
-                  @click="continueSplitTask"
-                >
-                  {{ t('taskSplit.continueSplit') }}
-                </button>
-                <button
-                  v-if="showStopButton"
-                  class="btn btn-danger"
-                  @click="stopSplitTask"
-                >
-                  {{ t('taskSplit.stopTask') }}
-                </button>
-                <button
-                  class="btn btn-secondary"
-                  @click="closeDialog"
-                >
-                  {{ t('taskSplit.hide') }}
-                </button>
-              </div>
-            </div>
-          </template>
+                v-if="isAutoRetryPending"
+                class="btn-retry__pulse"
+              />
+              {{ retryButtonLabel }}
+            </button>
+            <button
+              v-if="canContinueSplit"
+              class="btn btn-secondary btn-continue"
+              @click="continueSplitTask"
+            >
+              {{ t('taskSplit.continueSplit') }}
+            </button>
+            <button
+              class="btn btn-secondary"
+              :disabled="isConfirming"
+              @click="handleCloseClick"
+            >
+              {{ t('taskSplit.close') }}
+            </button>
+            <button
+              class="btn btn-secondary"
+              :disabled="isSessionRunning"
+              @click="restartSplit"
+            >
+              {{ t('taskSplit.restart') }}
+            </button>
+            <button
+              class="btn btn-primary"
+              :disabled="isConfirming || isSessionRunning || (hasPendingRefinement && !canApplyRefinement)"
+              @click="confirmSplit"
+            >
+              {{ primaryActionLabel }}
+            </button>
+          </div>
         </div>
+
+        <EaConfirmDialog
+          v-model:visible="showCloseConfirm"
+          type="warning"
+          :title="t('taskSplit.closeConfirmTitle')"
+          :message="t('taskSplit.closeConfirmMessage')"
+          :confirm-label="t('taskSplit.closeConfirmStop')"
+          :cancel-label="t('common.cancel')"
+          confirm-button-type="danger"
+          @cancel="cancelCloseConfirm"
+          @confirm="confirmCloseAndStop"
+        />
       </div>
     </div>
   </Teleport>

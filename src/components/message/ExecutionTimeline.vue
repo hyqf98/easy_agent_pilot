@@ -358,7 +358,17 @@ function getEntryElapsedLabel(entry: TimelineEntry) {
         </div>
       </div>
 
-      <template v-else-if="block.kind === 'assistant-turn'">
+      <div
+        v-else-if="block.kind === 'assistant-turn'"
+        class="execution-timeline__assistant-turn"
+      >
+        <div
+          v-if="block.contentEntry && getEntryElapsedLabel(block.contentEntry)"
+          class="timeline-entry__meta timeline-entry__meta--assistant-turn"
+        >
+          用时 {{ getEntryElapsedLabel(block.contentEntry) }}
+        </div>
+
         <ThinkingDisplay
           v-if="block.thinkingEntry?.content"
           :key="block.thinkingEntry.id"
@@ -404,22 +414,17 @@ function getEntryElapsedLabel(entry: TimelineEntry) {
 
         <div
           v-if="block.contentEntry?.content"
-          class="timeline-message timeline-message--assistant"
+          class="execution-timeline__assistant-content"
         >
-          <div class="timeline-message__content">
-            <div
-              v-if="getEntryElapsedLabel(block.contentEntry)"
-              class="timeline-entry__meta"
-            >
-              用时 {{ getEntryElapsedLabel(block.contentEntry) }}
-            </div>
-            <MarkdownRenderer
-              :content="block.contentEntry.content"
-              :animate="block.contentEntry.animate"
-            />
-          </div>
+          <StructuredContentRenderer
+            :content="block.contentEntry.content"
+            :interactive-forms="true"
+            :animate="block.contentEntry.animate"
+            @form-submit="handleMessageFormSubmit"
+            @form-cancel="handleMessageFormCancel"
+          />
         </div>
-      </template>
+      </div>
 
       <template v-else>
         <div
@@ -575,9 +580,9 @@ function getEntryElapsedLabel(entry: TimelineEntry) {
 
 <style scoped>
 .execution-timeline {
-  --timeline-entry-width: var(--timeline-panel-width, min(100%, clamp(18rem, 40%, 28rem)));
-  --timeline-content-max-width: var(--timeline-panel-max-width, min(100%, clamp(18rem, 52%, 34rem)));
-  --thinking-display-width: var(--timeline-entry-width);
+  --timeline-entry-width: var(--timeline-panel-width, min(100%, 36rem));
+  --timeline-content-max-width: var(--timeline-panel-max-width, min(100%, 50rem));
+  --thinking-display-width: var(--thinking-display-width, var(--timeline-entry-width));
   --timeline-bubble-bg: rgba(248, 250, 252, 0.92);
   --timeline-bubble-border: rgba(148, 163, 184, 0.22);
   --timeline-bubble-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
@@ -703,6 +708,23 @@ function getEntryElapsedLabel(entry: TimelineEntry) {
   border-radius: 999px;
 }
 
+.execution-timeline__assistant-turn {
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  width: min(100%, var(--timeline-content-max-width));
+  max-width: 100%;
+  min-width: 0;
+  --timeline-entry-width: 100%;
+  --thinking-display-width: 100%;
+}
+
+.execution-timeline__assistant-content {
+  min-width: 0;
+  width: 100%;
+}
+
 .timeline-message {
   display: flex;
 }
@@ -763,6 +785,11 @@ function getEntryElapsedLabel(entry: TimelineEntry) {
 .timeline-entry__meta--panel {
   width: fit-content;
   margin-bottom: 0.55rem;
+  padding-left: 0.2rem;
+}
+
+.timeline-entry__meta--assistant-turn {
+  margin-bottom: 0;
   padding-left: 0.2rem;
 }
 
@@ -837,6 +864,10 @@ function getEntryElapsedLabel(entry: TimelineEntry) {
 
 .timeline-form__content--disabled {
   opacity: 0.72;
+}
+
+.timeline-form__content--submitted.timeline-form__content--disabled {
+  opacity: 1;
 }
 
 .execution-timeline--dark {

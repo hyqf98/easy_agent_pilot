@@ -2,12 +2,13 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { EaIcon } from '@/components/common'
 import { conversationService } from '@/services/conversation'
-import type { Message } from '@/stores/message'
+import { MANUAL_STOP_ERROR_MARKER, type Message } from '@/stores/message'
 import { useMessageStore } from '@/stores/message'
 import { useSessionExecutionStore } from '@/stores/sessionExecution'
 import { useTokenStore } from '@/stores/token'
 import { FILE_MENTION_PATTERN, getMentionDisplayText } from '@/utils/fileMention'
 import {
+  isEnvironmentRuntimeNotice,
   getProcessingTimeNoticeSummary,
   isContextRuntimeNotice,
   isProcessingTimeRuntimeNotice
@@ -18,12 +19,15 @@ export interface MessageBubbleProps {
   message: Message
   sessionId?: string
   hideContextStrategyNotice?: boolean
+  sessionMessages?: Message[]
+  isCurrentStreamingMessageOverride?: boolean
 }
 
 export interface MessageBubbleEmits {
   (event: 'retry', message: Message): void
   (event: 'formSubmit', formId: string, values: Record<string, unknown>, assistantMessageId?: string): void
   (event: 'openEditTrace', messageId: string, traceId: string): void
+  (event: 'stop', message: Message): void
 }
 
 interface MessagePart {
@@ -48,7 +52,22 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
   const isAssistant = computed(() => props.message.role === 'assistant')
   const isCompression = computed(() => props.message.role === 'compression')
   const isStreaming = computed(() => props.message.status === 'streaming')
+  const resolvedSessionMessages = computed(() => {
+    if (props.sessionMessages) {
+      return props.sessionMessages
+    }
+
+    if (!props.sessionId) {
+      return []
+    }
+
+    return messageStore.messagesBySession(props.sessionId)
+  })
   const isCurrentStreamingMessage = computed(() => {
+    if (typeof props.isCurrentStreamingMessageOverride === 'boolean') {
+      return props.isCurrentStreamingMessageOverride
+    }
+
     if (!props.sessionId || !isStreaming.value) {
       return false
     }
@@ -58,6 +77,32 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
   const isError = computed(() => props.message.status === 'error')
   const isInterrupted = computed(() => props.message.status === 'interrupted')
   const canRetry = computed(() => isError.value || isInterrupted.value)
+  const isManualStopped = computed(() => props.message.errorMessage === MANUAL_STOP_ERROR_MARKER)
+  const latestAssistantMessageId = computed(() => {
+    const latestAssistant = [...resolvedSessionMessages.value]
+      .slice()
+      .reverse()
+      .find(message => message.role === 'assistant')
+    return latestAssistant?.id ?? null
+  })
+  const latestUserMessageId = computed(() => {
+    const latestUser = [...resolvedSessionMessages.value]
+      .slice()
+      .reverse()
+      .find(message => message.role === 'user')
+    return latestUser?.id ?? null
+  })
+  const canRetryCurrentAssistant = computed(() =>
+    isAssistant.value
+    && !isStreaming.value
+    && latestAssistantMessageId.value === props.message.id
+    && (canRetry.value || Boolean(props.message.content))
+  )
+  const canRetryCurrentUser = computed(() =>
+    isUser.value
+    && canRetry.value
+    && latestUserMessageId.value === props.message.id
+  )
 
   watch(
     isStreaming,
@@ -97,15 +142,15 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
   })
 
   const userFormResponse = computed(() => {
-    if (!isUser.value || !props.sessionId) return null
+    if (!isUser.value) return null
     return extractFormResponse(props.message.content)
   })
 
   const userFormResponseDisplay = computed(() => {
     const formResponse = userFormResponse.value
-    if (!formResponse || !props.sessionId) return null
+    if (!formResponse) return null
 
-    const sessionMessages = messageStore.messagesBySession(props.sessionId)
+    const sessionMessages = resolvedSessionMessages.value
     const currentIndex = sessionMessages.findIndex(message => message.id === props.message.id)
     if (currentIndex < 0) return null
 
@@ -220,7 +265,11 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
       case 'streaming':
         return { text: t('message.status.assistantStreaming'), icon: 'loading', class: 'status--streaming' }
       case 'interrupted':
-        return { text: t('message.status.interrupted'), icon: 'square', class: 'status--interrupted' }
+        return {
+          text: isManualStopped.value ? t('message.status.assistantStopped') : t('message.status.interrupted'),
+          icon: 'square',
+          class: 'status--interrupted'
+        }
       case 'error':
         return { text: t('message.status.assistantError'), icon: 'error', class: 'status--error' }
       case 'completed':
@@ -279,11 +328,17 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
   const visibleRuntimeNotices = computed(() => {
     const notices = props.message.runtimeNotices ?? []
     return notices.filter(notice =>
-      !isContextRuntimeNotice(notice) && !isProcessingTimeRuntimeNotice(notice)
+      !isContextRuntimeNotice(notice)
+      && !isProcessingTimeRuntimeNotice(notice)
+      && !isEnvironmentRuntimeNotice(notice)
     )
   })
 
   const assistantVisibleEditTraces = computed(() => {
+    if (props.sessionMessages) {
+      return []
+    }
+
     if (!isAssistant.value || !props.message.editTraces?.length) {
       return []
     }
@@ -350,16 +405,18 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
     assistantFormBlocks.value.map(block => block.formSchema.formId)
   )
 
-  const resolvedFormResponse = computed(() => {
-    if (!props.sessionId || assistantFormIds.value.length === 0) {
-      return null
+  const resolvedFormResponsesById = computed<Record<string, Record<string, unknown>>>(() => {
+    if (assistantFormIds.value.length === 0) {
+      return {}
     }
 
-    const sessionMessages = messageStore.messagesBySession(props.sessionId)
+    const sessionMessages = resolvedSessionMessages.value
     const currentIndex = sessionMessages.findIndex(message => message.id === props.message.id)
     if (currentIndex < 0) {
-      return null
+      return {}
     }
+
+    const resolvedById: Record<string, Record<string, unknown>> = {}
 
     for (let index = currentIndex + 1; index < sessionMessages.length; index += 1) {
       const candidate = sessionMessages[index]
@@ -369,17 +426,25 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
 
       const formResponse = extractFormResponse(candidate.content)
       if (formResponse && assistantFormIds.value.includes(formResponse.formId)) {
-        return formResponse
+        resolvedById[formResponse.formId] = formResponse.values
       }
     }
 
-    return null
+    return resolvedById
   })
 
   function handleStop() {
+    if (props.sessionMessages) {
+      emit('stop', props.message)
+      return
+    }
+
     if (props.message.status === 'streaming' && props.sessionId && isCurrentStreamingMessage.value) {
       conversationService.abort(props.sessionId, props.message.id)
+      return
     }
+
+    emit('stop', props.message)
   }
 
   function handleRetry() {
@@ -456,6 +521,8 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
     isError,
     isInterrupted,
     canRetry,
+    canRetryCurrentAssistant,
+    canRetryCurrentUser,
     formattedTime,
     userFormResponseDisplay,
     processedUserMessage,
@@ -471,7 +538,7 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
     shouldClampToolCalls,
     sortedToolCalls,
     isAssistantFormOnly,
-    resolvedFormResponse,
+    resolvedFormResponsesById,
     handleStop,
     handleRetry,
     handleFormSubmit,

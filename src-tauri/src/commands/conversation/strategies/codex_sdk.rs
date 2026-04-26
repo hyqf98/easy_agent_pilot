@@ -77,6 +77,7 @@ fn emit_sdk_event(
                 input_tokens: event.input_tokens,
                 output_tokens: event.output_tokens,
                 model: event.model.clone(),
+                external_session_id: event.external_session_id.clone(),
             },
         );
     }

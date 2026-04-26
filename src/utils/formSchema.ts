@@ -25,6 +25,16 @@ function dedupeOptions(options: FormFieldOption[]): FormFieldOption[] {
   )
 }
 
+function normalizeFieldNameMapping(field: Record<string, unknown>): Record<string, unknown> {
+  if (!field.name && field.field) {
+    field = { ...field, name: field.field }
+  }
+  if (!field.label && field.question) {
+    field = { ...field, label: field.question }
+  }
+  return field
+}
+
 export function normalizeFormFieldForRendering(field: FormField): FormField {
   if (!OPTION_FIELD_TYPES.has(field.type)) {
     return field
@@ -45,9 +55,16 @@ export function normalizeFormFieldForRendering(field: FormField): FormField {
 }
 
 export function normalizeFormSchemaForRendering(schema: DynamicFormSchema): DynamicFormSchema {
+  const fields = schema.fields
+    .map((field) => {
+      const mapped = normalizeFieldNameMapping(field as unknown as Record<string, unknown>) as unknown as FormField
+      return normalizeFormFieldForRendering(mapped)
+    })
+    .filter((field): field is FormField => Boolean(field.name) && Boolean(field.label))
+
   return {
     ...schema,
-    fields: schema.fields.map(normalizeFormFieldForRendering)
+    fields
   }
 }
 

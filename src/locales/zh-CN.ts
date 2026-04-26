@@ -1,4 +1,4 @@
-﻿import enUS from './en-US'
+import enUS from './en-US'
 
 const zhCN = {
   ...enUS,
@@ -61,6 +61,7 @@ const zhCN = {
     batchDelete: '删除所选',
     enterName: '输入名称',
     refresh: '刷新',
+    stop: '停止',
     retry: '重试',
     error: '错误',
     none: '无',
@@ -317,6 +318,12 @@ const zhCN = {
       changedFiles: '变更文件',
       deletedFiles: '删除文件'
     },
+    runtimeNotice: {
+      runtime: '运行时',
+      model: '模型',
+      input: '输入',
+      output: '输出'
+    },
     status: {
       ...enUS.message.status,
       pending: '待发送',
@@ -328,6 +335,7 @@ const zhCN = {
       userError: '发送失败',
       userCompleted: '已发送',
       assistantStreaming: '生成中',
+      assistantStopped: '已停止',
       assistantError: '生成失败',
       assistantCompleted: '已完成'
     }
@@ -1764,21 +1772,24 @@ const zhCN = {
 5. form_request 应一次性收集当前轮次缺失的关键信息，优先设计 3-8 个高信息量字段，并尽量提供 suggestion、suggestionReason、optionReasons、allowOther。
 6. select / radio / multiselect 的 options 必须是 [{'{' } "label": "...", "value": "..." {'}'}]，并保留 allowOther；可补充 suggestion、suggestionReason、optionReasons。
 7. 条件显示仅使用 condition: {'{' } field, value {'}'}。
-8. task_split 必须包含 status:"DONE"、tasks、dependsOn；每个任务都要有 title、description、priority、implementationSteps、testSteps、acceptanceCriteria。
+8. task_split 必须包含 status:"DONE"、summary、tasks；summary 用 1-3 句自然语言概括本次拆分思路或结果；每个任务都要有 title、description、priority、implementationSteps、testSteps、acceptanceCriteria。
 9. 任务要边界清晰、可直接执行，禁止把仍然依赖用户补充信息的模糊事项直接塞进任务。
 10. description 不能写成泛泛的一句话，必须明确这个任务要完成什么业务目标、涉及哪些页面/模块/服务/数据、使用什么技术或方案来实现什么结果。
 11. implementationSteps 必须写成可直接执行的实现步骤，至少覆盖：改动位置、核心逻辑、关键数据流/状态流、边界处理；避免“完善功能”“处理逻辑”“完成开发”这类空话。
 12. 如果任务涉及前端，description 或 implementationSteps 中要写清楚页面/组件/状态管理/接口联动；如果涉及后端，要写清楚接口、服务、存储、调度、权限、事务或异常处理；如果跨端，要写清楚前后端协作边界。
 13. testSteps 不能只写“测试功能正常”，必须写清楚如何验证：测试前置条件、操作步骤、输入样例、预期结果，必要时区分手工验证、自动化测试、接口验证、回归验证。
 14. acceptanceCriteria 必须是可观察、可验收、可判定通过/失败的结果标准，优先描述业务结果、界面/接口表现、异常分支和性能/稳定性要求，禁止写成重复 implementationSteps 的过程描述。
-15. 优先输出少而完整的高质量任务，而不是很多个描述空泛的任务；每个任务都应该让执行者在不反复追问的情况下理解“做什么、怎么做、如何测试、何时算完成”。
-16. 顶层键名必须严格匹配标准结构：form_request 只能使用 type、question、forms；task_split 只能使用 type、status、tasks。禁止使用 action、reason、state、phase、payload、data 等替代键。
-17. forms 必须是 form schema 数组，不能把字段数组直接塞进 forms；每个表单必须包含 formId、title、fields。
-18. 输出前必须自行检查：内容可被 JSON.parse 直接解析、没有 markdown 代码块、没有 JSON 之外的额外文字、没有单引号和尾逗号。`,
+15. 当用户是在“继续拆分 / 优化已有任务列表”场景下给出追加指令时，默认采用最小修改原则：只允许修改用户明确点名的任务，禁止顺带修改其他任务。
+16. 只要用户消息里明确引用了某个具体任务（例如 @引用右侧任务、写出任务编号、写出唯一可识别的任务标题，或表达“只优化任务1 / 仅调整这个任务”），就必须视为局部修改请求；除非用户明确写出“整体优化 / 全量优化 / 优化全部任务 / 重整整个列表”，否则不得修改其他任务。
+17. 对于局部修改请求，如果其余任务无需变动，就必须在输出的 tasks 中保留其余任务原样，不得润色、重排、补充或顺手优化；如果用户指令仍然存在歧义，应先输出 form_request 澄清，而不是擅自扩展到全量优化。
+18. 优先输出少而完整的高质量任务，而不是很多个描述空泛的任务；每个任务都应该让执行者在不反复追问的情况下理解“做什么、怎么做、如何测试、何时算完成”。
+19. 顶层键名必须严格匹配标准结构：form_request 只能使用 type、question、forms；task_split 只能使用 type、status、summary、tasks。禁止使用 action、reason、state、phase、payload、data 等替代键。
+20. forms 必须是 form schema 数组，不能把字段数组直接塞进 forms；每个表单必须包含 formId、title、fields。
+21. 输出前必须自行检查：内容可被 JSON.parse 直接解析、没有 markdown 代码块、没有 JSON 之外的额外文字、没有单引号和尾逗号。`,
       kickoffPlanName: '计划名称',
       kickoffPlanDescription: '计划描述',
       kickoffMinTaskCount: '最少任务数',
-      kickoffStart: '开始拆分：先检查信息完整度；只要目标、范围、技术环境、依赖或验收条件仍不清晰，就先输出 form_request 收集信息。只有在每个任务都能写出清晰的技术方案描述、实现步骤、测试步骤和验收标准时，才输出 task_split。',
+      kickoffStart: '开始拆分：先检查信息完整度；只要目标、范围、技术环境、依赖或验收条件仍不清晰，就先输出 form_request 收集信息。只有在每个任务都能写出清晰的技术方案描述、实现步骤、测试步骤和验收标准时，才输出 task_split；输出 task_split 时必须同时提供 1-3 句 summary 作为拆分总结。',
       none: '（无）',
       resplitIntro: '将以下任务继续拆分为至少 {minTaskCount} 个子任务：',
       plan: '计划',
@@ -1788,12 +1799,12 @@ const zhCN = {
       testSteps: '测试步骤',
       acceptanceCriteria: '验收标准',
       extraRequirements: '用户额外要求',
-      directTaskSplitDone: '在保证每个任务都具备清晰的技术实现说明、实现步骤、测试步骤、验收标准的前提下，直接输出 task_split（status=DONE）。',
+      directTaskSplitDone: '在保证每个任务都具备清晰的技术实现说明、实现步骤、测试步骤、验收标准的前提下，直接输出 task_split（status=DONE）；必须同时包含 summary 和 tasks。',
       formResponse: '表单 {formId} 回答: {valueStr}',
-      formResponseContinue: '继续：需要更多信息就输出 form_request；足够则输出 task_split（status=DONE）。',
+      formResponseContinue: '继续：需要更多信息就输出 form_request；足够则输出 task_split（status=DONE），并同时输出 summary 和 tasks。',
       outputCorrection: `输出格式错误，请重新输出标准 JSON：
 - form_request：只能使用 type、question、forms，且 forms 必须是表单 schema 数组
-- task_split：只能使用 type、status、tasks，且必须包含 status:DONE，tasks >= {minTaskCount}
+- task_split：只能使用 type、status、summary、tasks，且必须包含 status:DONE、非空 summary，tasks >= {minTaskCount}
 - 禁止 action、reason、state、phase、payload、data 等替代键
 - 禁止 markdown 代码块、额外文字、单引号、尾逗号
 - 重新输出前先确认整段内容可以被 JSON.parse 直接解析`,
@@ -1863,6 +1874,9 @@ const zhCN = {
     // 底部 & 输入
     hide: '隐藏',
     close: '关闭',
+    closeConfirmTitle: '确认关闭拆分',
+    closeConfirmMessage: '当前计划正在拆分中，关闭将停止当前任务。确定要关闭吗？',
+    closeConfirmStop: '停止并关闭',
     stopTask: '停止任务',
     continueSplit: '继续拆分',
     discardOptimize: '放弃本次优化',
@@ -1897,7 +1911,11 @@ const zhCN = {
     hintSessionStopped: '当前会话已停止，可继续拆分并从上一次确认过的上下文接着执行。',
     hintSessionRunning: '后台正在执行拆分，可关闭弹框稍后回来查看',
     hintWaitingFormInput: '请根据上方 AI 动态表单逐步补充需求',
-    hintNoFormData: '当前会话没有待展示的表单数据。',
+    attachmentUploadAction: '上传附件',
+    attachmentDeleteAction: '删除附件',
+    attachmentRefineFallbackPrompt: '请结合附件继续调整当前任务拆分结果。',
+    formDataTitle: '已提交数据',
+    formSubmitted: '已提交',
     // 运行时状态
     runtimeThinking: '正在思考并拆分任务...',
     runtimeThinkingStart: '正在进入思考阶段...',
@@ -1991,6 +2009,42 @@ const zhCN = {
       edit: '编辑',
       delete: '删除'
     }
+  },
+
+  // 文件追踪
+  trace: {
+    eyebrow: 'AI 修改追踪',
+    title: '文件追踪',
+    hideFileList: '收起文件列表',
+    fileListCount: '文件列表 {count}',
+    autoFollow: '跟随最新',
+    manualBrowse: '手动浏览',
+    fullEditor: '完整编辑器',
+    hide: '隐藏',
+    editedFiles: '修改文件',
+    editsInRound: '本轮改动 {count}',
+    changeCount: '{count} 处变更',
+    changeCreate: '新建',
+    changeModify: '修改',
+    changeDelete: '删除',
+    tracePreview: '变更对比',
+    noFileSelected: '未选择文件',
+    lineRange: '第 {start} - {end} 行',
+    revisionLabel: '版本 {version}',
+    codePreview: '代码预览',
+    rollbackToBefore: '回滚到修改前',
+    oldRecordNoRollback: '旧记录不可回滚',
+    historyNote: '这条旧记录缺少完整前后快照，下面仅展示当前可定位的片段，不代表真实历史差异。',
+    emptyMessage: '当前消息还没有可追踪的文件修改',
+    rollbackWarningTitle: '当前记录暂不支持回滚',
+    rollbackWarningMessage: '这条变更缺少完整快照，无法安全恢复到修改前状态',
+    rollbackUnavailableTitle: '无法回滚当前记录',
+    rollbackUnavailableMessage: '这条历史记录缺少完整快照，请对新产生的文件变更使用回滚功能',
+    rollbackSuccessTitle: '文件已回滚',
+    rollbackSuccessMessage: '{path} 已恢复到本次修改前的状态',
+    rollbackFailedTitle: '回滚失败',
+    editorRefreshWarningTitle: '编辑器未自动刷新',
+    editorRefreshWarningMessage: '当前文件在编辑器中有未保存内容，请手动确认或重新打开文件'
   }
 }
 

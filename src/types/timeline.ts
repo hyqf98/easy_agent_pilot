@@ -1,4 +1,4 @@
-import type { ToolCall } from '@/stores/message'
+import type { MessageAttachment, ToolCall } from '@/stores/message'
 import type { DynamicFormSchema } from './plan'
 
 export type TimelineEntryType =
@@ -15,6 +15,7 @@ export interface TimelineEntry {
   type: TimelineEntryType
   sequence?: number
   content?: string
+  attachments?: MessageAttachment[]
   timestamp?: string
   metaLabel?: string
   role?: 'user' | 'assistant' | 'system'

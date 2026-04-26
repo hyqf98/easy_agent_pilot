@@ -132,15 +132,21 @@ function isNonRetryableFailure(
   return startsWithErrorContext(normalized) || hasStructuredErrorPayload(normalized)
 }
 
+function stripAnsiEscapes(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/\x1b\[[0-9;]*m/g, '')
+}
+
 function buildFailureMessage(
   runtimeLabel: string,
   kind: CliFailureKind,
   matchedText: string
 ): CliFailureMatch {
+  const cleaned = stripAnsiEscapes(matchedText).replace(/\s+/g, ' ').trim()
   return {
     kind,
-    matchedText,
-    message: `${runtimeLabel} 异常完成（${kind === 'retryable' ? '可重试' : '不可重试'}）: ${matchedText.replace(/\s+/g, ' ').trim()}`
+    matchedText: cleaned,
+    message: `${runtimeLabel} 异常完成（${kind === 'retryable' ? '可重试' : '不可重试'}）: ${cleaned}`
   }
 }
 

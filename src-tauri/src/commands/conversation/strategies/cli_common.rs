@@ -31,6 +31,7 @@ pub fn emit_cli_event(
                 input_tokens: event.input_tokens,
                 output_tokens: event.output_tokens,
                 model: event.model.clone(),
+                external_session_id: event.external_session_id.clone(),
             },
         );
     }
@@ -284,6 +285,73 @@ pub fn build_execution_summary(snapshot: &CliExecutionSnapshot, finished_at: Ins
         snapshot.stderr_warning_count,
         snapshot.exit_code
     )
+}
+
+pub fn build_cli_failure_report(
+    provider: &str,
+    session_id: &str,
+    command: &str,
+    working_directory: Option<&str>,
+    failure_reason: &str,
+    summary: &str,
+    stdout_preview: Option<&str>,
+    stderr_preview: Option<&str>,
+    stdout_parse_error_count: usize,
+    ignored_stderr_warning_count: u32,
+) -> String {
+    let mut segments = vec![
+        format!("{provider} CLI failure"),
+        format!("session_id={session_id}"),
+        format!("reason={}", preview_text(failure_reason, 240)),
+        format!("summary={summary}"),
+    ];
+
+    let normalized_command = command.trim();
+    if !normalized_command.is_empty() {
+        segments.push(format!(
+            "command={}",
+            preview_text(normalized_command, 320)
+        ));
+    }
+
+    if let Some(cwd) = working_directory
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        segments.push(format!("cwd={cwd}"));
+    }
+
+    if stdout_parse_error_count > 0 {
+        segments.push(format!("stdout_parse_errors={stdout_parse_error_count}"));
+    }
+
+    if ignored_stderr_warning_count > 0 {
+        segments.push(format!(
+            "ignored_stderr_warnings={ignored_stderr_warning_count}"
+        ));
+    }
+
+    if let Some(stdout_preview) = stdout_preview
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        segments.push(format!(
+            "stdout_preview={}",
+            preview_text(stdout_preview, 240)
+        ));
+    }
+
+    if let Some(stderr_preview) = stderr_preview
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        segments.push(format!(
+            "stderr_preview={}",
+            preview_text(stderr_preview, 240)
+        ));
+    }
+
+    segments.join(" | ")
 }
 
 pub fn shell_escape(value: &str) -> String {

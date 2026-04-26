@@ -6,8 +6,13 @@ import { inferAgentProvider, useAgentStore, type AgentConfig } from './agent'
 import { useAgentTeamsStore } from './agentTeams'
 import { usePlanStore } from './plan'
 import { useSettingsStore } from './settings'
+import type { MessageAttachment } from './message'
 import { logger } from '@/utils/logger'
 import { normalizeFormSchemaForRendering, normalizeFormSchemasForRendering } from '@/utils/formSchema'
+import {
+  extractFirstFormRequestFromContents,
+  extractTaskSplitResultFromContents
+} from '@/utils/structuredContent'
 import {
   buildExpertCatalogPrompt,
   buildExpertSystemPrompt,
@@ -67,6 +72,11 @@ interface TaskSplitRefinementState {
   config: TaskResplitConfig | TaskListOptimizeConfig
 }
 
+interface ContinueSessionWithInstructionOptions {
+  attachments?: MessageAttachment[]
+  displayContent?: string
+}
+
 interface SubmittedFormSnapshot {
   formId: string
   schema: DynamicFormSchema
@@ -95,6 +105,21 @@ interface RustPlanSplitLogRecord {
   content: string
   metadata?: string | null
   createdAt: string
+}
+
+function measurePlanSplit(label: string, startedAt: number, detail: Record<string, unknown> = {}) {
+  const durationMs = Math.round((performance.now() - startedAt) * 10) / 10
+  console.info(`[PlanSplitPerf] ${label}`, { durationMs, ...detail })
+}
+
+function measurePlanSplitPoint(label: string, detail: Record<string, unknown> = {}) {
+  console.info(`[PlanSplitPerf] ${label}`, detail)
+}
+
+function sumPlanSplitLogBytes(items: RustPlanSplitLogRecord[] | PlanSplitLogRecord[]) {
+  return items.reduce((total, item) =>
+    total + (item.content?.length ?? 0) + (item.metadata?.length ?? 0),
+  0)
 }
 
 function formatOptionValue(field: DynamicFormSchema['fields'][number], value: unknown): string {
@@ -139,6 +164,90 @@ function parseStreamPayloadMetadata(raw?: string | null): Record<string, unknown
   }
 }
 
+function readMetadataString(
+  metadata: Record<string, unknown> | null,
+  key: string,
+  fallbackKey?: string
+): string | null {
+  const target = metadata?.[key] ?? (fallbackKey ? metadata?.[fallbackKey] : undefined)
+  return typeof target === 'string' && target.trim()
+    ? target.trim()
+    : null
+}
+
+function isStructuredOutputToolName(toolName: string | null): boolean {
+  return toolName === 'StructuredOutput' || toolName === 'structured_output'
+}
+
+function collectStructuredOutputCandidatesFromLogs(splitLogs: PlanSplitLogRecord[]): string[] {
+  const sortedLogs = [...splitLogs]
+    .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime())
+  const structuredToolCallIds = new Set<string>()
+  const structuredToolCallOrder: string[] = []
+  const structuredToolInputChunks = new Map<string, string[]>()
+  const candidates: string[] = []
+
+  sortedLogs.forEach((log) => {
+    const metadata = parseStreamPayloadMetadata(log.metadata)
+    const toolName = readMetadataString(metadata, 'toolName', 'tool_name')
+    const toolCallId = readMetadataString(metadata, 'toolCallId', 'tool_call_id')
+
+    if (log.type === 'tool_use' && isStructuredOutputToolName(toolName)) {
+      if (toolCallId && !structuredToolCallIds.has(toolCallId)) {
+        structuredToolCallIds.add(toolCallId)
+        structuredToolCallOrder.push(toolCallId)
+      }
+
+      const toolInput = readMetadataString(metadata, 'toolInput', 'tool_input')
+      const candidate = toolInput ?? (log.content?.trim() ? log.content.trim() : '')
+      if (candidate) {
+        candidates.push(candidate)
+      }
+      return
+    }
+
+    if (!toolCallId || !structuredToolCallIds.has(toolCallId)) {
+      return
+    }
+
+    if (log.type === 'tool_input_delta') {
+      const chunk = log.content?.trim()
+        ? log.content
+        : readMetadataString(metadata, 'toolInput', 'tool_input') ?? ''
+      if (!chunk.trim()) {
+        return
+      }
+
+      const chunks = structuredToolInputChunks.get(toolCallId) ?? []
+      chunks.push(chunk)
+      structuredToolInputChunks.set(toolCallId, chunks)
+      return
+    }
+
+    if (log.type === 'tool_result') {
+      const toolResult = readMetadataString(metadata, 'toolResult', 'tool_result')
+      const candidate = toolResult ?? (log.content?.trim() ? log.content.trim() : '')
+      if (candidate) {
+        candidates.push(candidate)
+      }
+    }
+  })
+
+  structuredToolCallOrder.forEach((toolCallId) => {
+    const chunks = structuredToolInputChunks.get(toolCallId)
+    if (!chunks?.length) {
+      return
+    }
+
+    const candidate = chunks.join('').trim()
+    if (candidate) {
+      candidates.push(candidate)
+    }
+  })
+
+  return candidates
+}
+
 function buildPersistedLogMetadata(
   payload: PlanSplitStreamPayload,
   parsedMetadata: Record<string, unknown> | null
@@ -158,11 +267,17 @@ function buildPersistedLogMetadata(
     : typeof parsedMetadata?.outputTokens === 'number'
       ? parsedMetadata.outputTokens
       : undefined
+  const externalSessionId = typeof payload.externalSessionId === 'string' && payload.externalSessionId.trim()
+    ? payload.externalSessionId.trim()
+    : typeof parsedMetadata?.externalSessionId === 'string' && parsedMetadata.externalSessionId.trim()
+      ? parsedMetadata.externalSessionId.trim()
+      : undefined
 
   return JSON.stringify({
     model,
     inputTokens,
     outputTokens,
+    externalSessionId,
     ...(payload.metadata ? { rawMetadata: payload.metadata } : {}),
     toolName: payload.toolName,
     toolCallId: payload.toolCallId,
@@ -175,7 +290,8 @@ function buildExecutionRequest(
   context: TaskSplitContext,
   agent: AgentConfig,
   llmMessages: MessageInput[],
-  mcpServers: ExecutionRequest['mcpServers']
+  mcpServers: ExecutionRequest['mcpServers'],
+  resumeSessionId?: string
 ): ExecutionRequest {
   const normalizedProvider = (agent.provider || 'claude').toLowerCase()
   const provider = normalizedProvider === 'codex'
@@ -197,16 +313,24 @@ function buildExecutionRequest(
       ? buildPlanSplitJsonSchema(context.granularity, provider, context.taskCountMode ?? 'min')
       : undefined,
     executionMode: 'task_split',
-    responseMode: 'stream_text'
+    responseMode: 'stream_text',
+    resumeSessionId
   })
 }
 
 function toSplitMessages(raw?: string | null): SplitMessage[] {
-  const parsed = parseJson<Array<{ id: string; role: 'user' | 'assistant'; content: string; timestamp: string }>>(raw, [])
+  const parsed = parseJson<Array<{
+    id: string
+    role: 'user' | 'assistant'
+    content: string
+    attachments?: SplitMessage['attachments']
+    timestamp: string
+  }>>(raw, [])
   return parsed.map(message => ({
     id: message.id,
     role: message.role,
     content: message.content,
+    attachments: message.attachments,
     timestamp: message.timestamp
   }))
 }
@@ -223,10 +347,62 @@ function toSplitResult(raw?: string | null): AITaskItem[] | null {
 }
 
 function toPlanSplitLogs(logs: RustPlanSplitLogRecord[]): PlanSplitLogRecord[] {
-  return logs.map(log => ({
-    ...log,
-    type: log.type ?? log.logType ?? 'system'
-  }))
+  return logs
+    .map(log => ({
+      ...log,
+      type: log.type ?? log.logType ?? 'system'
+    }))
+    .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime())
+}
+
+function collectStructuredRecoveryCandidates(
+  snapshot: PlanSplitSessionRecord,
+  splitLogs: PlanSplitLogRecord[]
+): string[] {
+  const messageContents = toSplitMessages(snapshot.messagesJson)
+    .filter(message => message.role === 'assistant')
+    .map(message => message.content)
+  const logContents = [...splitLogs]
+    .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime())
+    .map(log => log.content)
+  const structuredOutputCandidates = collectStructuredOutputCandidatesFromLogs(splitLogs)
+
+  return [
+    ...messageContents,
+    ...logContents,
+    ...structuredOutputCandidates,
+    snapshot.rawContent ?? null
+  ].filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+}
+
+function recoverSplitResultFromSnapshot(
+  snapshot: PlanSplitSessionRecord,
+  splitLogs: PlanSplitLogRecord[]
+): AITaskItem[] | null {
+  const persisted = toSplitResult(snapshot.resultJson)
+  if (persisted?.length) {
+    return persisted
+  }
+
+  const recovered = extractTaskSplitResultFromContents(
+    collectStructuredRecoveryCandidates(snapshot, splitLogs)
+  )
+  return recovered?.tasks ?? null
+}
+
+function recoverFormQueueFromSnapshot(
+  snapshot: PlanSplitSessionRecord,
+  splitLogs: PlanSplitLogRecord[]
+): DynamicFormSchema[] {
+  const persisted = toFormQueue(snapshot.formQueueJson)
+  if (persisted.length > 0) {
+    return persisted
+  }
+
+  const recovered = extractFirstFormRequestFromContents(
+    collectStructuredRecoveryCandidates(snapshot, splitLogs)
+  )
+  return normalizeFormSchemasForRendering(recovered?.forms ?? [])
 }
 
 function trimTrailingAssistantMessages<T extends { role: string }>(items: T[]): T[] {
@@ -241,6 +417,37 @@ function trimTrailingAssistantMessages<T extends { role: string }>(items: T[]): 
   }
 
   return items.slice(0, endIndex)
+}
+
+function trimPlanSplitLogsBySessionId(
+  items: PlanSplitLogRecord[],
+  sessionId?: string | null
+): PlanSplitLogRecord[] {
+  const normalizedSessionId = sessionId?.trim()
+  if (!normalizedSessionId) {
+    return [...items]
+  }
+
+  return items.filter(log => log.sessionId !== normalizedSessionId)
+}
+
+function trimPlanSplitLogsAfterTimestamp(
+  items: PlanSplitLogRecord[],
+  boundaryTimestamp?: string | null
+): PlanSplitLogRecord[] {
+  if (!boundaryTimestamp) {
+    return [...items]
+  }
+
+  const boundaryMs = new Date(boundaryTimestamp).getTime()
+  if (!Number.isFinite(boundaryMs)) {
+    return [...items]
+  }
+
+  return items.filter((log) => {
+    const logMs = new Date(log.createdAt).getTime()
+    return !Number.isFinite(logMs) || logMs < boundaryMs
+  })
 }
 
 function isAutoRetryProgressLog(log: Pick<PlanSplitLogRecord, 'type' | 'metadata'>): boolean {
@@ -270,6 +477,8 @@ async function buildSplitSystemPrompt(expertId?: string): Promise<string> {
 export const useTaskSplitStore = defineStore('taskSplit', () => {
   const messages = ref<SplitMessage[]>([])
   const logs = ref<PlanSplitLogRecord[]>([])
+  const isLoadingLogs = ref(false)
+  const renderVersion = ref(0)
   const isProcessing = ref(false)
   const splitResult = ref<AITaskItem[] | null>(null)
   const submittedForms = ref<SubmittedFormSnapshot[]>([])
@@ -288,6 +497,32 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
   const autoRetryTimer = ref<ReturnType<typeof setTimeout> | null>(null)
   const autoRetryScheduled = ref(false)
   const autoRetryNextRunAt = ref<number | null>(null)
+
+  let initVersion = 0
+  let logLoadingTimer: ReturnType<typeof setTimeout> | null = null
+
+  function bumpRenderVersion() {
+    renderVersion.value += 1
+  }
+
+  interface PlanSplitCache {
+    messages: SplitMessage[]
+    logs: PlanSplitLogRecord[]
+    splitResult: AITaskItem[] | null
+    submittedForms: SubmittedFormSnapshot[]
+    currentFormId: string | null
+    formQueue: DynamicFormSchema[]
+    currentFormIndex: number
+    session: PlanSplitSessionRecord | null
+    context: TaskSplitContext | null
+    refinementState: TaskSplitRefinementState | null
+    runtimeNotices: RuntimeNotice[]
+    usageModelHint: string | null
+    recordedUsageSessionIds: Set<string>
+    autoRetryCount: number
+  }
+
+  const planStateCache = new Map<string, PlanSplitCache>()
 
   const subSplitMode = computed(() => refinementState.value?.mode === 'task_resplit')
   const subSplitTargetIndex = computed(() => refinementState.value?.targetIndex ?? null)
@@ -315,6 +550,8 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     cancelAutoRetry()
     messages.value = []
     logs.value = []
+    isLoadingLogs.value = false
+    bumpRenderVersion()
     isProcessing.value = false
     splitResult.value = null
     submittedForms.value = []
@@ -332,6 +569,66 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     autoRetryNextRunAt.value = null
   }
 
+  function saveCurrentPlanState() {
+    const planId = context.value?.planId
+    if (!planId) return
+
+    cancelAutoRetry()
+
+    planStateCache.set(planId, {
+      messages: [...messages.value],
+      logs: [...logs.value],
+      splitResult: splitResult.value,
+      submittedForms: [...submittedForms.value],
+      currentFormId: currentFormId.value,
+      formQueue: [...formQueue.value],
+      currentFormIndex: currentFormIndex.value,
+      session: session.value,
+      context: context.value,
+      refinementState: refinementState.value,
+      runtimeNotices: [...runtimeNotices.value],
+      usageModelHint: usageModelHint.value,
+      recordedUsageSessionIds: new Set(recordedUsageSessionIds.value),
+      autoRetryCount: autoRetryCount.value
+    })
+  }
+
+  function restorePlanState(planId: string): boolean {
+    const cached = planStateCache.get(planId)
+    if (!cached) return false
+
+    messages.value = [...cached.messages]
+    logs.value = [...cached.logs]
+    splitResult.value = cached.splitResult
+    submittedForms.value = [...cached.submittedForms]
+    currentFormId.value = cached.currentFormId
+    formQueue.value = [...cached.formQueue]
+    currentFormIndex.value = cached.currentFormIndex
+    session.value = cached.session
+    context.value = cached.context
+    refinementState.value = cached.refinementState
+    runtimeNotices.value = [...cached.runtimeNotices]
+    usageModelHint.value = cached.usageModelHint
+    recordedUsageSessionIds.value = new Set(cached.recordedUsageSessionIds)
+    autoRetryCount.value = cached.autoRetryCount
+    isProcessing.value = cached.session?.status === 'running'
+    runtimeMetrics.value = null
+    autoRetryScheduled.value = false
+    autoRetryNextRunAt.value = null
+    autoRetryTimer.value = null
+    bumpRenderVersion()
+
+    return true
+  }
+
+  function clearPlanStateCache(planId?: string) {
+    if (planId) {
+      planStateCache.delete(planId)
+    } else {
+      planStateCache.clear()
+    }
+  }
+
   function cancelAutoRetry() {
     if (autoRetryTimer.value) {
       clearTimeout(autoRetryTimer.value)
@@ -339,6 +636,25 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     }
     autoRetryScheduled.value = false
     autoRetryNextRunAt.value = null
+  }
+
+  function startLogLoadingDelay() {
+    stopLogLoadingDelay()
+    logLoadingTimer = setTimeout(() => {
+      isLoadingLogs.value = true
+      logLoadingTimer = null
+    }, 150)
+  }
+
+  function stopLogLoadingDelay() {
+    if (logLoadingTimer) {
+      clearTimeout(logLoadingTimer)
+      logLoadingTimer = null
+    }
+  }
+
+  function isCurrentPlan(planId?: string | null): boolean {
+    return Boolean(planId && context.value?.planId === planId)
   }
 
   function upsertAutoRetryProgressLog(retryNumber: number, maxRetries: number, delaySeconds: number) {
@@ -447,6 +763,10 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
   }
 
   function applySessionSnapshot(snapshot: PlanSplitSessionRecord | null, preserveLogs: boolean = true) {
+    if (snapshot && !isCurrentPlan(snapshot.planId)) {
+      return
+    }
+
     session.value = snapshot
     if (!snapshot) {
       messages.value = []
@@ -462,14 +782,20 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     }
 
     messages.value = toSplitMessages(snapshot.messagesJson)
-    const parsedResult = toSplitResult(snapshot.resultJson)
+    const parsedResult = recoverSplitResultFromSnapshot(snapshot, logs.value)
     if (parsedResult) {
       splitResult.value = parsedResult
     } else if (!refinementState.value) {
       splitResult.value = null
     }
-    formQueue.value = toFormQueue(snapshot.formQueueJson)
-    currentFormIndex.value = snapshot.currentFormIndex ?? 0
+    const shouldKeepFormQueue = snapshot.status === 'waiting_input'
+    const nextFormQueue = shouldKeepFormQueue
+      ? recoverFormQueueFromSnapshot(snapshot, logs.value)
+      : []
+    formQueue.value = nextFormQueue
+    currentFormIndex.value = nextFormQueue.length > 0
+      ? Math.min(snapshot.currentFormIndex ?? 0, nextFormQueue.length - 1)
+      : 0
     currentFormId.value = formQueue.value[currentFormIndex.value]?.formId ?? null
     isProcessing.value = snapshot.status === 'running'
 
@@ -517,13 +843,64 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
   }
 
   async function loadSession(planId: string) {
-    const [snapshot, splitLogs] = await Promise.all([
-      invoke<PlanSplitSessionRecord | null>('get_plan_split_session', { planId }),
-      invoke<RustPlanSplitLogRecord[]>('list_plan_split_logs', { planId }).catch(() => [])
-    ])
+    const loadStartedAt = performance.now()
+    startLogLoadingDelay()
+    measurePlanSplitPoint('loadSession:start', { planId })
+    const logsInvokeStartedAt = performance.now()
+    const splitLogsPromise = invoke<RustPlanSplitLogRecord[]>('list_plan_split_logs', { planId })
+      .then((splitLogs) => {
+        measurePlanSplit('ipc:list_plan_split_logs', logsInvokeStartedAt, {
+          planId,
+          count: splitLogs.length,
+          bytes: sumPlanSplitLogBytes(splitLogs)
+        })
+        return splitLogs
+      })
+      .catch((error) => {
+        measurePlanSplit('ipc:list_plan_split_logs:error', logsInvokeStartedAt, {
+          planId,
+          error: String(error)
+        })
+        return []
+      })
+    const sessionInvokeStartedAt = performance.now()
+    const sessionPromise = invoke<PlanSplitSessionRecord | null>('get_plan_split_session', { planId })
+    const [snapshot, splitLogs] = await Promise.all([sessionPromise, splitLogsPromise])
+    measurePlanSplit('ipc:get_plan_split_session', sessionInvokeStartedAt, {
+      planId,
+      status: snapshot?.status ?? null,
+      messageBytes: snapshot?.messagesJson?.length ?? 0,
+      rawBytes: snapshot?.rawContent?.length ?? 0,
+      resultBytes: snapshot?.resultJson?.length ?? 0
+    })
 
-    logs.value = toPlanSplitLogs(splitLogs)
-    applySessionSnapshot(snapshot, true)
+    if (!isCurrentPlan(planId)) {
+      stopLogLoadingDelay()
+      isLoadingLogs.value = false
+      measurePlanSplit('loadSession:stale', loadStartedAt, { planId })
+      return
+    }
+
+    const applySnapshotStartedAt = performance.now()
+      logs.value = toPlanSplitLogs(splitLogs)
+      stopLogLoadingDelay()
+      isLoadingLogs.value = false
+      applySessionSnapshot(snapshot, true)
+      bumpRenderVersion()
+    measurePlanSplit('applySessionSnapshot:initial', applySnapshotStartedAt, {
+      planId,
+      messages: messages.value.length,
+      logs: logs.value.length,
+      hasResult: Boolean(splitResult.value?.length)
+    })
+    measurePlanSplit('loadSession:done', loadStartedAt, {
+      planId,
+      logs: splitLogs.length,
+      bytes: sumPlanSplitLogBytes(splitLogs),
+      messages: messages.value.length,
+      recoveredTasks: splitResult.value?.length ?? 0,
+      isLoadingLogs: isLoadingLogs.value
+    })
   }
 
   async function isExecutionSessionActive(sessionId?: string | null): Promise<boolean> {
@@ -576,6 +953,10 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     detachStream()
     streamUnlisten.value = await listen<PlanSplitStreamPayload>(`plan-split-stream-${planId}`, async (event) => {
       const payload = event.payload
+      if (!isCurrentPlan(payload.planId)) {
+        return
+      }
+
       if (payload.type === 'session_updated' && payload.session) {
         if (
           runtimeMetrics.value
@@ -646,6 +1027,8 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     options?: {
       preserveLogs?: boolean
       preserveAutoRetryState?: boolean
+      resumeSessionId?: string
+      preserveResult?: boolean
     }
   ) {
     const agentStore = useAgentStore()
@@ -678,7 +1061,8 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       nextContext,
       agent,
       llmMessages,
-      mcpServers.length > 0 ? mcpServers : undefined
+      mcpServers.length > 0 ? mcpServers : undefined,
+      options?.resumeSessionId
     )
     const snapshot = await invoke<PlanSplitSessionRecord>('start_plan_split', {
       input: {
@@ -687,7 +1071,8 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
         taskCountMode: nextContext.taskCountMode ?? 'min',
         executionRequest,
         llmMessages,
-        messages: uiMessages
+        messages: uiMessages,
+        preserveResult: options?.preserveResult ?? false
       }
     })
     applySessionSnapshot(snapshot, true)
@@ -736,17 +1121,35 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
   }
 
   async function initSession(nextContext: TaskSplitContext) {
+    const initStartedAt = performance.now()
+    const version = ++initVersion
     const previousPlanId = context.value?.planId
-    if (previousPlanId !== nextContext.planId) {
-      submittedForms.value = []
-      messages.value = []
-      logs.value = []
-      splitResult.value = null
-      formQueue.value = []
-      currentFormIndex.value = 0
-      currentFormId.value = null
-      session.value = null
-      refinementState.value = null
+    measurePlanSplitPoint('initSession:start', {
+      planId: nextContext.planId,
+      previousPlanId: previousPlanId ?? null
+    })
+
+    if (previousPlanId && previousPlanId !== nextContext.planId) {
+      saveCurrentPlanState()
+    }
+
+    detachStream()
+    cancelAutoRetry()
+
+    const planChanged = previousPlanId !== nextContext.planId
+    const restoreStartedAt = performance.now()
+    const restoredFromCache = planChanged && restorePlanState(nextContext.planId)
+    measurePlanSplit('initSession:restore_cache', restoreStartedAt, {
+      planId: nextContext.planId,
+      planChanged,
+      restoredFromCache
+    })
+
+    if (planChanged) {
+      const restored = restoredFromCache
+      if (!restored) {
+        resetState()
+      }
     }
 
     context.value = nextContext
@@ -754,27 +1157,53 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     usageModelHint.value = null
     const selectedAgent = useAgentStore().agents.find(agent => agent.id === nextContext.agentId)
     if (selectedAgent) {
-      const [environmentNotice, modelHint] = await Promise.all([
-        buildCliEnvironmentNotice(selectedAgent).catch(() => null),
-        resolveUsageModelHint(selectedAgent).catch(() => undefined)
-      ])
       const selectedExpert = resolveExpertById(nextContext.expertId, useAgentTeamsStore().experts)
       const contextNotice = buildContextStrategyNotice({
         strategy: 'Plan Split Prompt Context',
         runtime: inferAgentProvider(selectedAgent)?.toUpperCase() || selectedAgent.type,
-        model: nextContext.modelId || selectedAgent.modelId || modelHint,
+        model: nextContext.modelId || selectedAgent.modelId || usageModelHint.value || undefined,
         expert: selectedExpert?.name || nextContext.expertId,
         systemMessageCount: 1,
         userMessageCount: 1,
         assistantMessageCount: 0,
         historyMessageCount: 0
       })
-      runtimeNotices.value = [environmentNotice, contextNotice].filter((notice): notice is RuntimeNotice => Boolean(notice))
-      usageModelHint.value = modelHint ?? null
+      runtimeNotices.value = contextNotice ? [contextNotice] : []
+
+      void Promise.all([
+        buildCliEnvironmentNotice(selectedAgent).catch(() => null),
+        resolveUsageModelHint(selectedAgent).catch(() => undefined)
+      ]).then(([environmentNotice, modelHint]) => {
+        if (version !== initVersion || !isCurrentPlan(nextContext.planId)) return
+        usageModelHint.value = modelHint ?? null
+        runtimeNotices.value = [environmentNotice, contextNotice]
+          .filter((notice): notice is RuntimeNotice => Boolean(notice))
+      })
     }
+    if (version !== initVersion) return
+
     await subscribeToPlan(nextContext.planId)
-    await loadSession(nextContext.planId)
+    measurePlanSplit('initSession:subscribe_done', initStartedAt, { planId: nextContext.planId })
+    if (version !== initVersion) return
+
+    const sessionLoad = loadSession(nextContext.planId)
+    if (restoredFromCache) {
+      void sessionLoad
+    } else {
+      await sessionLoad
+    }
+    measurePlanSplit('initSession:loadSession_returned', initStartedAt, {
+      planId: nextContext.planId,
+      restoredFromCache,
+      messages: messages.value.length,
+      logs: logs.value.length,
+      isLoadingLogs: isLoadingLogs.value
+    })
+    if (version !== initVersion) return
+
     await recoverStaleRunningSession(nextContext.planId)
+    measurePlanSplit('initSession:recover_done', initStartedAt, { planId: nextContext.planId })
+    if (version !== initVersion) return
 
     if (session.value) {
       return
@@ -810,6 +1239,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       timestamp: new Date().toISOString()
     }]
 
+    if (version !== initVersion) return
     await startBackgroundSession(nextContext, llmMessages, uiMessages)
   }
 
@@ -842,14 +1272,16 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
   }
 
   /**
-   * 基于当前会话上下文重新发起最新一轮拆分，并清理上一轮失败/停止留下的 AI 渲染痕迹。
+   * 基于当前会话上下文重新发起最新一轮拆分，同时保留历史轮次的消息与日志渲染。
    */
   async function restartFromPersistedContext(
     snapshot: PlanSplitSessionRecord,
     options?: {
       preserveAutoRetryState?: boolean
       extraUserPrompt?: string
+      extraUserAttachments?: MessageAttachment[]
       displayContent?: string
+      trimLatestTurn?: boolean
     }
   ) {
     if (!context.value) {
@@ -861,23 +1293,46 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       autoRetryCount.value = 0
     }
 
+    const resumeSessionId = parseJson<ExecutionRequest | null>(
+      snapshot.executionRequestJson ?? null,
+      null
+    )?.resumeSessionId?.trim() || undefined
+
     let llmMessages = trimTrailingAssistantMessages(
       parseJson<MessageInput[]>(snapshot.llmMessagesJson, [])
     )
-    let uiMessages = trimTrailingAssistantMessages(
-      toSplitMessages(snapshot.messagesJson)
-    )
+    let uiMessages = toSplitMessages(snapshot.messagesJson)
+    const latestExecutionSessionId = snapshot.executionSessionId?.trim() || null
+    const latestUserTimestamp = [...uiMessages]
+      .filter(message => message.role === 'user')
+      .map(message => message.timestamp)
+      .filter(Boolean)
+      .slice(-1)[0] ?? null
     if (llmMessages.length === 0) {
       throw new Error('当前会话缺少可重试的上下文。')
     }
 
     const extraUserPrompt = options?.extraUserPrompt?.trim()
-    if (extraUserPrompt) {
+    const extraUserAttachments = options?.extraUserAttachments?.length
+      ? options.extraUserAttachments
+      : undefined
+    const trimLatestTurn = options?.trimLatestTurn ?? !(extraUserPrompt || extraUserAttachments?.length)
+
+    if (trimLatestTurn) {
+      uiMessages = trimTrailingAssistantMessages(uiMessages)
+      logs.value = trimPlanSplitLogsAfterTimestamp(
+        trimPlanSplitLogsBySessionId(logs.value, latestExecutionSessionId),
+        latestUserTimestamp
+      )
+    }
+
+    if (extraUserPrompt || extraUserAttachments?.length) {
       llmMessages = [
         ...llmMessages,
         {
           role: 'user',
-          content: extraUserPrompt
+          content: extraUserPrompt || '请结合附件继续调整当前任务拆分结果。',
+          attachments: extraUserAttachments
         }
       ]
       uiMessages = [
@@ -885,32 +1340,48 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
         {
           id: crypto.randomUUID(),
           role: 'user',
-          content: options?.displayContent?.trim() || extraUserPrompt,
+          content: options?.displayContent?.trim() || extraUserPrompt || '',
+          attachments: extraUserAttachments,
           timestamp: new Date().toISOString()
         }
       ]
     }
 
-    const latestExecutionSessionId = snapshot.executionSessionId?.trim() || null
+    const restartedAt = new Date().toISOString()
     const resetSnapshot = await invoke<PlanSplitSessionRecord>('reset_plan_split_turn_for_restart', {
-      planId: context.value.planId
+      planId: context.value.planId,
+      options: {
+        trimLatestTurn,
+        preserveResult: Boolean(splitResult.value?.length)
+      }
     })
 
-    messages.value = uiMessages
-    if (latestExecutionSessionId) {
-      logs.value = logs.value.filter(
-        log => log.sessionId !== latestExecutionSessionId || log.type === 'system'
-      )
+    const splitLogs = await invoke<RustPlanSplitLogRecord[]>('list_plan_split_logs', {
+      planId: context.value.planId
+    }).catch(() => null)
+    if (splitLogs) {
+      const nextLogs = toPlanSplitLogs(splitLogs)
+      logs.value = trimLatestTurn
+        ? trimPlanSplitLogsAfterTimestamp(
+            trimPlanSplitLogsBySessionId(nextLogs, latestExecutionSessionId),
+            latestUserTimestamp
+          )
+        : nextLogs
     }
+
     applySessionSnapshot({
       ...resetSnapshot,
+      startedAt: restartedAt,
+      updatedAt: restartedAt,
       messagesJson: JSON.stringify(uiMessages),
       llmMessagesJson: JSON.stringify(llmMessages)
     }, true)
 
     await startBackgroundSession(context.value, llmMessages, uiMessages, {
       preserveLogs: true,
-      preserveAutoRetryState: options?.preserveAutoRetryState
+      preserveAutoRetryState: options?.preserveAutoRetryState,
+      resumeSessionId,
+      preserveResult: Boolean(splitResult.value?.length)
     })
   }
 
@@ -919,7 +1390,9 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       return
     }
 
-    await restartFromPersistedContext(session.value)
+    await restartFromPersistedContext(session.value, {
+      trimLatestTurn: true
+    })
   }
 
   async function continueSession() {
@@ -927,25 +1400,33 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       return
     }
 
-    await restartFromPersistedContext(session.value)
+    await restartFromPersistedContext(session.value, {
+      trimLatestTurn: true
+    })
   }
 
   /**
    * 在保留上一轮上下文的前提下追加一条用户纠偏指令，并继续当前拆分会话。
    */
-  async function continueSessionWithInstruction(text: string) {
-    if (!session.value || session.value.status !== 'stopped') {
+  async function continueSessionWithInstruction(
+    text: string,
+    options: ContinueSessionWithInstructionOptions = {}
+  ) {
+    if (!session.value || (session.value.status !== 'stopped' && session.value.status !== 'failed')) {
       return
     }
 
     const normalizedText = text.trim()
-    if (!normalizedText) {
+    const attachments = options.attachments?.length ? options.attachments : undefined
+    if (!normalizedText && !attachments?.length) {
       return
     }
 
     await restartFromPersistedContext(session.value, {
       extraUserPrompt: normalizedText,
-      displayContent: normalizedText
+      extraUserAttachments: attachments,
+      displayContent: options.displayContent ?? normalizedText,
+      trimLatestTurn: false
     })
   }
 
@@ -955,10 +1436,17 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       planId: context.value.planId
     })
     applySessionSnapshot(snapshot, true)
+    const splitLogs = await invoke<RustPlanSplitLogRecord[]>('list_plan_split_logs', {
+      planId: context.value.planId
+    }).catch(() => null)
+    if (splitLogs) {
+      logs.value = toPlanSplitLogs(splitLogs)
+    }
   }
 
   async function clearAllSplitData(planId: string) {
     await invoke('clear_plan_split_session', { planId })
+    planStateCache.delete(planId)
     if (context.value?.planId === planId) {
       resetState()
     }
@@ -1046,22 +1534,25 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
           acceptanceCriteria: targetTask.acceptanceCriteria,
           userPrompt: config.customPrompt,
           minTaskCount: config.granularity
-        })
+        }),
+        attachments: config.attachments
       }
     ]
 
     const preservedMessages = messages.value.filter(m => m.content.trim())
+    const displayContent = config.displayContent?.trim()
     const uiMessages: SplitMessage[] = [
       ...preservedMessages,
       {
         id: crypto.randomUUID(),
         role: 'user',
-        content: [
+        content: displayContent || [
           `继续拆分任务：${targetTask.title}`,
           `原任务描述：${targetTask.description || '（无）'}`,
           `拆分颗粒度：至少 ${config.granularity} 个子任务`,
           config.customPrompt ? `额外要求：${config.customPrompt}` : ''
         ].filter(Boolean).join('\n'),
+        attachments: config.attachments,
         timestamp: new Date().toISOString()
       }
     ]
@@ -1084,7 +1575,10 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       ]
     }
 
-    await startBackgroundSession(nextContext, llmMessages, uiMessages)
+    await startBackgroundSession(nextContext, llmMessages, uiMessages, {
+      preserveLogs: true,
+      preserveResult: true
+    })
   }
 
   /**
@@ -1094,6 +1588,10 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     if (!context.value || !splitResult.value || splitResult.value.length === 0) return
 
     const originalTasks = JSON.parse(JSON.stringify(splitResult.value)) as AITaskItem[]
+    const taskCountMode = config.taskCountMode ?? 'exact'
+    const minTaskCount = taskCountMode === 'exact'
+      ? originalTasks.length
+      : Math.max(1, config.minTaskCount ?? 1)
     refinementState.value = {
       mode: 'list_optimize',
       targetIndex: null,
@@ -1103,11 +1601,11 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
 
     const nextContext: TaskSplitContext = {
       ...context.value,
-      granularity: originalTasks.length,
+      granularity: minTaskCount,
       expertId: config.expertId || context.value.expertId,
       agentId: config.agentId || context.value.agentId,
       modelId: config.modelId || context.value.modelId,
-      taskCountMode: 'exact'
+      taskCountMode
     }
     context.value = nextContext
 
@@ -1123,12 +1621,16 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
           planDescription: nextContext.planDescription,
           tasks: originalTasks,
           userPrompt: config.customPrompt,
-          targetIndex: config.targetIndex
-        })
+          targetIndex: config.targetIndex,
+          taskCountMode,
+          minTaskCount
+        }),
+        attachments: config.attachments
       }
     ]
 
     const preservedMessages = messages.value.filter(m => m.content.trim())
+    const displayContent = config.displayContent?.trim()
     const targetLabel = config.targetIndex !== undefined && config.targetIndex >= 0 && config.targetIndex < originalTasks.length
       ? `优化任务 ${config.targetIndex + 1}《${originalTasks[config.targetIndex].title}》`
       : `整体优化任务列表：共 ${originalTasks.length} 个任务`
@@ -1137,11 +1639,14 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       {
         id: crypto.randomUUID(),
         role: 'user',
-        content: [
+        content: displayContent || [
           targetLabel,
-          '约束：保持任务数量不变',
+          taskCountMode === 'exact'
+            ? '约束：保持任务数量不变'
+            : `约束：允许调整任务数量，至少保留 ${minTaskCount} 个任务`,
           config.customPrompt ? `额外要求：${config.customPrompt}` : ''
         ].filter(Boolean).join('\n'),
+        attachments: config.attachments,
         timestamp: new Date().toISOString()
       }
     ]
@@ -1164,7 +1669,10 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       ]
     }
 
-    await startBackgroundSession(nextContext, llmMessages, uiMessages)
+    await startBackgroundSession(nextContext, llmMessages, uiMessages, {
+      preserveLogs: true,
+      preserveResult: true
+    })
   }
 
   function clearRefinementState() {
@@ -1221,16 +1729,30 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
   function reset() {
     detachStream()
     resetState()
+    planStateCache.clear()
   }
 
   function detach() {
+    saveCurrentPlanState()
     detachStream()
     isProcessing.value = false
+  }
+
+  function attachToPlan(planId: string) {
+    if (context.value?.planId === planId) return
+    saveCurrentPlanState()
+    detachStream()
+    cancelAutoRetry()
+    if (!restorePlanState(planId)) {
+      resetState()
+    }
   }
 
   return {
     messages,
     logs,
+    isLoadingLogs,
+    renderVersion,
     isProcessing,
     splitResult,
     submittedForms,
@@ -1272,6 +1794,10 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     clearProjectSplitState,
     reset,
     detach,
+    detachStream,
+    attachToPlan,
+    saveCurrentPlanState,
+    clearPlanStateCache,
     loadSession
   }
 })

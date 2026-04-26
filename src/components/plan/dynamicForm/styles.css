@@ -86,6 +86,10 @@
   box-shadow: var(--form-archived-shadow);
 }
 
+.dynamic-form--headerless {
+  --form-body-padding-top: 0.82rem;
+}
+
 .form-header {
   padding:
     var(--form-header-padding-top)
@@ -101,6 +105,10 @@
 
 .dynamic-form--archived .form-header {
   background: var(--form-archived-header-bg);
+}
+
+.dynamic-form--headerless .form-header {
+  display: none;
 }
 
 .form-title {
