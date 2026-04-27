@@ -45,6 +45,9 @@ export interface CompressionMetadata {
   originalMessageCount: number
   originalTokenCount: number
   strategy: CompressionStrategy
+  summaryContent?: string
+  triggerPrompt?: string
+  triggerSource?: 'manual' | 'auto' | 'silent'
   toolCallsSummary?: ToolCallSummary[]
   panelExpanded?: boolean
 }

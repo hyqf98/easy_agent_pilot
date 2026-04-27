@@ -69,6 +69,26 @@ const ERROR_CONTEXT_PATTERNS = [
   '失败'
 ]
 
+function isSharedBenignWarning(normalized: string): boolean {
+  return (normalized.includes('rmcp::transport::worker')
+    && normalized.includes('unexpectedcontenttype')
+    && normalized.includes('missing-content-type'))
+    || (normalized.includes('rmcp::transport::async_rw')
+      && normalized.includes('serde error expected')
+      && normalized.includes('line 1 column'))
+    || (normalized.includes('rmcp::transport::worker')
+      && normalized.includes('transport channel closed'))
+    || (normalized.includes('failed to terminate mcp process group')
+      && (normalized.includes('operation not permitted')
+        || normalized.includes('os error 1')))
+    || (normalized.includes('fatal: your current branch')
+      && normalized.includes('does not have any commits yet'))
+    || normalized.includes("fatal: bad revision 'head'")
+    || normalized.includes('fatal: bad revision "head"')
+    || normalized.includes("fatal: ambiguous argument 'head'")
+    || normalized.includes('fatal: ambiguous argument "head"')
+}
+
 function normalizeText(value: string | null | undefined): string {
   return value?.trim().toLowerCase() || ''
 }
@@ -100,6 +120,14 @@ function hasStructuredErrorPayload(normalized: string): boolean {
     || trimmed.startsWith("{'error'")
     || trimmed.startsWith('[{"error"')
     || trimmed.startsWith("[{'error'")
+}
+
+function isPrimaryResponseContent(normalized: string): boolean {
+  return Boolean(normalized)
+    && !hasStructuredTaskResult(normalized)
+    && !startsWithErrorContext(normalized)
+    && !hasStructuredErrorPayload(normalized)
+    && !hasRetryablePattern(normalized)
 }
 
 function sourceAllowsRetryableMatch(
@@ -169,9 +197,21 @@ export function classifyCliFailureFragments(
   runtimeLabel: string,
   fragments: CliFailureFragment[]
 ): CliFailureMatch | null {
+  const hasPrimaryResponse = fragments.some(fragment =>
+    fragment.source === 'content' && isPrimaryResponseContent(normalizeText(fragment.text))
+  )
+
   for (const fragment of fragments) {
     const normalized = normalizeText(fragment.text)
     if (!normalized) {
+      continue
+    }
+
+    if (isSharedBenignWarning(normalized)) {
+      continue
+    }
+
+    if (hasPrimaryResponse && fragment.source !== 'content') {
       continue
     }
 

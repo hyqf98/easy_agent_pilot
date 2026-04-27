@@ -868,7 +868,6 @@ export class ConversationService {
     const streamMetrics: StreamTimingMetrics = {
       startedAt: globalThis.performance?.now() ?? Date.now()
     }
-    let hasError = false
     let lastErrorMessage = ''
     let usageRecorded = false
     let pendingUiUpdate: Partial<Message> | null = null
@@ -1191,6 +1190,32 @@ export class ConversationService {
       return classifyCliFailureFragments(runtimeLabel, fragments)
     }
 
+    const hasPrimaryAssistantResponse = (): boolean => {
+      const normalizedContent = accumulatedContent.trim()
+      if (!normalizedContent) {
+        return false
+      }
+
+      const contentFragment = createCliFailureFragment('content', normalizedContent)
+      if (!contentFragment) {
+        return false
+      }
+
+      return !classifyCliFailureFragments(runtimeLabel, [contentFragment])
+    }
+
+    const shouldSurfaceExecutionFailure = (): boolean => {
+      if (!lastErrorMessage) {
+        return false
+      }
+
+      if (!hasPrimaryAssistantResponse()) {
+        return true
+      }
+
+      return Boolean(detectCliFailure(lastErrorMessage))
+    }
+
     try {
       await agentExecutor.execute(context, (event: StreamEvent) => {
         markMetric('firstEventAt')
@@ -1341,11 +1366,8 @@ export class ConversationService {
               return
             }
 
-            hasError = true
             lastErrorMessage = error
             bufferMessageUpdate({
-              status: 'error',
-              errorMessage: error,
               thinkingActive: false
             }, { immediate: true })
           },
@@ -1358,10 +1380,11 @@ export class ConversationService {
             syncFinalUsageNotice()
             syncProcessingTimeNotice()
             // 更新消息状态
-            if (!hasError && !isAiMessageInterrupted()) {
+            if (!shouldSurfaceExecutionFailure() && !isAiMessageInterrupted()) {
               bufferMessageUpdate({
                 status: 'completed',
                 thinkingActive: false,
+                errorMessage: '',
                 toolCalls: [...toolCalls]
               }, { immediate: true })
               this.clearConversationRetryState(sessionId)
@@ -1385,7 +1408,7 @@ export class ConversationService {
       await Promise.allSettled(Array.from(pendingPersistenceTasks))
       await messageStore.flushBufferedMessageUpdate(aiMessage.id, { notifyOnFailure: true })
 
-      if (hasError && !isAiMessageInterrupted()) {
+      if (shouldSurfaceExecutionFailure() && !isAiMessageInterrupted()) {
         markMetric('doneAt')
         await handleFailure(lastErrorMessage || getCurrentAiMessage()?.errorMessage || '对话执行失败')
         return
@@ -1410,10 +1433,11 @@ export class ConversationService {
         }
         syncFinalUsageNotice()
         syncProcessingTimeNotice()
-        if (!hasError) {
+        if (!shouldSurfaceExecutionFailure()) {
           bufferMessageUpdate({
             status: 'completed',
             thinkingActive: false,
+            errorMessage: '',
             toolCalls: [...toolCalls]
           }, { immediate: true })
           this.clearConversationRetryState(sessionId)
@@ -1429,7 +1453,6 @@ export class ConversationService {
         this.finalizeSend(sessionId)
       }
     } catch (error) {
-      hasError = true
       const errorMessage = getErrorMessage(error, '对话执行失败')
       void writeFrontendRuntimeLog(
         'ERROR',
@@ -1625,6 +1648,10 @@ export class ConversationService {
       provider: handlers.runtimeProvider,
       inputTokens: event.inputTokens,
       outputTokens: event.outputTokens,
+      rawInputTokens: event.rawInputTokens,
+      rawOutputTokens: event.rawOutputTokens,
+      cacheReadInputTokens: event.cacheReadInputTokens,
+      cacheCreationInputTokens: event.cacheCreationInputTokens,
       baseline: this.usageBaselines.get(handlers.sessionId) ?? null
     })
     const normalizedEvent: StreamEvent = {
@@ -1639,7 +1666,7 @@ export class ConversationService {
       this.usageBaselines.delete(handlers.sessionId)
     }
 
-    // 处理 token 事件 - 优先使用 CLI 返回的真实 token 数据
+    // 处理 token 事件 - 依赖 provider 级 parser 决定哪个事件携带 canonical token。
     if (normalizedEvent.inputTokens !== undefined || normalizedEvent.outputTokens !== undefined) {
       tokenStore.updateRealtimeTokens(
         handlers.sessionId,

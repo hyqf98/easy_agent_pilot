@@ -58,6 +58,7 @@ interface TextSegment {
   displayContent?: string
   fullPath?: string
   titleContent?: string
+  memorySourceLabel?: string
 }
 
 interface UploadImageInput {
@@ -585,12 +586,16 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       const mappedReference = currentMemoryReferences.value.find(reference =>
         reference.sourceType === sourceType && reference.sourceId === sourceId
       )
+      const memorySourceLabel = sourceType === 'library_chunk'
+        ? t('message.memorySourceLibrary')
+        : t('message.memorySourceRaw')
 
       segments.push({
         type: 'memory',
         content: memoryMatch[0],
-        displayContent: mappedReference?.title ?? '记忆引用',
-        titleContent: mappedReference?.snippet ?? mappedReference?.fullContent ?? ''
+        displayContent: mappedReference?.title?.trim() || memorySourceLabel,
+        titleContent: mappedReference?.snippet ?? mappedReference?.fullContent ?? mappedReference?.title ?? '',
+        memorySourceLabel
       })
 
       lastIndex = memoryMatch.index + memoryMatch[0].length
@@ -1213,7 +1218,10 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       const result = await compressionService.compressSession(
         currentSessionId.value,
         agentId,
-        { strategy }
+        {
+          strategy,
+          triggerSource: 'manual'
+        }
       )
 
       if (result.success) {
@@ -1335,10 +1343,23 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       return
     }
 
-    const start = textarea.selectionStart ?? inputText.value.length
-    const end = textarea.selectionEnd ?? inputText.value.length
-    const before = inputText.value.slice(0, start)
-    const after = inputText.value.slice(end)
+    const selectionStart = textarea.selectionStart ?? inputText.value.length
+    const selectionEnd = textarea.selectionEnd ?? inputText.value.length
+    const lastMemoryQuery = sessionExecutionStore.getLastMemoryQuery(sessionId).trim()
+    let replaceStart = selectionStart
+    let replaceEnd = selectionEnd
+
+    if (selectionStart === selectionEnd && lastMemoryQuery) {
+      const beforeCursor = inputText.value.slice(0, selectionStart)
+      const queryStart = beforeCursor.lastIndexOf(lastMemoryQuery)
+      if (queryStart >= 0) {
+        replaceStart = queryStart
+        replaceEnd = queryStart + lastMemoryQuery.length
+      }
+    }
+
+    const before = inputText.value.slice(0, replaceStart)
+    const after = inputText.value.slice(replaceEnd)
     const needsLeadingSpace = before.length > 0 && !/\s$/.test(before)
     const needsTrailingSpace = after.length === 0 || !/^\s/.test(after)
     const insertedToken = `${needsLeadingSpace ? ' ' : ''}${token}${needsTrailingSpace ? ' ' : ''}`
@@ -1348,6 +1369,8 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     textarea.value = newText
     inputText.value = newText
     sessionExecutionStore.appendMemoryReference(sessionId, reference)
+    sessionExecutionStore.clearMemorySuggestions(sessionId)
+    sessionExecutionStore.clearDismissedMemorySuggestionKeys(sessionId)
     hideMemorySuggestionPanel()
     hoveredMemoryPreview.value = buildMemoryPreviewFromReference(reference)
 
@@ -1957,49 +1980,49 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       return
     }
 
-    let sendSessionId = sessionId
-
     try {
       if (compressionService.shouldAutoCompressSession(sessionId)) {
         isCompressing.value = true
         const result = await compressionService.compressSession(
           sessionId,
           executionAgent.id,
-          { strategy: settingsStore.settings.compressionStrategy as CompressionStrategy }
+          {
+            strategy: settingsStore.settings.compressionStrategy as CompressionStrategy,
+            triggerSource: 'auto'
+          }
         )
         isCompressing.value = false
 
-        if (!result.success || !result.newSessionId) {
+        if (!result.success) {
           notificationStore.error(t('compression.failed'), result.error)
           focusInput()
           return
         }
 
         notificationStore.success(t('compression.success'))
-        sendSessionId = result.newSessionId
         await nextTick()
       }
 
-      dispatchingSessionId.value = sendSessionId
-      clearComposerDraft(sendSessionId)
+      dispatchingSessionId.value = sessionId
+      clearComposerDraft(sessionId)
       await nextTick()
 
       const success = await sendWithCurrentAgent(userInput, attachments, {
         displayPreviewContent: annotatedMessage.previewContent,
         memoryReferences: orderedMemoryReferences,
-        targetSessionId: sendSessionId
+        targetSessionId: sessionId
       })
       if (success) {
         focusInput()
       } else {
         inputText.value = rawInput
-        sessionExecutionStore.setMemoryReferences(sendSessionId, orderedMemoryReferences)
+        sessionExecutionStore.setMemoryReferences(sessionId, orderedMemoryReferences)
         await restorePendingImages(attachments)
         focusInput()
       }
     } finally {
       isCompressing.value = false
-      if (dispatchingSessionId.value === sendSessionId) {
+      if (dispatchingSessionId.value === sessionId) {
         dispatchingSessionId.value = null
       }
     }

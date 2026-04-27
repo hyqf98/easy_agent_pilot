@@ -76,6 +76,10 @@ fn emit_sdk_event(
                 error: event.error.clone(),
                 input_tokens: event.input_tokens,
                 output_tokens: event.output_tokens,
+                raw_input_tokens: event.raw_input_tokens,
+                raw_output_tokens: event.raw_output_tokens,
+                cache_read_input_tokens: event.cache_read_input_tokens,
+                cache_creation_input_tokens: event.cache_creation_input_tokens,
                 model: event.model.clone(),
                 external_session_id: event.external_session_id.clone(),
             },
@@ -191,6 +195,10 @@ impl AgentExecutionStrategy for ClaudeSdkStrategy {
                             output_tokens: None,
                             model: None,
                             external_session_id: None,
+                        raw_input_tokens: None,
+                        raw_output_tokens: None,
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                         };
                         emit_sdk_event(
                             &app_clone,
@@ -234,6 +242,10 @@ impl AgentExecutionStrategy for ClaudeSdkStrategy {
                 output_tokens: None,
                 model: None,
                 external_session_id: None,
+            raw_input_tokens: None,
+            raw_output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             };
             emit_sdk_event(
                 &app_clone,
@@ -268,6 +280,10 @@ fn parse_sse_event(session_id: &str, event_str: &str) -> Option<SdkStreamEvent> 
                     output_tokens: None,
                     model: None,
                     external_session_id: None,
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
                 });
             }
 
@@ -348,6 +364,10 @@ fn parse_anthropic_stream_event(
                     output_tokens: None,
                     model: None,
                     external_session_id: None,
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
                 })
             } else {
                 extract_textish_value(
@@ -370,6 +390,10 @@ fn parse_anthropic_stream_event(
                     output_tokens: None,
                     model: None,
                     external_session_id: None,
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
                 })
             }
         }
@@ -391,6 +415,10 @@ fn parse_anthropic_stream_event(
                     output_tokens: None,
                     model: None,
                     external_session_id: None,
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
                 }),
                 "tool_use" => Some(SdkStreamEvent {
                     event_type: "tool_use".to_string(),
@@ -411,6 +439,10 @@ fn parse_anthropic_stream_event(
                     output_tokens: None,
                     model: None,
                     external_session_id: None,
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
                 }),
                 _ => None,
             }
@@ -430,6 +462,10 @@ fn parse_anthropic_stream_event(
             output_tokens: None,
             model: None,
             external_session_id: None,
+        raw_input_tokens: None,
+        raw_output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
         }),
         "error" => Some(SdkStreamEvent {
             event_type: "error".to_string(),
@@ -448,6 +484,10 @@ fn parse_anthropic_stream_event(
             output_tokens: None,
             model: None,
             external_session_id: None,
+        raw_input_tokens: None,
+        raw_output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
         }),
         _ => None,
     }

@@ -1,9 +1,9 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import { useAgentConfigStore } from './agentConfig'
 import { useAgentStore } from './agent'
+import { useMessageStore } from './message'
 import { useSessionStore } from './session'
-import { useSessionExecutionStore } from './sessionExecution'
 import { useSettingsStore } from './settings'
 import {
   DEFAULT_CONTEXT_WINDOW,
@@ -129,62 +129,75 @@ export const useTokenStore = defineStore('token', () => {
     }
   }
 
-  const getTokenUsage = computed(() => {
-    return (sessionId: string): TokenUsage => {
-      const agentConfigStore = useAgentConfigStore()
-      const agentStore = useAgentStore()
-      const sessionStore = useSessionStore()
-      const sessionExecutionStore = useSessionExecutionStore()
+  function getTokenUsage(sessionId: string): TokenUsage {
+    const agentConfigStore = useAgentConfigStore()
+    const agentStore = useAgentStore()
+    const messageStore = useMessageStore()
+    const sessionStore = useSessionStore()
+    const session = sessionStore.sessions.find(s => s.id === sessionId)
+    if (!session) {
+      return { used: 0, limit: DEFAULT_CONTEXT_WINDOW, percentage: 0, level: 'safe' as TokenLevel }
+    }
 
-      const session = sessionStore.sessions.find(s => s.id === sessionId)
-      if (!session) {
-        return { used: 0, limit: DEFAULT_CONTEXT_WINDOW, percentage: 0, level: 'safe' as TokenLevel }
+    const agent = resolveSessionAgent(session, agentStore.agents)
+
+    const realtimeData = realtimeTokens.value.get(sessionId)
+    const realtimeModel = realtimeData?.model?.trim()
+
+    let contextWindow = DEFAULT_CONTEXT_WINDOW
+    if (agent) {
+      contextWindow = resolveConfiguredContextWindow(
+        agentConfigStore.getModelsConfigs(agent.id),
+        {
+          runtimeModelId: realtimeModel,
+          agentModelId: agent.modelId
+        }
+      )
+    }
+
+    const sessionMessages = messageStore.messagesBySession(sessionId)
+    const hasCompressionPlaceholderOnly = sessionMessages.length > 0
+      && sessionMessages.every(message => Boolean(message.compressionMetadata))
+      && !session.cliSessionId?.trim()
+
+    if (hasCompressionPlaceholderOnly) {
+      if (sessionTokenCaches.value.has(sessionId) || realtimeTokens.value.has(sessionId)) {
+        sessionTokenCaches.value = deleteMapEntry(sessionTokenCaches.value, sessionId)
+        realtimeTokens.value = deleteMapEntry(realtimeTokens.value, sessionId)
+        persistSessionTokenCaches()
       }
-
-      const agent = resolveSessionAgent(session, agentStore.agents)
-
-      const realtimeData = realtimeTokens.value.get(sessionId)
-      const realtimeModel = realtimeData?.model?.trim()
-
-      let contextWindow = DEFAULT_CONTEXT_WINDOW
-      if (agent) {
-        contextWindow = resolveConfiguredContextWindow(
-          agentConfigStore.getModelsConfigs(agent.id),
-          {
-            runtimeModelId: realtimeModel,
-            agentModelId: agent.modelId
-          }
-        )
-      }
-
-      const hasRealtimeCurrentRequest = sessionExecutionStore.getIsSending(sessionId)
-        && hasMeaningfulRealtimeUsage(realtimeData)
-      const realtimeTotal = hasRealtimeCurrentRequest
-        ? (realtimeData?.inputTokens ?? 0) + (realtimeData?.outputTokens ?? 0)
-        : 0
-      const persistedTotal = sessionTokenCaches.value.get(sessionId)?.totalTokens ?? 0
-      const usedTokens = hasRealtimeCurrentRequest ? realtimeTotal : persistedTotal
-
-      const percentage = Math.min(100, (usedTokens / contextWindow) * 100)
-      const level = getLevel(percentage)
 
       return {
-        used: usedTokens,
+        used: 0,
         limit: contextWindow,
-        percentage,
-        level
+        percentage: 0,
+        level: 'safe'
       }
     }
-  })
 
-  const needsCompression = computed(() => {
-    return (sessionId: string): boolean => {
-      const settingsStore = useSettingsStore()
-      const usage = getTokenUsage.value(sessionId)
-      const threshold = settingsStore.settings.compressionThreshold
-      return usage.percentage >= threshold
+    const persistedTotal = sessionTokenCaches.value.get(sessionId)?.totalTokens ?? 0
+    const realtimeTotal = hasMeaningfulRealtimeUsage(realtimeData)
+      ? (realtimeData?.inputTokens ?? 0) + (realtimeData?.outputTokens ?? 0)
+      : 0
+    const usedTokens = persistedTotal + realtimeTotal
+    const percentage = contextWindow > 0
+      ? Math.min(100, (usedTokens / contextWindow) * 100)
+      : 0
+
+    return {
+      used: usedTokens,
+      limit: contextWindow,
+      percentage,
+      level: getLevel(percentage)
     }
-  })
+  }
+
+  function needsCompression(sessionId: string): boolean {
+    const settingsStore = useSettingsStore()
+    const usage = getTokenUsage(sessionId)
+    const threshold = settingsStore.settings.compressionThreshold
+    return usage.percentage >= threshold
+  }
 
   function updateRealtimeTokens(
     sessionId: string,
@@ -207,22 +220,26 @@ export const useTokenStore = defineStore('token', () => {
       outputTokens: nextOutputTokens,
       model: model ?? existing.model
     })
-
-    if (!incomingHasUsage) {
-      return
-    }
-
-    const currentRequestTotal = nextInputTokens + nextOutputTokens
-    sessionTokenCaches.value = replaceMapEntry(sessionTokenCaches.value, sessionId, {
-      sessionId,
-      totalTokens: currentRequestTotal,
-      lastUpdated: Date.now()
-    })
-    persistSessionTokenCaches()
   }
 
   function clearRealtimeTokens(sessionId: string) {
+    const current = realtimeTokens.value.get(sessionId)
+    if (current && (current.inputTokens > 0 || current.outputTokens > 0)) {
+      const previousTotal = sessionTokenCaches.value.get(sessionId)?.totalTokens ?? 0
+      sessionTokenCaches.value = replaceMapEntry(sessionTokenCaches.value, sessionId, {
+        sessionId,
+        totalTokens: previousTotal + current.inputTokens + current.outputTokens,
+        lastUpdated: Date.now()
+      })
+      persistSessionTokenCaches()
+    }
     realtimeTokens.value = deleteMapEntry(realtimeTokens.value, sessionId)
+  }
+
+  function hardClearSessionTokens(sessionId: string) {
+    sessionTokenCaches.value = deleteMapEntry(sessionTokenCaches.value, sessionId)
+    realtimeTokens.value = deleteMapEntry(realtimeTokens.value, sessionId)
+    persistSessionTokenCaches()
   }
 
   function updateSessionTokenCache(sessionId: string, totalTokens: number) {
@@ -269,6 +286,7 @@ export const useTokenStore = defineStore('token', () => {
     needsCompression,
     updateRealtimeTokens,
     clearRealtimeTokens,
+    hardClearSessionTokens,
     updateSessionTokenCache,
     clearSessionTokenCache,
     clearProjectSessionTokenCaches,

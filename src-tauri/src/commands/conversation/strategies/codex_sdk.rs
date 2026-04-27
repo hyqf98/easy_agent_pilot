@@ -76,6 +76,10 @@ fn emit_sdk_event(
                 error: event.error.clone(),
                 input_tokens: event.input_tokens,
                 output_tokens: event.output_tokens,
+                raw_input_tokens: event.raw_input_tokens,
+                raw_output_tokens: event.raw_output_tokens,
+                cache_read_input_tokens: event.cache_read_input_tokens,
+                cache_creation_input_tokens: event.cache_creation_input_tokens,
                 model: event.model.clone(),
                 external_session_id: event.external_session_id.clone(),
             },
@@ -231,6 +235,10 @@ impl AgentExecutionStrategy for CodexSdkStrategy {
                             output_tokens: None,
                             model: None,
                             external_session_id: None,
+                        raw_input_tokens: None,
+                        raw_output_tokens: None,
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                         };
                         emit_sdk_event(
                             &app_clone,
@@ -275,6 +283,10 @@ impl AgentExecutionStrategy for CodexSdkStrategy {
                 output_tokens: None,
                 model: None,
                 external_session_id: None,
+            raw_input_tokens: None,
+            raw_output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             };
             emit_sdk_event(
                 &app_clone,
@@ -310,6 +322,10 @@ fn parse_openai_sse_event(session_id: &str, event_str: &str) -> Option<SdkStream
                     output_tokens: None,
                     model: None,
                     external_session_id: None,
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
                 });
             }
 
@@ -392,6 +408,10 @@ fn parse_openai_stream_event(session_id: &str, json: &serde_json::Value) -> Opti
             output_tokens: None,
             model: None,
             external_session_id: None,
+        raw_input_tokens: None,
+        raw_output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
         });
     }
 
@@ -426,6 +446,10 @@ fn parse_openai_stream_event(session_id: &str, json: &serde_json::Value) -> Opti
                 output_tokens,
                 model,
                 external_session_id: None,
+            raw_input_tokens: None,
+            raw_output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             });
         }
     }
@@ -464,6 +488,10 @@ fn parse_openai_stream_event(session_id: &str, json: &serde_json::Value) -> Opti
             output_tokens,
             model,
             external_session_id: None,
+        raw_input_tokens: None,
+        raw_output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
         });
     }
 
@@ -500,6 +528,10 @@ fn parse_openai_stream_event(session_id: &str, json: &serde_json::Value) -> Opti
                     output_tokens: None,
                     model: None,
                     external_session_id: None,
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
                 });
             }
             // 否则是工具参数增量
@@ -521,6 +553,10 @@ fn parse_openai_stream_event(session_id: &str, json: &serde_json::Value) -> Opti
                     output_tokens: None,
                     model: None,
                     external_session_id: None,
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
                 });
             }
         }

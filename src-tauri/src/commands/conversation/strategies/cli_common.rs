@@ -30,6 +30,10 @@ pub fn emit_cli_event(
                 error: event.error.clone(),
                 input_tokens: event.input_tokens,
                 output_tokens: event.output_tokens,
+                raw_input_tokens: event.raw_input_tokens,
+                raw_output_tokens: event.raw_output_tokens,
+                cache_read_input_tokens: event.cache_read_input_tokens,
+                cache_creation_input_tokens: event.cache_creation_input_tokens,
                 model: event.model.clone(),
                 external_session_id: event.external_session_id.clone(),
             },
@@ -51,6 +55,10 @@ pub fn build_content_event(session_id: &str, content: String) -> CliStreamEvent 
         output_tokens: None,
         model: None,
         external_session_id: None,
+    raw_input_tokens: None,
+    raw_output_tokens: None,
+    cache_read_input_tokens: None,
+    cache_creation_input_tokens: None,
     }
 }
 
@@ -68,6 +76,10 @@ pub fn build_error_event(session_id: &str, error: String) -> CliStreamEvent {
         output_tokens: None,
         model: None,
         external_session_id: None,
+    raw_input_tokens: None,
+    raw_output_tokens: None,
+    cache_read_input_tokens: None,
+    cache_creation_input_tokens: None,
     }
 }
 
@@ -85,6 +97,10 @@ pub fn build_system_event(session_id: &str, content: String) -> CliStreamEvent {
         output_tokens: None,
         model: None,
         external_session_id: None,
+    raw_input_tokens: None,
+    raw_output_tokens: None,
+    cache_read_input_tokens: None,
+    cache_creation_input_tokens: None,
     }
 }
 

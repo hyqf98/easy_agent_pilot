@@ -723,6 +723,10 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
               provider: inferAgentProvider(agent),
               inputTokens: event.inputTokens,
               outputTokens: event.outputTokens,
+              rawInputTokens: event.rawInputTokens,
+              rawOutputTokens: event.rawOutputTokens,
+              cacheReadInputTokens: event.cacheReadInputTokens,
+              cacheCreationInputTokens: event.cacheCreationInputTokens,
               baseline: usageBaselines.get(run.id) ?? null
             })
             const normalizedEvent: StreamEvent = {

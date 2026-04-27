@@ -291,7 +291,10 @@ export function useMessageArea() {
       const result = await compressionService.compressSession(
         sessionId,
         agentId,
-        { strategy }
+        {
+          strategy,
+          triggerSource: 'manual'
+        }
       )
 
       if (result.success) {

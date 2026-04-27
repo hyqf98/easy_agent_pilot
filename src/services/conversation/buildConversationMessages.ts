@@ -29,8 +29,8 @@ function createSyntheticMessage(
 
 function buildCompressionSummaryMessage(messages: Message[], sessionId: string): Message | null {
   const summaries = messages
-    .filter((message) => message.role === 'compression')
-    .map((message) => normalizeContent(message.content))
+    .filter((message) => message.compressionMetadata)
+    .map((message) => normalizeContent(message.compressionMetadata?.summaryContent || message.content))
     .filter(Boolean)
 
   const uniqueSummaries = Array.from(new Set(summaries))

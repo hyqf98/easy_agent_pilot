@@ -3,7 +3,7 @@ import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { useOverlayDismiss } from '@/composables/useOverlayDismiss'
 import { DEFAULT_SPLIT_GRANULARITY } from '@/constants/plan'
-import { useAgentStore } from '@/stores/agent'
+import { inferAgentProvider, useAgentStore } from '@/stores/agent'
 import { useAgentTeamsStore } from '@/stores/agentTeams'
 import type { Message, MessageAttachment, MessageStatus, ToolCall } from '@/stores/message'
 import { useNotificationStore } from '@/stores/notification'
@@ -23,8 +23,10 @@ import {
   buildProcessingTimeNotice,
   buildRuntimeNoticeFromSystemContent,
   buildUsageNotice,
+  isEnvironmentRuntimeNotice,
   upsertRuntimeNotice
 } from '@/utils/runtimeNotice'
+import { normalizeRuntimeUsage } from '@/utils/runtimeUsage'
 import {
   containsFormSchema,
   extractFirstFormRequest,
@@ -224,16 +226,26 @@ function readMetadataString(metadata: Record<string, unknown> | null, key: strin
     : undefined
 }
 
-function readMetadataNumber(metadata: Record<string, unknown> | null, key: string): number | undefined {
-  const value = metadata?.[key]
-  return typeof value === 'number' && Number.isFinite(value)
-    ? value
-    : undefined
+function readMetadataNumber(
+  metadata: Record<string, unknown> | null,
+  key: string,
+  fallbackKey?: string
+): number | undefined {
+  const value = metadata?.[key] ?? (fallbackKey ? metadata?.[fallbackKey] : undefined)
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const numeric = Number(value)
+    return Number.isFinite(numeric) ? numeric : undefined
+  }
+  return undefined
 }
 
 function buildAssistantRuntimeNotices(
   logs: PlanSplitLogRecord[],
-  fallbackModel?: string
+  fallbackModel?: string,
+  runtimeProvider?: string
 ): RuntimeNotice[] {
   if (logs.length === 0 && !fallbackModel) {
     return []
@@ -244,6 +256,7 @@ function buildAssistantRuntimeNotices(
   let totalInputTokens = 0
   let totalOutputTokens = 0
   let hasUsage = false
+  let usageBaseline: ReturnType<typeof normalizeRuntimeUsage>['nextBaseline'] = null
 
   const sortedLogs = [...logs].sort((left, right) => compareTimestamp(left.createdAt, right.createdAt))
 
@@ -256,23 +269,40 @@ function buildAssistantRuntimeNotices(
     }
 
     if (log.type === 'usage' || log.type === 'message_start') {
-      const inputTokens = readMetadataNumber(metadata, 'inputTokens')
-      const outputTokens = readMetadataNumber(metadata, 'outputTokens')
+      const normalizedUsage = normalizeRuntimeUsage({
+        provider: runtimeProvider,
+        inputTokens: readMetadataNumber(metadata, 'inputTokens', 'input_tokens'),
+        outputTokens: readMetadataNumber(metadata, 'outputTokens', 'output_tokens'),
+        rawInputTokens: readMetadataNumber(metadata, 'rawInputTokens', 'raw_input_tokens'),
+        rawOutputTokens: readMetadataNumber(metadata, 'rawOutputTokens', 'raw_output_tokens'),
+        cacheReadInputTokens: readMetadataNumber(metadata, 'cacheReadInputTokens', 'cache_read_input_tokens'),
+        cacheCreationInputTokens: readMetadataNumber(metadata, 'cacheCreationInputTokens', 'cache_creation_input_tokens'),
+        baseline: usageBaseline
+      })
 
-      if (typeof inputTokens === 'number') {
-        totalInputTokens += inputTokens
+      if (normalizedUsage.nextBaseline) {
+        usageBaseline = normalizedUsage.nextBaseline
+      } else {
+        usageBaseline = null
+      }
+
+      if (typeof normalizedUsage.inputTokens === 'number') {
+        totalInputTokens += normalizedUsage.inputTokens
         hasUsage = true
       }
 
-      if (typeof outputTokens === 'number') {
-        totalOutputTokens += outputTokens
+      if (typeof normalizedUsage.outputTokens === 'number') {
+        totalOutputTokens += normalizedUsage.outputTokens
         hasUsage = true
       }
       return
     }
 
     if (log.type === 'system' && rawContent) {
-      notices = upsertRuntimeNotice(notices, buildRuntimeNoticeFromSystemContent(rawContent))
+      const runtimeNotice = buildRuntimeNoticeFromSystemContent(rawContent)
+      if (runtimeNotice && !isEnvironmentRuntimeNotice(runtimeNotice)) {
+        notices = upsertRuntimeNotice(notices, runtimeNotice)
+      }
     }
   })
 
@@ -610,6 +640,9 @@ export function useTaskSplitDialog() {
       || taskSplitStore.usageModelHint?.trim()
       || agentStore.agents.find(item => item.id === taskSplitStore.context?.agentId)?.modelId?.trim()
       || undefined
+    const runtimeProvider = taskSplitStore.context?.agentId
+      ? (inferAgentProvider(agentStore.agents.find(item => item.id === taskSplitStore.context?.agentId)) ?? undefined)
+      : undefined
 
     activePlanMessages.value.forEach((message) => {
       if (message.role === 'user') {
@@ -773,6 +806,10 @@ export function useTaskSplitDialog() {
         }
 
         if (rawContent) {
+          const runtimeNotice = buildRuntimeNoticeFromSystemContent(rawContent)
+          if (runtimeNotice && isEnvironmentRuntimeNotice(runtimeNotice)) {
+            return
+          }
           systemChunks.push(rawContent)
         }
       })
@@ -798,7 +835,11 @@ export function useTaskSplitDialog() {
       }
 
       const finalizedToolCalls = finalizeToolCalls(toolCalls, assistantStatus)
-      const assistantRuntimeNotices = buildAssistantRuntimeNotices(turn.logs, usageModelFallback)
+      const assistantRuntimeNotices = buildAssistantRuntimeNotices(
+        turn.logs,
+        usageModelFallback,
+        runtimeProvider
+      )
       const hasAssistantPayload = Boolean(
         finalContent
         || finalThinking
@@ -856,7 +897,8 @@ export function useTaskSplitDialog() {
           activeExecutionSessionId
             ? sortedLogs.filter(log => trimContent(log.sessionId) === activeExecutionSessionId)
             : sortedLogs,
-          usageModelFallback
+          usageModelFallback,
+          runtimeProvider
         )
 
         messages.push({

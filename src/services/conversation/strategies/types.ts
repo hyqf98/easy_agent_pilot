@@ -97,6 +97,14 @@ export interface StreamEvent {
   inputTokens?: number
   /** 输出 token 数量 */
   outputTokens?: number
+  /** provider 原始输入 token 数量 */
+  rawInputTokens?: number
+  /** provider 原始输出 token 数量 */
+  rawOutputTokens?: number
+  /** provider 返回的缓存读取输入 token 数量 */
+  cacheReadInputTokens?: number
+  /** provider 返回的缓存写入输入 token 数量 */
+  cacheCreationInputTokens?: number
   /** 模型名称 */
   model?: string
   fileEdit?: FileEditTrace
@@ -231,6 +239,10 @@ export interface BackendStreamEvent {
   inputTokens?: number
   /** 输出 token 数量 */
   outputTokens?: number
+  rawInputTokens?: number
+  rawOutputTokens?: number
+  cacheReadInputTokens?: number
+  cacheCreationInputTokens?: number
   /** 模型名称 */
   model?: string
   fileEdit?: FileEditTrace

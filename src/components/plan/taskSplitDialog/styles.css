@@ -230,19 +230,19 @@
 }
 
 .messages-container :deep(.message-bubble) {
-  --message-fixed-width: clamp(16.5rem, 24vw, 21rem);
+  --message-fixed-width: clamp(20rem, 30vw, 26rem);
   --message-min-width: 0;
-  --message-max-width: clamp(18rem, 28vw, 23rem);
-  --message-compact-max-width: clamp(16.5rem, 24vw, 21rem);
-  --message-trace-max-width: clamp(20rem, 30vw, 26rem);
-  --thinking-display-width: clamp(16.5rem, 24vw, 21rem);
+  --message-max-width: clamp(22rem, 34vw, 29rem);
+  --message-compact-max-width: clamp(20rem, 30vw, 26rem);
+  --message-trace-max-width: clamp(22rem, 34vw, 29rem);
+  --thinking-display-width: clamp(20rem, 30vw, 26rem);
 }
 
 .messages-container :deep(.message-bubble--assistant.message-bubble--form-only) {
-  --message-fixed-width: clamp(15.5rem, 22vw, 19rem);
-  --message-max-width: clamp(16.5rem, 24vw, 21rem);
-  --message-compact-max-width: clamp(15.5rem, 22vw, 19rem);
-  --thinking-display-width: clamp(15.5rem, 22vw, 19rem);
+  --message-fixed-width: clamp(20rem, 30vw, 26rem);
+  --message-max-width: clamp(22rem, 34vw, 29rem);
+  --message-compact-max-width: clamp(20rem, 30vw, 26rem);
+  --thinking-display-width: clamp(20rem, 30vw, 26rem);
 }
 
 .messages-container :deep(.message-bubble__content) {
@@ -250,15 +250,38 @@
 }
 
 .messages-container :deep(.message-bubble--assistant .message-bubble__content--form-only) {
+  padding: 0;
+  width: 100%;
+  min-width: 0;
   max-width: min(100%, var(--message-max-width));
 }
 
+.messages-container :deep(.structured-content--form-only) {
+  width: min(100%, var(--message-max-width));
+}
+
 .messages-container :deep(.structured-content__form--standalone) {
+  width: 100%;
   max-width: min(100%, var(--message-max-width));
 }
 
 .messages-container :deep(.dynamic-form--compact) {
+  width: 100%;
   max-width: min(100%, var(--message-max-width));
+}
+
+.messages-container :deep(.message-bubble__thinking),
+.messages-container :deep(.message-bubble__thinking) {
+  width: min(100%, var(--message-max-width));
+  min-width: 0;
+  max-width: min(100%, var(--message-max-width));
+}
+
+.messages-container :deep(.message-bubble__tool-calls-shell),
+.messages-container :deep(.tool-call) {
+  width: min(100%, var(--message-compact-max-width));
+  min-width: 0;
+  max-width: min(100%, var(--message-compact-max-width));
 }
 
 .dialog-footer {

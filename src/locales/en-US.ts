@@ -208,6 +208,8 @@ export default {
     releasedNotice: 'This session was compressed to free context space.',
     autoCompressed: 'Session auto-compressed and freed space from {tokens} tokens',
     historyContextHint: 'Below is compressed history summary. Treat it as confirmed context:',
+    manualTriggerMessage: 'Please run AI compression for the current session and keep only the minimal context needed to continue.',
+    autoTriggerMessage: 'This session is near the token limit. Please run AI compression first and keep only the minimal context needed to continue.',
     noMessages: 'No messages available to compress',
     sendingInProgress: 'A message is still being sent. Try again later.',
     agentNotFound: 'No available agent found',

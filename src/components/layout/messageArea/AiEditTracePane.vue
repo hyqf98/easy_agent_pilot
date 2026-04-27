@@ -39,6 +39,7 @@ const fileEditorStore = useFileEditorStore()
 const notificationStore = useNotificationStore()
 const isFileDrawerVisible = ref(!props.mobile)
 const isRollingBack = ref(false)
+const rolledBackTraceIds = ref<Set<string>>(new Set())
 
 const sessionState = computed(() => aiEditTraceStore.getSessionState(props.sessionId))
 
@@ -94,14 +95,28 @@ const currentProject = computed(() => {
   return projectStore.projects.find(project => project.id === session.projectId) ?? null
 })
 
-const selectedTraceBeforeContent = computed(() =>
-  tracePreviewStore.beforeContent
+const isSelectedTraceRolledBack = computed(() =>
+  selectedTrace.value ? rolledBackTraceIds.value.has(selectedTrace.value.id) : false
+)
+
+const selectedTraceBeforeContent = computed(() => {
+  if (isSelectedTraceRolledBack.value) {
+    return ''
+  }
+  return tracePreviewStore.beforeContent
   || selectedTrace.value?.preview?.beforeContent
   || selectedTrace.value?.preview?.beforeSnippet
   || ''
-)
+})
 
 const selectedTraceAfterContent = computed(() => {
+  if (isSelectedTraceRolledBack.value) {
+    if (selectedTrace.value?.changeType === 'create') {
+      return ''
+    }
+    return selectedTraceRollbackContent.value ?? ''
+  }
+
   if (selectedTrace.value?.changeType === 'delete') {
     return ''
   }
@@ -268,10 +283,13 @@ const handleRollbackTrace = async () => {
 
     await refreshEditorIfNeeded(trace)
 
-    notificationStore.success(
-      t('trace.rollbackSuccessTitle'),
-      t('trace.rollbackSuccessMessage', { path: trace.relativePath })
-    )
+    rolledBackTraceIds.value.add(trace.id)
+
+    await tracePreviewStore.openTracePreview({
+      projectId: currentProject.value.id,
+      projectPath: currentProject.value.path,
+      trace
+    })
   } catch (error) {
     notificationStore.error(
       t('trace.rollbackFailedTitle'),
@@ -454,7 +472,7 @@ const formatChangeType = (changeType: FileEditTrace['changeType']) => {
                 {{ tracePreviewStore.loadError }}
               </span>
               <EaButton
-                v-if="selectedTrace"
+                v-if="selectedTrace && !isSelectedTraceRolledBack"
                 type="danger"
                 size="small"
                 :loading="isRollingBack"
@@ -466,6 +484,18 @@ const formatChangeType = (changeType: FileEditTrace['changeType']) => {
                   :size="14"
                 />
                 {{ canRollbackSelectedTrace ? t('trace.rollbackToBefore') : t('trace.oldRecordNoRollback') }}
+              </EaButton>
+              <EaButton
+                v-if="selectedTrace && isSelectedTraceRolledBack"
+                type="ghost"
+                size="small"
+                disabled
+              >
+                <EaIcon
+                  name="check"
+                  :size="14"
+                />
+                {{ t('trace.rollbackToBefore') }}
               </EaButton>
             </div>
           </div>
@@ -486,6 +516,7 @@ const formatChangeType = (changeType: FileEditTrace['changeType']) => {
             :after-content="selectedTraceAfterContent"
             :change-type="selectedTrace?.changeType ?? 'modify'"
             :focus-range="tracePreviewStore.highlightedRange"
+            :rolled-back="isSelectedTraceRolledBack"
           />
         </div>
       </div>

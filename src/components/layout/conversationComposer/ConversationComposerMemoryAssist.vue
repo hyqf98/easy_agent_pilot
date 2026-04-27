@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { EaIcon } from '@/components/common'
 import type { ConversationComposerViewState } from './useConversationComposerView'
 
 type Resolved<T> = T extends { value: infer V } ? V : T
@@ -38,38 +37,6 @@ defineProps<{
 
 <template>
   <div class="conversation-composer__memory-assist">
-    <div
-      v-if="isMainPanel && currentMemoryReferences.length > 0"
-      class="conversation-composer__memory-tray"
-    >
-      <div class="conversation-composer__memory-tray-label">
-        {{ t('message.memoryReferencesTitle') }}
-      </div>
-      <div class="conversation-composer__memory-chips">
-        <button
-          v-for="reference in currentMemoryReferences"
-          :key="`${reference.sourceType}:${reference.sourceId}`"
-          class="conversation-composer__memory-chip"
-          type="button"
-          :title="reference.fullContent"
-          @mouseenter="previewMemoryReference(reference)"
-          @mouseleave="scheduleClearMemoryPreview"
-          @focus="previewMemoryReference(reference)"
-          @blur="scheduleClearMemoryPreview"
-          @click="removeMemoryReferenceFromDraft(reference)"
-        >
-          <span class="conversation-composer__memory-chip-type">
-            {{ reference.sourceType === 'library_chunk' ? t('message.memorySourceLibrary') : t('message.memorySourceRaw') }}
-          </span>
-          <span class="conversation-composer__memory-chip-text">{{ reference.title }}</span>
-          <EaIcon
-            name="x"
-            :size="12"
-          />
-        </button>
-      </div>
-    </div>
-
     <div
       v-if="isMainPanel && currentMemoryPreview && !shouldShowMemorySuggestions"
       class="conversation-composer__memory-preview"

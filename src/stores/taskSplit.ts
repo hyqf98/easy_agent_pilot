@@ -29,7 +29,7 @@ import { resolveUsageModelHint } from '@/services/conversation/usageModelHint'
 import type { ExecutionRequest, MessageInput } from '@/services/conversation/strategies/types'
 import { buildAgentExecutionRequest } from '@/services/conversation/runtimeProfiles'
 import type { RuntimeNotice } from '@/utils/runtimeNotice'
-import { buildCliEnvironmentNotice, buildContextStrategyNotice } from '@/utils/runtimeNotice'
+import { buildContextStrategyNotice } from '@/utils/runtimeNotice'
 import { loadAgentMcpServers } from '@/utils/mcpServerConfig'
 import {
   classifyCliFailureFragments,
@@ -164,6 +164,26 @@ function parseStreamPayloadMetadata(raw?: string | null): Record<string, unknown
   }
 }
 
+function readMetadataNumericValue(
+  metadata: Record<string, unknown> | null,
+  ...keys: string[]
+): number | undefined {
+  for (const key of keys) {
+    const value = metadata?.[key]
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value
+    }
+    if (typeof value === 'string' && value.trim()) {
+      const numeric = Number(value)
+      if (Number.isFinite(numeric)) {
+        return numeric
+      }
+    }
+  }
+
+  return undefined
+}
+
 function readMetadataString(
   metadata: Record<string, unknown> | null,
   key: string,
@@ -267,6 +287,18 @@ function buildPersistedLogMetadata(
     : typeof parsedMetadata?.outputTokens === 'number'
       ? parsedMetadata.outputTokens
       : undefined
+  const rawInputTokens = typeof payload.rawInputTokens === 'number'
+    ? payload.rawInputTokens
+    : readMetadataNumericValue(parsedMetadata, 'rawInputTokens', 'raw_input_tokens')
+  const rawOutputTokens = typeof payload.rawOutputTokens === 'number'
+    ? payload.rawOutputTokens
+    : readMetadataNumericValue(parsedMetadata, 'rawOutputTokens', 'raw_output_tokens')
+  const cacheReadInputTokens = typeof payload.cacheReadInputTokens === 'number'
+    ? payload.cacheReadInputTokens
+    : readMetadataNumericValue(parsedMetadata, 'cacheReadInputTokens', 'cache_read_input_tokens')
+  const cacheCreationInputTokens = typeof payload.cacheCreationInputTokens === 'number'
+    ? payload.cacheCreationInputTokens
+    : readMetadataNumericValue(parsedMetadata, 'cacheCreationInputTokens', 'cache_creation_input_tokens')
   const externalSessionId = typeof payload.externalSessionId === 'string' && payload.externalSessionId.trim()
     ? payload.externalSessionId.trim()
     : typeof parsedMetadata?.externalSessionId === 'string' && parsedMetadata.externalSessionId.trim()
@@ -277,6 +309,10 @@ function buildPersistedLogMetadata(
     model,
     inputTokens,
     outputTokens,
+    rawInputTokens,
+    rawOutputTokens,
+    cacheReadInputTokens,
+    cacheCreationInputTokens,
     externalSessionId,
     ...(payload.metadata ? { rawMetadata: payload.metadata } : {}),
     toolName: payload.toolName,
@@ -1170,14 +1206,12 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       })
       runtimeNotices.value = contextNotice ? [contextNotice] : []
 
-      void Promise.all([
-        buildCliEnvironmentNotice(selectedAgent).catch(() => null),
-        resolveUsageModelHint(selectedAgent).catch(() => undefined)
-      ]).then(([environmentNotice, modelHint]) => {
+      void resolveUsageModelHint(selectedAgent)
+        .catch(() => undefined)
+        .then((modelHint) => {
         if (version !== initVersion || !isCurrentPlan(nextContext.planId)) return
         usageModelHint.value = modelHint ?? null
-        runtimeNotices.value = [environmentNotice, contextNotice]
-          .filter((notice): notice is RuntimeNotice => Boolean(notice))
+        runtimeNotices.value = contextNotice ? [contextNotice] : []
       })
     }
     if (version !== initVersion) return

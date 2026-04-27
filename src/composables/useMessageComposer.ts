@@ -370,7 +370,10 @@ export function useMessageComposer() {
       const result = await compressionService.compressSession(
         currentSessionId.value,
         agentId,
-        { strategy }
+        {
+          strategy,
+          triggerSource: 'manual'
+        }
       )
 
       if (result.success) {

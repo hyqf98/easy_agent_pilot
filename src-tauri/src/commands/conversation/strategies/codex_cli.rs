@@ -786,7 +786,9 @@ impl AgentExecutionStrategy for CodexCliStrategy {
             &completion_fragments,
             stdout_outcome.emitted_error || stderr_outcome.emitted_error,
         );
-        let execution_succeeded = status.success() || should_treat_failure_as_success;
+        let should_complete_as_success = should_treat_failure_as_success
+            || (detected_failure.is_none() && stdout_outcome.emitted_content);
+        let execution_succeeded = status.success() || should_complete_as_success;
 
         if timeout_error_message.is_none() && detected_failure.is_none() && execution_succeeded {
             let done_event = CliStreamEvent {
@@ -802,6 +804,10 @@ impl AgentExecutionStrategy for CodexCliStrategy {
                 output_tokens: None,
                 model: None,
                 external_session_id: None,
+            raw_input_tokens: None,
+            raw_output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             };
             emit_cli_event(&app, &event_name, plan_id.as_ref(), &done_event);
         }
@@ -857,7 +863,7 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         }
 
         if !status.success() {
-            if should_treat_failure_as_success {
+            if should_complete_as_success {
                 log_info!(
                     "忽略 CLI 非零/空退出码：已收到有效输出，exit_code={:?}, {}",
                     status.code(),
@@ -903,6 +909,10 @@ fn build_thinking_event(session_id: &str, content: String) -> CliStreamEvent {
         output_tokens: None,
         model: None,
         external_session_id: None,
+    raw_input_tokens: None,
+    raw_output_tokens: None,
+    cache_read_input_tokens: None,
+    cache_creation_input_tokens: None,
     }
 }
 
@@ -920,6 +930,10 @@ fn build_thinking_start_event(session_id: &str) -> CliStreamEvent {
         output_tokens: None,
         model: None,
         external_session_id: None,
+    raw_input_tokens: None,
+    raw_output_tokens: None,
+    cache_read_input_tokens: None,
+    cache_creation_input_tokens: None,
     }
 }
 
@@ -941,6 +955,10 @@ fn build_tool_input_delta_event(
         output_tokens: None,
         model: None,
         external_session_id: None,
+    raw_input_tokens: None,
+    raw_output_tokens: None,
+    cache_read_input_tokens: None,
+    cache_creation_input_tokens: None,
     }
 }
 
@@ -948,6 +966,9 @@ fn build_usage_event(
     session_id: &str,
     input_tokens: Option<u32>,
     output_tokens: Option<u32>,
+    raw_input_tokens: Option<u32>,
+    raw_output_tokens: Option<u32>,
+    cache_read_input_tokens: Option<u32>,
 ) -> CliStreamEvent {
     CliStreamEvent {
         event_type: "usage".to_string(),
@@ -960,6 +981,10 @@ fn build_usage_event(
         error: None,
         input_tokens,
         output_tokens,
+        raw_input_tokens,
+        raw_output_tokens,
+        cache_read_input_tokens,
+        cache_creation_input_tokens: None,
         model: None,
         external_session_id: None,
     }
@@ -1016,6 +1041,10 @@ fn build_command_execution_tool_use_event(
         output_tokens: None,
         model: None,
         external_session_id: None,
+    raw_input_tokens: None,
+    raw_output_tokens: None,
+    cache_read_input_tokens: None,
+    cache_creation_input_tokens: None,
     })
 }
 
@@ -1071,6 +1100,10 @@ fn build_command_execution_tool_result_event(
         output_tokens: None,
         model: None,
         external_session_id: None,
+    raw_input_tokens: None,
+    raw_output_tokens: None,
+    cache_read_input_tokens: None,
+    cache_creation_input_tokens: None,
     })
 }
 
@@ -1112,6 +1145,10 @@ fn build_todo_list_tool_use_event(
         output_tokens: None,
         model: None,
         external_session_id: None,
+    raw_input_tokens: None,
+    raw_output_tokens: None,
+    cache_read_input_tokens: None,
+    cache_creation_input_tokens: None,
     })
 }
 
@@ -1144,6 +1181,10 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                 output_tokens: None,
                 model: None,
                 external_session_id: Some(external_session_id),
+            raw_input_tokens: None,
+            raw_output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             })
         }
         "system" => extract_runtime_system_notice(json)
@@ -1206,17 +1247,31 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
         }
         "turn.completed" => {
             let usage = json.get("usage");
-            let input_tokens = usage
+            let raw_input_tokens = usage
                 .and_then(|u| u.get("input_tokens"))
                 .and_then(|t| t.as_u64())
                 .map(|t| t as u32);
-            let output_tokens = usage
+            let raw_output_tokens = usage
                 .and_then(|u| u.get("output_tokens"))
                 .and_then(|t| t.as_u64())
                 .map(|t| t as u32);
+            let cached_input = usage
+                .and_then(|u| u.get("cached_input_tokens"))
+                .and_then(|t| t.as_u64())
+                .map(|t| t as u32);
 
-            if input_tokens.is_some() || output_tokens.is_some() {
-                Some(build_usage_event(session_id, input_tokens, output_tokens))
+            let input_tokens = raw_input_tokens
+                .map(|raw| raw.saturating_sub(cached_input.unwrap_or(0)));
+
+            if input_tokens.is_some() || raw_output_tokens.is_some() {
+                Some(build_usage_event(
+                    session_id,
+                    input_tokens,
+                    raw_output_tokens,
+                    raw_input_tokens,
+                    raw_output_tokens,
+                    cached_input,
+                ))
             } else {
                 extract_turn_output(json).map(|content| build_content_event(session_id, content))
             }
@@ -1301,6 +1356,10 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                         output_tokens: None,
                         model: None,
                         external_session_id: None,
+                    raw_input_tokens: None,
+                    raw_output_tokens: None,
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
                     })
                 }
                 "thinking" | "reasoning" => {
@@ -1315,81 +1374,20 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
             None
         }
         "message_start" => {
-            let message = json.get("message")?;
-
-            // 提取 token 使用量
-            let usage = message.get("usage");
-            let input_tokens = usage
-                .and_then(|u| u.get("input_tokens"))
-                .and_then(|t| t.as_u64())
-                .map(|t| t as u32);
-            let output_tokens = usage
-                .and_then(|u| u.get("output_tokens"))
-                .and_then(|t| t.as_u64())
-                .map(|t| t as u32);
-
-            // 提取模型信息
-            let model = message
-                .get("model")
-                .and_then(|m| m.as_str())
-                .map(|m| m.to_string());
-
-            if input_tokens.is_some() || output_tokens.is_some() || model.is_some() {
-                Some(CliStreamEvent {
-                    event_type: "message_start".to_string(),
-                    session_id: session_id.to_string(),
-                    content: None,
-                    tool_name: None,
-                    tool_call_id: None,
-                    tool_input: None,
-                    tool_result: None,
-                    error: None,
-                    input_tokens,
-                    output_tokens,
-                    model,
-                    external_session_id: None,
-                })
-            } else {
-                None
-            }
+            let _ = json.get("message")?;
+            None
         }
         "message_delta" => {
-            let usage = json.get("usage");
-
-            let input_tokens = usage
-                .and_then(|u| u.get("input_tokens"))
-                .and_then(|t| t.as_u64())
-                .map(|t| t as u32);
-            let output_tokens = usage
-                .and_then(|u| u.get("output_tokens"))
-                .and_then(|t| t.as_u64())
-                .map(|t| t as u32);
-
-            if input_tokens.is_some() || output_tokens.is_some() {
-                Some(build_usage_event(session_id, input_tokens, output_tokens))
-            } else {
-                None
-            }
+            let _ = json.get("usage");
+            None
         }
         // message_stop 只表示当前一轮模型消息结束，不代表整个 CLI 执行完成。
         // 在 agentic 工具调用场景中，CLI 会执行工具后继续下一轮对话，产生多个 message_stop。
         // 因此不能将 message_stop 转换为 done 事件，否则会导致前端过早标记消息为"已完成"。
         // 最终的 done 事件由进程退出后的代码统一发出。
         "message_stop" => {
-            let usage = json.get("usage");
-            let input_tokens = usage
-                .and_then(|u| u.get("input_tokens"))
-                .and_then(|t| t.as_u64())
-                .map(|t| t as u32);
-            let output_tokens = usage
-                .and_then(|u| u.get("output_tokens"))
-                .and_then(|t| t.as_u64())
-                .map(|t| t as u32);
-            if input_tokens.is_some() || output_tokens.is_some() {
-                Some(build_usage_event(session_id, input_tokens, output_tokens))
-            } else {
-                None
-            }
+            let _ = json.get("usage");
+            None
         }
 
         // === 工具相关事件 ===
@@ -1416,6 +1414,10 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                 output_tokens: None,
                 model: None,
                 external_session_id: None,
+            raw_input_tokens: None,
+            raw_output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             })
         }
         "tool_result" => {
@@ -1435,6 +1437,10 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                 output_tokens: None,
                 model: None,
                 external_session_id: None,
+            raw_input_tokens: None,
+            raw_output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             })
         }
 
@@ -1487,6 +1493,10 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                                 output_tokens: None,
                                 model: None,
                                 external_session_id: None,
+                            raw_input_tokens: None,
+                            raw_output_tokens: None,
+                            cache_read_input_tokens: None,
+                            cache_creation_input_tokens: None,
                             });
                         }
                     }
@@ -1519,6 +1529,10 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                             output_tokens: None,
                             model: None,
                             external_session_id: None,
+                        raw_input_tokens: None,
+                        raw_output_tokens: None,
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                         });
                     }
                     _ => {
@@ -1567,6 +1581,10 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                             output_tokens: None,
                             model: None,
                             external_session_id: None,
+                        raw_input_tokens: None,
+                        raw_output_tokens: None,
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                         })
                     }
                     _ => {

@@ -193,7 +193,7 @@ export abstract class BaseAgentStrategy implements AgentStrategy {
 
   protected toMessageInputs(messages: ConversationContext['messages']): ExecutionRequest['messages'] {
     return messages
-      .filter(message => message.role !== 'compression')
+      .filter(message => !message.compressionMetadata)
       .map(message => {
         const nonImageAttachmentPrompt = buildNonImageAttachmentPrompt(message.attachments ?? [])
         const normalizedContent = [
@@ -213,6 +213,10 @@ export abstract class BaseAgentStrategy implements AgentStrategy {
     const baseEvent = {
       inputTokens: event.inputTokens,
       outputTokens: event.outputTokens,
+      rawInputTokens: event.rawInputTokens,
+      rawOutputTokens: event.rawOutputTokens,
+      cacheReadInputTokens: event.cacheReadInputTokens,
+      cacheCreationInputTokens: event.cacheCreationInputTokens,
       model: event.model,
       externalSessionId: event.externalSessionId
     }
@@ -350,7 +354,7 @@ export abstract class BaseAgentStrategy implements AgentStrategy {
   private async waitForTerminalEvent(state: ExecutionEventState): Promise<void> {
     const startedAt = Date.now()
     while (Date.now() - startedAt < MAX_TERMINAL_EVENT_WAIT_MS) {
-      if (state.sawDone || state.sawError) {
+      if (state.sawDone) {
         break
       }
 

@@ -36,13 +36,7 @@ const tokenUsage = computed(() => {
   return tokenStore.getTokenUsage(targetSessionId.value)
 })
 
-const realtimeUsage = computed(() => {
-  if (!targetSessionId.value) {
-    return null
-  }
-
-  return tokenStore.realtimeTokens.get(targetSessionId.value) ?? null
-})
+const displayPercentage = computed(() => `${Math.round(tokenUsage.value.percentage)}%`)
 
 watch(
   targetSessionId,
@@ -55,7 +49,9 @@ watch(
 
 // 进度条样式
 const progressStyle = computed(() => ({
-  width: `${Math.min(100, tokenUsage.value.percentage)}%`
+  width: tokenUsage.value.used > 0 && tokenUsage.value.percentage > 0 && tokenUsage.value.percentage < 1
+    ? '1%'
+    : `${Math.min(100, tokenUsage.value.percentage)}%`
 }))
 
 // 进度条级别类
@@ -107,7 +103,7 @@ function handleMouseLeave() {
 
     <!-- 百分比显示 -->
     <span class="token-progress__text">
-      {{ Math.round(tokenUsage.percentage) }}%
+      {{ displayPercentage }}
     </span>
 
     <!-- Tooltip - 使用 Teleport 渲染到 body -->
@@ -123,13 +119,6 @@ function handleMouseLeave() {
             <span class="token-progress__tooltip-value">
               {{ formatTokenCount(tokenUsage.used) }} / {{ formatTokenCount(tokenUsage.limit) }}
             </span>
-          </div>
-          <div
-            v-if="realtimeUsage"
-            class="token-progress__tooltip-breakdown"
-          >
-            <span>输入 {{ formatTokenCount(realtimeUsage.inputTokens) }}</span>
-            <span>输出 {{ formatTokenCount(realtimeUsage.outputTokens) }}</span>
           </div>
           <div class="token-progress__tooltip-hint">
             点击压缩上下文
@@ -274,16 +263,6 @@ function handleMouseLeave() {
   font-weight: var(--font-weight-medium);
   color: var(--color-text-primary);
   font-size: 11px;
-}
-
-.token-progress__tooltip-breakdown {
-  display: flex;
-  gap: 8px;
-  margin-top: 3px;
-  padding-top: 3px;
-  border-top: 1px solid var(--color-border-light);
-  color: var(--color-text-tertiary);
-  font-size: 10px;
 }
 
 .token-progress__tooltip-hint {

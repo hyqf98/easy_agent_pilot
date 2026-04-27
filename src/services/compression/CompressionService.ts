@@ -5,14 +5,20 @@ import { useAgentStore } from '@/stores/agent'
 import { useTokenStore, type CompressionStrategy } from '@/stores/token'
 import type { AgentConfig } from '@/stores/agent'
 import { useSettingsStore } from '@/stores/settings'
-import { useNotificationStore } from '@/stores/notification'
 import { useProjectStore } from '@/stores/project'
 import { useTracePreviewStore } from '@/stores/tracePreview'
 import { agentExecutor } from '@/services/conversation/AgentExecutor'
 import { buildConversationMessages } from '@/services/conversation/buildConversationMessages'
 import { loadMountedMemoryPrompt } from '@/services/memory/mountedMemoryPrompt'
+import {
+  deleteSessionRuntimeBinding,
+  getSessionRuntimeBinding,
+  resolveRuntimeBindingKey
+} from '@/services/conversation/runtimeBindings'
+import type { ConversationContext } from '@/services/conversation/strategies/types'
 import i18n from '@/i18n'
 import { extractExecutionResult } from '@/utils/structuredContent'
+import { resolveSessionAgent } from '@/utils/sessionAgent'
 import type { FileEditTrace } from '@/types/fileTrace'
 
 interface CompressionFileGroups {
@@ -32,6 +38,7 @@ const MAX_VISIBLE_TOOL_COUNT = 6
  */
 export interface CompressionOptions {
   strategy: CompressionStrategy
+  triggerSource?: 'manual' | 'auto' | 'silent'
 }
 
 /**
@@ -44,12 +51,6 @@ export interface CompressionResult {
   originalTokenCount: number
   newSessionId?: string
   error?: string
-}
-
-interface AutoCompressionDecision {
-  allowed: boolean
-  usagePercentage: number
-  threshold: number
 }
 
 /**
@@ -75,8 +76,58 @@ export class CompressionService {
     return params ? i18n.global.t(key, params) as string : i18n.global.t(key) as string
   }
 
+  private syncTemporarySessionPreview(
+    session: Session | undefined,
+    triggerMessage: string,
+    messageCount: number
+  ) {
+    if (!session) {
+      return
+    }
+
+    session.lastMessage = triggerMessage
+    session.messageCount = messageCount
+    session.updatedAt = new Date().toISOString()
+  }
+
+  private async renderCompressionExecutionFlow(
+    sessionId: string,
+    sourceSession: Session | undefined,
+    triggerSource: 'manual' | 'auto'
+  ): Promise<{ assistantMessage: Message }> {
+    const messageStore = useMessageStore()
+    const tracePreviewStore = useTracePreviewStore()
+    const triggerMessage = this.buildCompressionTriggerMessage(triggerSource)
+
+    messageStore.clearSessionMessagesCache(sessionId)
+    tracePreviewStore.clear()
+    this.syncTemporarySessionPreview(sourceSession, triggerMessage, 2)
+
+    await messageStore.addMessage({
+      sessionId,
+      role: 'user',
+      content: triggerMessage,
+      status: 'completed'
+    })
+
+    const assistantMessage = await messageStore.addMessage({
+      sessionId,
+      role: 'assistant',
+      content: this.t('compression.processing'),
+      status: 'streaming'
+    })
+
+    return { assistantMessage }
+  }
+
   /**
-   * 执行会话压缩
+   * 执行会话压缩。
+   * 1. 可选地清空当前页面展示消息，并渲染一轮临时的用户触发消息 + AI 响应
+   * 2. 生成摘要（AI 或简单）
+   * 3. 清除当前会话所有消息（前端+后端）
+   * 4. 删除运行时绑定并清空 CLI 会话 ID（强制新 CLI 会话）
+   * 5. 清除 token 缓存
+   * 6. 插入压缩摘要消息作为当前会话新的第一条消息
    */
   async compressSession(
     sessionId: string,
@@ -88,97 +139,94 @@ export class CompressionService {
     const sessionExecutionStore = useSessionExecutionStore()
     const tokenStore = useTokenStore()
     const tracePreviewStore = useTracePreviewStore()
-    const sourceSession = sessionStore.sessions.find(session => session.id === sessionId)
+    const sourceSession = sessionStore.sessions.find(s => s.id === sessionId)
 
-    // 获取当前会话的所有消息
     const messages = messageStore.messagesBySession(sessionId)
     const messageCount = messages.length
 
     if (messageCount === 0) {
-      return {
-        success: false,
-        error: this.t('compression.noMessages'),
-        originalMessageCount: 0,
-        originalTokenCount: 0
-      }
+      return { success: false, error: this.t('compression.noMessages'), originalMessageCount: 0, originalTokenCount: 0 }
     }
 
-    // 计算当前 token 使用量
-    const tokenUsage = tokenStore.getTokenUsage(sessionId)
-    const originalTokenCount = tokenUsage.used
+    const originalTokenCount = tokenStore.getTokenUsage(sessionId).used
 
-    // 检查是否正在发送消息
     if (sessionExecutionStore.getIsSending(sessionId)) {
-      return {
-        success: false,
-        error: this.t('compression.sendingInProgress'),
-        originalMessageCount: messageCount,
-        originalTokenCount
-      }
+      return { success: false, error: this.t('compression.sendingInProgress'), originalMessageCount: messageCount, originalTokenCount }
     }
 
     try {
-      // 开始压缩状态
       sessionExecutionStore.startSending(sessionId)
 
-      // 提取工具调用摘要
-      const toolCallsSummary = this.extractToolCallsSummary(messages)
-      const fileGroups = this.extractFileGroups(messages)
+      const sourceMessages = [...messages]
+      const toolCallsSummary = this.extractToolCallsSummary(sourceMessages)
+      const fileGroups = this.extractFileGroups(sourceMessages)
+      const triggerSource = options.triggerSource ?? 'silent'
 
-      let summaryContent = ''
+      const compressionExecutionFlow = triggerSource !== 'silent'
+        ? await this.renderCompressionExecutionFlow(sessionId, sourceSession, triggerSource)
+        : null
 
-      if (options.strategy === 'summary') {
-        // 使用 AI 生成摘要
-        summaryContent = await this.generateSummary(
-          sessionId,
-          agentId,
-          messages,
-          toolCallsSummary,
-          fileGroups
-        )
-      } else {
-        // 简单压缩：只保留基本信息
-        summaryContent = this.generateSimpleSummary(messages, toolCallsSummary, fileGroups)
-      }
+      let summaryContent = options.strategy === 'summary'
+        ? await this.generateSummary(
+            agentId,
+            sourceMessages,
+            toolCallsSummary,
+            fileGroups,
+            sourceSession,
+            (content) => {
+              const assistantMessageId = compressionExecutionFlow?.assistantMessage.id
+              if (!assistantMessageId) {
+                return
+              }
+
+              messageStore.updateMessageBuffered(assistantMessageId, {
+                content: content || this.t('compression.processing'),
+                status: 'streaming'
+              })
+            }
+          )
+        : this.generateSimpleSummary(sourceMessages, toolCallsSummary, fileGroups)
 
       if (!summaryContent.trim()) {
-        summaryContent = this.generateSimpleSummary(messages, toolCallsSummary, fileGroups)
+        summaryContent = this.generateSimpleSummary(sourceMessages, toolCallsSummary, fileGroups)
       }
 
-      // 创建压缩摘要消息
       const compressionMetadata: CompressionMetadata = {
         compressedAt: new Date().toISOString(),
         originalMessageCount: messageCount,
         originalTokenCount,
         strategy: options.strategy,
+        summaryContent,
         toolCallsSummary: toolCallsSummary.length > 0 ? toolCallsSummary : undefined,
-        panelExpanded: false
+        panelExpanded: false,
+        triggerSource
       }
 
-      const nextSessionId = await this.createContinuationSession({
-        sourceSession,
-        sourceSessionId: sessionId,
-        summaryContent,
+      await messageStore.clearSessionMessages(sessionId)
+      await this.clearRuntimeBindings(sourceSession)
+      tokenStore.hardClearSessionTokens(sessionId)
+      tracePreviewStore.clear()
+
+      await messageStore.addMessage({
+        sessionId,
+        role: 'user',
+        content: summaryContent,
+        status: 'completed',
         compressionMetadata
       })
-
-      // 清理新会话 token 状态，确保首次续聊从摘要消息重新累计。
-      tokenStore.clearSessionTokenCache(nextSessionId)
-      tokenStore.updateRealtimeTokens(nextSessionId, 0, 0)
-      tracePreviewStore.clear()
+      sessionStore.updateLastMessage(sessionId, summaryContent.slice(0, 50))
 
       return {
         success: true,
         summary: summaryContent,
         originalMessageCount: messageCount,
         originalTokenCount,
-        newSessionId: nextSessionId
+        newSessionId: sessionId
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error)
       return {
         success: false,
-        error: errorMessage,
+        error: error instanceof Error ? error.message : String(error),
         originalMessageCount: messageCount,
         originalTokenCount
       }
@@ -187,49 +235,81 @@ export class CompressionService {
     }
   }
 
-  /**
-   * 基于压缩摘要派生一个新的续聊会话，并切换到该会话继续后续对话。
-   */
-  private async createContinuationSession(options: {
-    sourceSession?: Session
-    sourceSessionId: string
-    summaryContent: string
-    compressionMetadata: CompressionMetadata
-  }): Promise<string> {
+  private async clearRuntimeBindings(session?: Session): Promise<void> {
+    if (!session) return
     const sessionStore = useSessionStore()
-    const messageStore = useMessageStore()
-    const sessionExecutionStore = useSessionExecutionStore()
-    const sourceSession = options.sourceSession
-
-    if (!sourceSession) {
-      throw new Error(this.t('compression.sourceSessionMissing'))
+    const agentStore = useAgentStore()
+    const agent = resolveSessionAgent(session, agentStore.agents)
+    if (agent) {
+      const runtimeKey = resolveRuntimeBindingKey(agent)
+      if (runtimeKey) {
+        try {
+          await deleteSessionRuntimeBinding(session.id, runtimeKey)
+        } catch {
+          // 绑定可能不存在
+        }
+      }
     }
 
-    const continuationSession = await sessionStore.createSession({
-      projectId: sourceSession.projectId,
-      name: this.buildContinuationSessionName(sourceSession.name),
-      expertId: sourceSession.expertId,
-      agentId: sourceSession.agentId,
-      agentType: sourceSession.agentType,
-      status: 'idle'
+    await sessionStore.updateSession(session.id, {
+      cliSessionId: '',
+      cliSessionProvider: ''
     })
+  }
 
-    await messageStore.addMessage({
-      sessionId: continuationSession.id,
-      role: 'compression',
-      content: options.summaryContent,
-      status: 'completed',
-      compressionMetadata: options.compressionMetadata
-    })
-
-    sessionStore.updateLastMessage(continuationSession.id, options.summaryContent.slice(0, 50))
-    sessionExecutionStore.copyComposerState(options.sourceSessionId, continuationSession.id)
-
-    if (sessionStore.currentSessionId === options.sourceSessionId) {
-      await sessionStore.openSession(continuationSession.id)
+  private buildCompressionTriggerMessage(triggerSource: 'manual' | 'auto'): string {
+    if (triggerSource === 'auto') {
+      return this.t('compression.autoTriggerMessage')
     }
 
-    return continuationSession.id
+    return this.t('compression.manualTriggerMessage')
+  }
+
+  private shouldReuseCliSession(agent: AgentConfig): boolean {
+    if (agent.type !== 'cli') {
+      return false
+    }
+
+    return resolveRuntimeBindingKey(agent) !== 'codex-cli'
+  }
+
+  private resolveCliSessionProvider(agent: AgentConfig): string | undefined {
+    return agent.provider?.trim() || agent.type?.trim() || undefined
+  }
+
+  private async resolveCompressionResumeSessionId(
+    session: Session | undefined,
+    agent: AgentConfig
+  ): Promise<string | undefined> {
+    if (!session || !this.shouldReuseCliSession(agent)) {
+      return undefined
+    }
+
+    const runtimeKey = resolveRuntimeBindingKey(agent)
+    if (runtimeKey) {
+      try {
+        const binding = await getSessionRuntimeBinding(session.id, runtimeKey)
+        const externalSessionId = binding?.externalSessionId?.trim()
+        if (externalSessionId) {
+          return externalSessionId
+        }
+      } catch (error) {
+        console.warn('[CompressionService] Failed to read session runtime binding:', error)
+      }
+    }
+
+    const cliSessionId = session.cliSessionId?.trim()
+    if (!cliSessionId) {
+      return undefined
+    }
+
+    const expectedProvider = this.resolveCliSessionProvider(agent)
+    const boundProvider = session.cliSessionProvider?.trim()
+    if (expectedProvider && boundProvider && expectedProvider !== boundProvider) {
+      return undefined
+    }
+
+    return cliSessionId
   }
 
   /**
@@ -299,48 +379,24 @@ export class CompressionService {
     return lines.join('\n')
   }
 
-  private buildContinuationSessionName(sourceName?: string): string {
-    const normalized = sourceName?.trim()
-    const suffix = this.t('compression.continuationSessionSuffix')
-
-    if (!normalized) {
-      return suffix
-    }
-
-    if (normalized.endsWith(suffix)) {
-      return normalized
-    }
-
-    return `${normalized} ${suffix}`
-  }
-
-  /**
-   * 使用 AI 生成对话摘要
-   */
   private async generateSummary(
-    sessionId: string,
     agentId: string,
     messages: Message[],
     toolCallsSummary: ToolCallSummary[],
-    fileGroups: CompressionFileGroups
+    fileGroups: CompressionFileGroups,
+    session?: Session,
+    onContent?: (content: string) => void
   ): Promise<string> {
     const agentStore = useAgentStore()
-    const sessionStore = useSessionStore()
-    const messageStore = useMessageStore()
-    const sessionExecutionStore = useSessionExecutionStore()
     const projectStore = useProjectStore()
 
-    // 获取智能体配置
     const agent = agentStore.agents.find(a => a.id === agentId)
     if (!agent) {
       throw new Error(this.t('compression.agentNotFound'))
     }
 
-    // 构建摘要提示词
     const prompt = this.buildSummaryPrompt(messages, toolCallsSummary, fileGroups)
 
-    // 获取工作目录
-    const session = sessionStore.sessions.find(s => s.id === sessionId)
     let workingDirectory: string | undefined
     let projectMemoryPrompt: string | null = null
     if (session?.projectId) {
@@ -349,90 +405,55 @@ export class CompressionService {
       projectMemoryPrompt = await this.buildProjectMemoryPrompt(project?.memoryLibraryIds ?? [])
     }
 
-    // 保存当前流式消息
-    let summaryContent = ''
-
-    // 创建一个临时的摘要请求消息
-    const tempUserMessage = await messageStore.addMessage({
-      sessionId,
+    const resumeSessionId = await this.resolveCompressionResumeSessionId(session, agent)
+    const compressionPromptMessage: Message = {
+      id: `compression-prompt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      sessionId: session?.id ?? `compress-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       role: 'user',
       content: prompt,
-      status: 'completed'
-    })
-
-    const aiMessage = await messageStore.addMessage({
-      sessionId,
-      role: 'assistant',
-      content: '',
-      status: 'streaming'
-    })
-
-    sessionExecutionStore.setCurrentStreamingMessageId(sessionId, aiMessage.id)
-
-    try {
-      const executionMessages = buildConversationMessages(
-        [
-          ...messages,
-          {
-            id: tempUserMessage.id,
-            sessionId,
-            role: 'user',
-            content: prompt,
-            status: 'completed',
-            createdAt: tempUserMessage.createdAt
-          }
-        ],
-        {
-          sessionId,
-          injectedSystemMessages: projectMemoryPrompt ? [projectMemoryPrompt] : []
-        }
-      )
-
-      // 使用对话服务生成摘要
-      await this.executeSummaryGeneration(agent, sessionId, workingDirectory, executionMessages, (content) => {
-        summaryContent += content
-        messageStore.updateMessage(aiMessage.id, {
-          content: summaryContent
-        })
-      })
-
-      // 更新消息状态
-      await messageStore.updateMessage(aiMessage.id, {
-        status: 'completed'
-      })
-
-      // 删除临时消息
-      await messageStore.deleteMessage(tempUserMessage.id)
-      await messageStore.deleteMessage(aiMessage.id)
-
-      return summaryContent
-    } catch (error) {
-      // 清理临时消息
-      try {
-        await messageStore.deleteMessage(tempUserMessage.id)
-        await messageStore.deleteMessage(aiMessage.id)
-      } catch {
-        // 忽略删除错误
-      }
-      throw error
+      status: 'completed',
+      createdAt: new Date().toISOString()
     }
+    const executionMessages = buildConversationMessages(
+      resumeSessionId
+        ? [compressionPromptMessage]
+        : [...messages, compressionPromptMessage],
+      {
+        sessionId: session?.id ?? compressionPromptMessage.sessionId,
+        injectedSystemMessages: projectMemoryPrompt ? [projectMemoryPrompt] : []
+      }
+    )
+
+    let summaryContent = ''
+    await this.executeSummaryGeneration(
+      agent,
+      compressionPromptMessage.sessionId,
+      workingDirectory,
+      executionMessages,
+      resumeSessionId,
+      (content) => {
+        summaryContent = content
+        onContent?.(content)
+      }
+    )
+
+    return summaryContent
   }
 
-  /**
-   * 执行摘要生成
-   */
   private async executeSummaryGeneration(
     agent: AgentConfig,
     sessionId: string,
     workingDirectory: string | undefined,
     messages: Message[],
+    resumeSessionId: string | undefined,
     onContent: (content: string) => void
   ): Promise<void> {
-    const context = {
+    const context: ConversationContext = {
       sessionId,
       agent,
       messages,
-      workingDirectory
+      workingDirectory,
+      resumeSessionId
     }
 
     let accumulatedContent = ''
@@ -514,93 +535,29 @@ export class CompressionService {
     ].join('\n')
   }
 
-  /**
-   * 检查并执行自动压缩
-   * @returns 是否执行了压缩
-   */
-  async checkAndAutoCompress(sessionId: string, agentId: string): Promise<boolean> {
-    const notificationStore = useNotificationStore()
-    const settingsStore = useSettingsStore()
-    const decision = this.getAutoCompressionDecision(sessionId)
-
-    if (!decision.allowed) {
-      return false
-    }
-
-    console.log(
-      `[CompressionService] 检查自动压缩: ${decision.usagePercentage.toFixed(1)}% >= ${decision.threshold}%`
-    )
-
-    // 执行压缩
-    try {
-      const result = await this.compressSession(sessionId, agentId, {
-        strategy: settingsStore.settings.compressionStrategy as CompressionStrategy
-      })
-
-      if (result.success) {
-        notificationStore.success(this.t('compression.autoCompressed', {
-          tokens: result.originalTokenCount
-        }))
-        console.log(`[CompressionService] 自动压缩成功: ${result.summary?.slice(0, 100)}...`)
-        return true
-      } else {
-        console.warn(`[CompressionService] 自动压缩失败: ${result.error}`)
-        return false
-      }
-    } catch (error) {
-      console.error('[CompressionService] 自动压缩出错:', error)
-      return false
-    }
-  }
-
   shouldAutoCompressSession(sessionId: string): boolean {
-    return this.getAutoCompressionDecision(sessionId).allowed
-  }
-
-  private getAutoCompressionDecision(sessionId: string): AutoCompressionDecision {
     const settingsStore = useSettingsStore()
     const tokenStore = useTokenStore()
     const messageStore = useMessageStore()
-    const threshold = settingsStore.settings.compressionThreshold
-    const usage = tokenStore.getTokenUsage(sessionId)
 
-    const disallowedDecision = {
-      allowed: false,
-      usagePercentage: usage.percentage,
-      threshold
+    if (!settingsStore.settings.autoCompressionEnabled) {
+      return false
     }
 
     const meaningfulMessages = messageStore
       .messagesBySession(sessionId)
-      .filter(message => message.role !== 'compression')
+      .filter(message => !message.compressionMetadata)
 
     if (meaningfulMessages.length < 8) {
-      console.log(
-        `[CompressionService] 跳过自动压缩: 消息数不足 (${meaningfulMessages.length}/8)`
-      )
-      return disallowedDecision
-    }
-
-    if (!settingsStore.settings.autoCompressionEnabled) {
-      return disallowedDecision
+      return false
     }
 
     if (!tokenStore.needsCompression(sessionId)) {
-      return disallowedDecision
+      return false
     }
 
-    if (usage.used < 8000) {
-      console.log(
-        `[CompressionService] 跳过自动压缩: token 使用量不足 (${usage.used}/8000)`
-      )
-      return disallowedDecision
-    }
-
-    return {
-      allowed: true,
-      usagePercentage: usage.percentage,
-      threshold
-    }
+    const usage = tokenStore.getTokenUsage(sessionId)
+    return usage.used >= 8000
   }
 
   private resolveAssistantSummary(message?: Message): string {

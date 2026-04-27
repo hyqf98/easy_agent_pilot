@@ -136,6 +136,8 @@ const zhCN = {
     releasedNotice: '此会话已压缩，以释放上下文空间。',
     autoCompressed: '会话已自动压缩（释放 {tokens} Token 空间）',
     historyContextHint: '以下为已压缩历史摘要，视为已确认上下文：',
+    manualTriggerMessage: '请执行 AI 压缩当前会话，保留后续继续工作所需的最小上下文。',
+    autoTriggerMessage: '当前会话 Token 已接近上限，请先执行 AI 压缩并保留后续继续工作所需的最小上下文。',
     noMessages: '没有消息可以压缩',
     sendingInProgress: '正在发送消息，请稍后再试',
     agentNotFound: '未找到可用智能体',

@@ -1,12 +1,18 @@
 export interface UsageBaseline {
   rawInputTokens: number
   rawOutputTokens: number
+  cacheReadInputTokens: number
+  cacheCreationInputTokens: number
 }
 
 export interface NormalizeRuntimeUsageOptions {
   provider?: string | null
   inputTokens?: number
   outputTokens?: number
+  rawInputTokens?: number
+  rawOutputTokens?: number
+  cacheReadInputTokens?: number
+  cacheCreationInputTokens?: number
   baseline?: UsageBaseline | null
 }
 
@@ -17,7 +23,7 @@ export interface NormalizeRuntimeUsageResult {
   didReset: boolean
 }
 
-const CUMULATIVE_USAGE_RUNTIME_KEYWORDS = ['claude', 'codex', 'opencode'] as const
+const CUMULATIVE_USAGE_RUNTIME_KEYWORDS = ['codex'] as const
 
 function normalizeTokenValue(value?: number): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -37,6 +43,10 @@ export function normalizeRuntimeUsage(
 ): NormalizeRuntimeUsageResult {
   const inputTokens = normalizeTokenValue(options.inputTokens)
   const outputTokens = normalizeTokenValue(options.outputTokens)
+  const rawInputTokens = normalizeTokenValue(options.rawInputTokens)
+  const rawOutputTokens = normalizeTokenValue(options.rawOutputTokens)
+  const cacheReadInputTokens = normalizeTokenValue(options.cacheReadInputTokens)
+  const cacheCreationInputTokens = normalizeTokenValue(options.cacheCreationInputTokens)
   const baseline = options.baseline ?? null
 
   if (!isCumulativeUsageRuntime(options.provider)) {
@@ -50,30 +60,66 @@ export function normalizeRuntimeUsage(
 
   const previousInputTokens = baseline?.rawInputTokens ?? 0
   const previousOutputTokens = baseline?.rawOutputTokens ?? 0
+  const previousCacheReadInputTokens = baseline?.cacheReadInputTokens ?? 0
+  const previousCacheCreationInputTokens = baseline?.cacheCreationInputTokens ?? 0
+  const nextRawInputTokens = rawInputTokens ?? inputTokens
+  const nextRawOutputTokens = rawOutputTokens ?? outputTokens
   const didReset = (
-    (typeof inputTokens === 'number' && inputTokens < previousInputTokens)
-    || (typeof outputTokens === 'number' && outputTokens < previousOutputTokens)
+    (typeof nextRawInputTokens === 'number' && nextRawInputTokens < previousInputTokens)
+    || (typeof nextRawOutputTokens === 'number' && nextRawOutputTokens < previousOutputTokens)
+    || (typeof cacheReadInputTokens === 'number' && cacheReadInputTokens < previousCacheReadInputTokens)
+    || (typeof cacheCreationInputTokens === 'number' && cacheCreationInputTokens < previousCacheCreationInputTokens)
   )
 
-  const normalizedInputTokens = typeof inputTokens === 'number'
-    ? (didReset ? inputTokens : Math.max(0, inputTokens - previousInputTokens))
+  const normalizedInputTokens = typeof nextRawInputTokens === 'number'
+    ? (() => {
+        if (didReset) {
+          return inputTokens ?? Math.max(
+            0,
+            nextRawInputTokens
+              - (cacheReadInputTokens ?? 0)
+              - (cacheCreationInputTokens ?? 0)
+          )
+        }
+
+        const rawDelta = Math.max(0, nextRawInputTokens - previousInputTokens)
+        const cacheReadDelta = Math.max(0, (cacheReadInputTokens ?? 0) - previousCacheReadInputTokens)
+        const cacheCreationDelta = Math.max(
+          0,
+          (cacheCreationInputTokens ?? 0) - previousCacheCreationInputTokens
+        )
+        return Math.max(0, rawDelta - cacheReadDelta - cacheCreationDelta)
+      })()
     : undefined
-  const normalizedOutputTokens = typeof outputTokens === 'number'
-    ? (didReset ? outputTokens : Math.max(0, outputTokens - previousOutputTokens))
+  const normalizedOutputTokens = typeof nextRawOutputTokens === 'number'
+    ? (didReset
+        ? (outputTokens ?? nextRawOutputTokens)
+        : Math.max(0, nextRawOutputTokens - previousOutputTokens))
     : undefined
-  const hasRawUsage = typeof inputTokens === 'number' || typeof outputTokens === 'number'
+  const hasRawUsage = (
+    typeof nextRawInputTokens === 'number'
+    || typeof nextRawOutputTokens === 'number'
+    || typeof cacheReadInputTokens === 'number'
+    || typeof cacheCreationInputTokens === 'number'
+  )
 
   return {
     inputTokens: normalizedInputTokens,
     outputTokens: normalizedOutputTokens,
     nextBaseline: hasRawUsage
       ? {
-          rawInputTokens: typeof inputTokens === 'number'
-            ? inputTokens
+          rawInputTokens: typeof nextRawInputTokens === 'number'
+            ? nextRawInputTokens
             : baseline?.rawInputTokens ?? 0,
-          rawOutputTokens: typeof outputTokens === 'number'
-            ? outputTokens
-            : baseline?.rawOutputTokens ?? 0
+          rawOutputTokens: typeof nextRawOutputTokens === 'number'
+            ? nextRawOutputTokens
+            : baseline?.rawOutputTokens ?? 0,
+          cacheReadInputTokens: typeof cacheReadInputTokens === 'number'
+            ? cacheReadInputTokens
+            : baseline?.cacheReadInputTokens ?? 0,
+          cacheCreationInputTokens: typeof cacheCreationInputTokens === 'number'
+            ? cacheCreationInputTokens
+            : baseline?.cacheCreationInputTokens ?? 0
         }
       : baseline,
     didReset

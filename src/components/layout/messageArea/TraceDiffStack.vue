@@ -39,8 +39,10 @@ const props = withDefaults(defineProps<{
   afterContent: string
   changeType: FileEditChangeType
   focusRange?: FileEditRange | null
+  rolledBack?: boolean
 }>(), {
-  focusRange: null
+  focusRange: null,
+  rolledBack: false
 })
 
 const rootRef = ref<HTMLElement | null>(null)
@@ -267,6 +269,21 @@ const diffStats = computed(() => diffOps.value.reduce((stats, op) => {
   added: 0,
   removed: 0
 }))
+
+const displayAfterRows = computed(() => {
+  if (!props.rolledBack) {
+    return afterDisplayRows.value
+  }
+
+  const lines = normalizeLines(props.afterContent)
+  return lines.map((text, index) => ({
+    type: 'row' as const,
+    marker: '·' as const,
+    lineNumber: index + 1,
+    text,
+    variant: 'neutral' as const
+  }))
+})
 </script>
 
 <template>
@@ -275,13 +292,13 @@ const diffStats = computed(() => diffOps.value.reduce((stats, op) => {
     class="trace-diff-stack"
   >
     <div
-      v-if="isWindowTruncated"
+      v-if="!rolledBack && isWindowTruncated"
       class="trace-diff-stack__notice"
     >
       当前仅展示局部窗口以保证大文件对比性能。
     </div>
     <div
-      v-if="changeType === 'modify' && (diffStats.added > 0 || diffStats.removed > 0)"
+      v-if="!rolledBack && changeType === 'modify' && (diffStats.added > 0 || diffStats.removed > 0)"
       class="trace-diff-stack__summary"
     >
       <span class="trace-diff-stack__summary-chip trace-diff-stack__summary-chip--removed">
@@ -304,7 +321,10 @@ const diffStats = computed(() => diffOps.value.reduce((stats, op) => {
       </button>
     </div>
 
-    <section class="trace-diff-stack__panel">
+    <section
+      v-if="!rolledBack"
+      class="trace-diff-stack__panel"
+    >
       <header class="trace-diff-stack__header trace-diff-stack__header--before">
         <span>修改前</span>
         <span class="trace-diff-stack__header-tag">
@@ -354,9 +374,9 @@ const diffStats = computed(() => diffOps.value.reduce((stats, op) => {
 
     <section class="trace-diff-stack__panel">
       <header class="trace-diff-stack__header trace-diff-stack__header--after">
-        <span>AI 修改后</span>
+        <span>{{ rolledBack ? '回滚后' : 'AI 修改后' }}</span>
         <span class="trace-diff-stack__header-tag">
-          {{ changeType === 'delete' ? '文件已删除' : '当前结果' }}
+          {{ rolledBack ? '已恢复到修改前' : (changeType === 'delete' ? '文件已删除' : '当前结果') }}
         </span>
       </header>
 
@@ -372,7 +392,7 @@ const diffStats = computed(() => diffOps.value.reduce((stats, op) => {
         class="trace-diff-stack__rows"
       >
         <div
-          v-for="(row, index) in afterDisplayRows"
+          v-for="(row, index) in (rolledBack ? displayAfterRows : afterDisplayRows)"
           :key="`after-${index}-${row.type === 'row' ? row.lineNumber : `omitted-${row.count}`}`"
           class="trace-diff-stack__row-wrap"
         >

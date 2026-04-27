@@ -1107,6 +1107,10 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
       provider: runtimeProvider,
       inputTokens: event.inputTokens,
       outputTokens: event.outputTokens,
+      rawInputTokens: event.rawInputTokens,
+      rawOutputTokens: event.rawOutputTokens,
+      cacheReadInputTokens: event.cacheReadInputTokens,
+      cacheCreationInputTokens: event.cacheCreationInputTokens,
       baseline: usageBaselines.get(taskId) ?? null
     })
     const normalizedEvent: StreamEvent = {

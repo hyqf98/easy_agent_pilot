@@ -270,6 +270,10 @@ export const useSessionExecutionStore = defineStore('sessionExecution', () => {
     return getExecutionState(sessionId).memorySuggestions
   }
 
+  function getLastMemoryQuery(sessionId: string) {
+    return getExecutionState(sessionId).lastMemoryQuery
+  }
+
   function setMemorySuggestions(sessionId: string, suggestions: SearchMemorySuggestionsResult, query: string) {
     const state = getExecutionState(sessionId)
     state.memorySuggestions = suggestions
@@ -608,6 +612,7 @@ export const useSessionExecutionStore = defineStore('sessionExecution', () => {
     getFileMentions,
     getMemoryReferences,
     getMemorySuggestions,
+    getLastMemoryQuery,
     getIsSearchingMemory,
     getDismissedMemorySuggestionKeys,
     getPendingImages,

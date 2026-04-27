@@ -668,15 +668,52 @@
 }
 
 :deep(.conversation-composer__memory-tag) {
-  display: inline;
-  color: color-mix(in srgb, var(--color-primary) 70%, var(--color-text-primary));
+  position: relative;
+  display: inline-block;
+  min-width: 1ch;
+  max-width: 100%;
+  vertical-align: baseline;
+}
+
+:deep(.conversation-composer__memory-tag-ghost) {
+  visibility: hidden;
+  white-space: pre-wrap;
+}
+
+:deep(.conversation-composer__memory-tag-surface) {
+  position: absolute;
+  inset: 1px 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 100%;
+  max-width: 100%;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 18%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-primary-light) 42%, white);
+  color: color-mix(in srgb, var(--color-primary) 74%, var(--color-text-primary));
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+:deep(.conversation-composer__memory-tag-kind) {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+:deep(.conversation-composer__memory-tag-text) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: var(--font-weight-medium);
-  text-decoration: underline;
-  text-decoration-style: dotted;
-  text-decoration-color: color-mix(in srgb, var(--color-primary) 32%, transparent);
-  text-underline-offset: 2px;
-  box-decoration-break: clone;
-  -webkit-box-decoration-break: clone;
 }
 
 .conversation-composer__memory-tray {
@@ -929,10 +966,8 @@
 }
 
 .conversation-composer__memory-card--active {
-  border-color: color-mix(in srgb, var(--color-primary) 40%, var(--color-border));
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--color-primary-light) 36%, white), rgba(255, 255, 255, 0.94));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 16%, transparent);
+  outline: 1.5px solid var(--color-primary);
+  outline-offset: 2px;
 }
 
 .conversation-composer__memory-card--library {
@@ -1311,8 +1346,22 @@
 :global([data-theme='dark']) :deep(.conversation-composer__memory-tag),
 :global(.dark) :deep(.conversation-composer__memory-tag),
 .conversation-composer--dark :deep(.conversation-composer__memory-tag) {
+  color: #bae6fd;
+}
+
+:global([data-theme='dark']) :deep(.conversation-composer__memory-tag-surface),
+:global(.dark) :deep(.conversation-composer__memory-tag-surface),
+.conversation-composer--dark :deep(.conversation-composer__memory-tag-surface) {
+  border-color: rgba(56, 189, 248, 0.2);
   background: linear-gradient(135deg, rgba(14, 165, 233, 0.18), rgba(16, 185, 129, 0.22));
   color: #bae6fd;
+}
+
+:global([data-theme='dark']) :deep(.conversation-composer__memory-tag-kind),
+:global(.dark) :deep(.conversation-composer__memory-tag-kind),
+.conversation-composer--dark :deep(.conversation-composer__memory-tag-kind) {
+  background: rgba(15, 23, 42, 0.58);
+  color: #cbd5e1;
 }
 
 :global([data-theme='dark']) .conversation-composer__memory-panel,
@@ -1362,10 +1411,7 @@
 :global([data-theme='dark']) .conversation-composer__memory-card--active,
 :global(.dark) .conversation-composer__memory-card--active,
 .conversation-composer--dark .conversation-composer__memory-card--active {
-  border-color: rgba(56, 189, 248, 0.44);
-  background:
-    linear-gradient(180deg, rgba(14, 165, 233, 0.16), rgba(15, 23, 42, 0.92));
-  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.16);
+  outline-color: #38bdf8;
 }
 
 :global([data-theme='dark']) .conversation-composer__memory-chip,

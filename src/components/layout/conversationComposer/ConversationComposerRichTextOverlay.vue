@@ -34,7 +34,16 @@ defineProps<{
         v-else-if="segment.type === 'memory'"
         class="conversation-composer__memory-tag"
         :title="segment.titleContent"
-      >{{ segment.content }}</span>
+      >
+        <span class="conversation-composer__memory-tag-ghost">{{ segment.content }}</span>
+        <span class="conversation-composer__memory-tag-surface">
+          <span
+            v-if="segment.memorySourceLabel"
+            class="conversation-composer__memory-tag-kind"
+          >{{ segment.memorySourceLabel }}</span>
+          <span class="conversation-composer__memory-tag-text">{{ segment.displayContent || segment.content }}</span>
+        </span>
+      </span>
       <span
         v-else
         class="conversation-composer__slash-tag"

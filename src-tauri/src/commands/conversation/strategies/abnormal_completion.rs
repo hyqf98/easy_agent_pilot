@@ -104,6 +104,12 @@ pub fn is_shared_benign_stderr_warning(line: &str) -> bool {
         || (normalized.contains("failed to terminate mcp process group")
             && (normalized.contains("operation not permitted")
                 || normalized.contains("os error 1")))
+        || (normalized.contains("fatal: your current branch")
+            && normalized.contains("does not have any commits yet"))
+        || normalized.contains("fatal: bad revision 'head'")
+        || normalized.contains("fatal: bad revision \"head\"")
+        || normalized.contains("fatal: ambiguous argument 'head'")
+        || normalized.contains("fatal: ambiguous argument \"head\"")
 }
 
 pub fn classify_cli_completion(
@@ -111,9 +117,19 @@ pub fn classify_cli_completion(
     fragments: &[CliTextFragment],
     emitted_error: bool,
 ) -> Option<CliCompletionFailure> {
+    let has_primary_response = has_primary_response_content(fragments);
+
     for fragment in fragments {
+        if is_shared_benign_stderr_warning(&fragment.text) {
+            continue;
+        }
+
         let normalized = normalize_text(&fragment.text);
         if normalized.is_empty() {
+            continue;
+        }
+
+        if has_primary_response && fragment.source != CliTextSource::Content {
             continue;
         }
 
@@ -136,7 +152,7 @@ pub fn classify_cli_completion(
         }
     }
 
-    if emitted_error {
+    if emitted_error && !has_primary_response {
         return Some(build_failure(
             provider,
             CliCompletionFailureKind::NonRetryable,
@@ -203,6 +219,21 @@ fn has_structured_error_payload(normalized: &str) -> bool {
         || trimmed.starts_with("[{'error'")
 }
 
+fn is_primary_response_content(normalized: &str) -> bool {
+    !normalized.is_empty()
+        && !has_structured_task_result(normalized)
+        && !starts_with_error_context(normalized)
+        && !has_structured_error_payload(normalized)
+        && !is_retryable_failure(normalized)
+}
+
+fn has_primary_response_content(fragments: &[CliTextFragment]) -> bool {
+    fragments.iter().any(|fragment| {
+        fragment.source == CliTextSource::Content
+            && is_primary_response_content(&normalize_text(&fragment.text))
+    })
+}
+
 fn source_allows_retryable_match(source: CliTextSource, normalized: &str) -> bool {
     match source {
         CliTextSource::Error | CliTextSource::Stderr => true,
@@ -265,6 +296,13 @@ mod tests {
     }
 
     #[test]
+    fn ignores_git_no_commits_yet_warning() {
+        assert!(is_shared_benign_stderr_warning(
+            "fatal: your current branch 'main' does not have any commits yet"
+        ));
+    }
+
+    #[test]
     fn does_not_treat_task_result_report_as_failure() {
         let fragments = vec![CliTextFragment::new(
             CliTextSource::Content,
@@ -300,5 +338,33 @@ mod tests {
             classify_cli_completion("OpenCode", &fragments, false).expect("should classify");
 
         assert_eq!(failure.kind, CliCompletionFailureKind::Retryable);
+    }
+
+    #[test]
+    fn does_not_classify_benign_git_warning_as_failure() {
+        let fragments = vec![CliTextFragment::new(
+            CliTextSource::Stderr,
+            "fatal: your current branch 'main' does not have any commits yet",
+        )
+        .expect("fragment")];
+
+        let failure = classify_cli_completion("OpenCode", &fragments, false);
+        assert!(failure.is_none());
+    }
+
+    #[test]
+    fn ignores_tool_or_stderr_failure_when_primary_response_exists() {
+        let fragments = vec![
+            CliTextFragment::new(CliTextSource::Content, "已经完成分析，并给出修复建议。")
+                .expect("fragment"),
+            CliTextFragment::new(
+                CliTextSource::Stderr,
+                r#"Error: Unexpected error: text-extraction analysis failed: HTTP 401: {"error":{"code":"1000","message":"Authentication Failed"}}"#,
+            )
+            .expect("fragment"),
+        ];
+
+        let failure = classify_cli_completion("Claude", &fragments, true);
+        assert!(failure.is_none());
     }
 }

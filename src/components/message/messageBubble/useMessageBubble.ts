@@ -50,7 +50,7 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
 
   const isUser = computed(() => props.message.role === 'user')
   const isAssistant = computed(() => props.message.role === 'assistant')
-  const isCompression = computed(() => props.message.role === 'compression')
+  const isCompression = computed(() => !!props.message.compressionMetadata)
   const isStreaming = computed(() => props.message.status === 'streaming')
   const resolvedSessionMessages = computed(() => {
     if (props.sessionMessages) {

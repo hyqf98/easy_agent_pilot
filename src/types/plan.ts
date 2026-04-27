@@ -455,6 +455,10 @@ export interface PlanSplitStreamPayload {
   error?: string
   inputTokens?: number
   outputTokens?: number
+  rawInputTokens?: number
+  rawOutputTokens?: number
+  cacheReadInputTokens?: number
+  cacheCreationInputTokens?: number
   model?: string
   externalSessionId?: string
   metadata?: string | null

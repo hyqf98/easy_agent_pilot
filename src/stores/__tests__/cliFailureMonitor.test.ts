@@ -32,4 +32,23 @@ describe('cliFailureMonitor', () => {
 
     expect(result).toBeNull()
   })
+
+  it('ignores benign git stderr warnings when output is otherwise normal', () => {
+    const result = classifyCliFailureFragments('OpenCode', [
+      createCliFailureFragment('stderr', "fatal: your current branch 'main' does not have any commits yet")!
+    ])
+
+    expect(result).toBeNull()
+  })
+
+  it('ignores secondary non-content failures after a normal assistant reply', () => {
+    const result = classifyCliFailureFragments('Claude', [
+      createCliFailureFragment('content', '我已经完成检查，下面是修复方案。')!,
+      createCliFailureFragment('tool_result', 'Error: downstream tool execution failed')!,
+      createCliFailureFragment('stderr', 'fatal error: external helper exited unexpectedly')!,
+      createCliFailureFragment('error', 'Unexpected runtime error')!
+    ])
+
+    expect(result).toBeNull()
+  })
 })

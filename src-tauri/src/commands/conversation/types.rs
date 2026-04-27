@@ -230,6 +230,18 @@ pub struct StreamEvent {
     /// 输出 token 数量
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_tokens: Option<u32>,
+    /// 原始输入 token 数量（provider 原始 JSON）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_input_tokens: Option<u32>,
+    /// 原始输出 token 数量（provider 原始 JSON）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_output_tokens: Option<u32>,
+    /// 命中缓存读取的输入 token 数量
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_tokens: Option<u32>,
+    /// 新建缓存写入的输入 token 数量
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_creation_input_tokens: Option<u32>,
     /// 模型名称
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,

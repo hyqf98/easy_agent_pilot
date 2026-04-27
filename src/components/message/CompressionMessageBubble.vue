@@ -53,6 +53,9 @@ const toggleExpand = () => {
     originalMessageCount: metadata.value?.originalMessageCount || 0,
     originalTokenCount: metadata.value?.originalTokenCount || 0,
     strategy: metadata.value?.strategy || 'simple',
+    summaryContent: metadata.value?.summaryContent,
+    triggerPrompt: metadata.value?.triggerPrompt,
+    triggerSource: metadata.value?.triggerSource,
     toolCallsSummary: metadata.value?.toolCallsSummary,
     panelExpanded: !isExpanded.value
   }
@@ -173,10 +176,9 @@ const toggleExpand = () => {
 .compression-bubble {
   display: flex;
   flex-direction: column;
-  width: 100%;
-  max-width: min(46rem, 68%);
-  margin: 0 auto;
-  background-color: var(--color-bg-tertiary);
+  width: fit-content;
+  max-width: min(40rem, 100%);
+  background-color: var(--color-user-bubble-bg, var(--color-primary-light));
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   overflow: hidden;

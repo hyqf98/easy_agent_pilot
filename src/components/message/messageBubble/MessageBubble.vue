@@ -75,11 +75,18 @@ const {
 </script>
 
 <template>
-  <!-- 压缩消息使用专用组件 -->
-  <CompressionMessageBubble
+  <!-- 压缩消息使用专用组件，右对齐 + 用户头像 -->
+  <div
     v-if="isCompression"
-    :message="message"
-  />
+    class="message-bubble message-bubble--user"
+  >
+    <div class="message-bubble__body">
+      <CompressionMessageBubble :message="message" />
+    </div>
+    <div class="message-bubble__avatar message-bubble__avatar--user">
+      <span class="avatar-icon">🙂</span>
+    </div>
+  </div>
 
   <!-- 普通消息 -->
   <div

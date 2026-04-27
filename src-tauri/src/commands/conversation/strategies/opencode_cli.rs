@@ -624,7 +624,9 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
             &completion_fragments,
             stdout_outcome.emitted_error || stderr_outcome.emitted_error,
         );
-        let execution_succeeded = status.success() || should_treat_failure_as_success;
+        let should_complete_as_success = should_treat_failure_as_success
+            || (detected_failure.is_none() && stdout_outcome.emitted_content);
+        let execution_succeeded = status.success() || should_complete_as_success;
 
         if timeout_error_message.is_none() && detected_failure.is_none() && execution_succeeded {
             let done_event = CliStreamEvent {
@@ -640,6 +642,10 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
                 output_tokens: None,
                 model: None,
                 external_session_id: None,
+            raw_input_tokens: None,
+            raw_output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             };
             emit_cli_event(&app, &event_name, plan_id.as_ref(), &done_event);
         }
@@ -689,7 +695,7 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
         }
 
         if !status.success() {
-            if should_treat_failure_as_success {
+            if should_complete_as_success {
                 log_info!(
                     "忽略 OpenCode CLI 非零/空退出码：已收到有效输出，exit_code={:?}, {}",
                     status.code(),
@@ -858,6 +864,10 @@ fn build_thinking_cli_event(session_id: &str, content: String) -> CliStreamEvent
         output_tokens: None,
         model: None,
         external_session_id: None,
+    raw_input_tokens: None,
+    raw_output_tokens: None,
+    cache_read_input_tokens: None,
+    cache_creation_input_tokens: None,
     }
 }
 
@@ -880,6 +890,10 @@ fn build_tool_use_cli_event(
         output_tokens: None,
         model: None,
         external_session_id: None,
+    raw_input_tokens: None,
+    raw_output_tokens: None,
+    cache_read_input_tokens: None,
+    cache_creation_input_tokens: None,
     }
 }
 
@@ -901,6 +915,10 @@ fn build_tool_result_cli_event(
         output_tokens: None,
         model: None,
         external_session_id: None,
+    raw_input_tokens: None,
+    raw_output_tokens: None,
+    cache_read_input_tokens: None,
+    cache_creation_input_tokens: None,
     }
 }
 
@@ -937,14 +955,6 @@ fn extract_opencode_part_tool_output(part: &serde_json::Value) -> Option<String>
             .or_else(|| part.get("content"))
             .or_else(|| part.pointer("/data/output"))
             .or_else(|| part.pointer("/data/content")),
-    )
-}
-
-fn extract_opencode_part_tokens(json: &serde_json::Value) -> (Option<u32>, Option<u32>) {
-    extract_usage_counts(
-        json.get("usage")
-            .or_else(|| json.pointer("/part/tokens"))
-            .or_else(|| json.pointer("/payload/part/tokens")),
     )
 }
 
@@ -1346,6 +1356,10 @@ fn parse_opencode_event_msg(session_id: &str, json: &serde_json::Value) -> Optio
                 output_tokens,
                 model: None,
                 external_session_id: None,
+            raw_input_tokens: None,
+            raw_output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             })
         }
         "task_started" => stringify_json_value(
@@ -1417,6 +1431,10 @@ fn parse_opencode_json_output(
                 output_tokens: None,
                 model: None,
                 external_session_id: None,
+            raw_input_tokens: None,
+            raw_output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             })
         }
         // thinking_start 显式事件（OpenCode 可能单独发送）
@@ -1433,6 +1451,10 @@ fn parse_opencode_json_output(
             output_tokens: None,
             model: None,
             external_session_id: None,
+        raw_input_tokens: None,
+        raw_output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
         }),
         // 工具调用开始
         "tool_use" | "content_block_start" | "tool_call" => {
@@ -1473,6 +1495,10 @@ fn parse_opencode_json_output(
                 output_tokens: None,
                 model: extract_opencode_model_name(json, requested_model),
                 external_session_id: None,
+            raw_input_tokens: None,
+            raw_output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             })
         }
         // 工具输入增量
@@ -1499,6 +1525,10 @@ fn parse_opencode_json_output(
                 output_tokens: None,
                 model: None,
                 external_session_id: None,
+            raw_input_tokens: None,
+            raw_output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             })
         }
         // 工具结果
@@ -1534,6 +1564,10 @@ fn parse_opencode_json_output(
                 output_tokens: None,
                 model: None,
                 external_session_id: None,
+            raw_input_tokens: None,
+            raw_output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             })
         }
         // 完整 assistant 消息（非流式）/ OpenCode 消息快照
@@ -1543,7 +1577,6 @@ fn parse_opencode_json_output(
                 .and_then(|c| c.as_str())
                 .or_else(|| json.pointer("/message/content").and_then(|c| c.as_str()));
             if let Some(text) = content {
-                let (input_tokens, output_tokens) = extract_usage_counts(json.get("usage"));
                 let model = json
                     .get("model")
                     .and_then(|m| m.as_str())
@@ -1557,10 +1590,14 @@ fn parse_opencode_json_output(
                     tool_input: None,
                     tool_result: None,
                     error: None,
-                    input_tokens,
-                    output_tokens,
+                    input_tokens: None,
+                    output_tokens: None,
                     model,
                     external_session_id: None,
+                    raw_input_tokens: None,
+                    raw_output_tokens: None,
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
                 })
             } else {
                 None
@@ -1595,10 +1632,9 @@ fn parse_opencode_json_output(
         // 用量统计
         "usage" | "message_start" | "message_delta" | "message_stop" | "turn.failed"
         | "session_meta" => {
-            let (input_tokens, output_tokens) = extract_usage_counts(json.get("usage"));
             let model = extract_opencode_model_name(json, requested_model);
 
-            if input_tokens.is_some() || output_tokens.is_some() || model.is_some() {
+            if model.is_some() {
                 Some(CliStreamEvent {
                     event_type: "usage".to_string(),
                     session_id: session_id.to_string(),
@@ -1608,10 +1644,14 @@ fn parse_opencode_json_output(
                     tool_input: None,
                     tool_result: None,
                     error: None,
-                    input_tokens,
-                    output_tokens,
+                    input_tokens: None,
+                    output_tokens: None,
                     model,
                     external_session_id: None,
+                    raw_input_tokens: None,
+                    raw_output_tokens: None,
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
                 })
             } else {
                 extract_external_session_id(json).map(|sid| CliStreamEvent {
@@ -1627,6 +1667,10 @@ fn parse_opencode_json_output(
                     output_tokens: None,
                     model: None,
                     external_session_id: Some(sid),
+                    raw_input_tokens: None,
+                    raw_output_tokens: None,
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
                 })
             }
         }
@@ -1652,6 +1696,10 @@ fn parse_opencode_json_output(
                     output_tokens: None,
                     model: None,
                     external_session_id: Some(sid),
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
                 })
             }
         }
@@ -1713,6 +1761,10 @@ fn parse_opencode_json_output(
                             output_tokens: None,
                             model: None,
                             external_session_id: None,
+                        raw_input_tokens: None,
+                        raw_output_tokens: None,
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                         })
                     } else {
                         None
@@ -1756,6 +1808,10 @@ fn parse_opencode_json_output(
                         output_tokens: None,
                         model: None,
                         external_session_id: None,
+                    raw_input_tokens: None,
+                    raw_output_tokens: None,
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
                     })
                 }
                 "reasoning" | "thinking" | "reasoning_content" => {
@@ -1779,6 +1835,10 @@ fn parse_opencode_json_output(
                         output_tokens: None,
                         model: None,
                         external_session_id: None,
+                    raw_input_tokens: None,
+                    raw_output_tokens: None,
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
                     })
                 }
                 "text" | "message" => {
@@ -1818,6 +1878,10 @@ fn parse_opencode_json_output(
                             output_tokens: None,
                             model: None,
                             external_session_id: None,
+                        raw_input_tokens: None,
+                        raw_output_tokens: None,
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                         })
                     } else {
                         None
@@ -1827,10 +1891,16 @@ fn parse_opencode_json_output(
         }
         // turn / session / step 元信息
         "turn.completed" | "result" | "step_finish" => {
-            let (input_tokens, output_tokens) = extract_opencode_part_tokens(json);
+            let usage = if event_type == "step_finish" {
+                json.pointer("/part/tokens")
+            } else {
+                json.get("usage")
+            };
+            let (input_tokens, output_tokens) = extract_usage_counts(usage);
             let model = extract_opencode_model_name(json, requested_model);
+            let external_session_id = extract_external_session_id(json);
 
-            if input_tokens.is_some() || output_tokens.is_some() || model.is_some() {
+            if input_tokens.is_some() || output_tokens.is_some() || model.is_some() || external_session_id.is_some() {
                 Some(CliStreamEvent {
                     event_type: "usage".to_string(),
                     session_id: session_id.to_string(),
@@ -1843,23 +1913,14 @@ fn parse_opencode_json_output(
                     input_tokens,
                     output_tokens,
                     model,
-                    external_session_id: None,
+                    external_session_id,
+                    raw_input_tokens: None,
+                    raw_output_tokens: None,
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
                 })
             } else {
-                extract_external_session_id(json).map(|sid| CliStreamEvent {
-                    event_type: "usage".to_string(),
-                    session_id: session_id.to_string(),
-                    content: None,
-                    tool_name: None,
-                    tool_call_id: None,
-                    tool_input: None,
-                    tool_result: None,
-                    error: None,
-                    input_tokens: None,
-                    output_tokens: None,
-                    model: None,
-                    external_session_id: Some(sid),
-                })
+                None
             }
         }
         // 未知事件：尝试提取文本内容，否则跳过
@@ -1916,6 +1977,10 @@ fn parse_opencode_json_output(
                                             output_tokens: None,
                                             model: None,
                                             external_session_id: None,
+                                        raw_input_tokens: None,
+                                        raw_output_tokens: None,
+                                        cache_read_input_tokens: None,
+                                        cache_creation_input_tokens: None,
                                         });
                                     }
                                 }
@@ -1944,6 +2009,10 @@ fn parse_opencode_json_output(
                                         output_tokens: None,
                                         model: None,
                                         external_session_id: None,
+                                    raw_input_tokens: None,
+                                    raw_output_tokens: None,
+                                    cache_read_input_tokens: None,
+                                    cache_creation_input_tokens: None,
                                     });
                                 }
                             }
@@ -1971,6 +2040,10 @@ fn parse_opencode_json_output(
                                     output_tokens: None,
                                     model: None,
                                     external_session_id: None,
+                                raw_input_tokens: None,
+                                raw_output_tokens: None,
+                                cache_read_input_tokens: None,
+                                cache_creation_input_tokens: None,
                                 });
                             }
                             _ => {}
@@ -1996,7 +2069,6 @@ fn extract_usage_counts(usage: Option<&serde_json::Value>) -> (Option<u32>, Opti
             u.get("input_tokens")
                 .or_else(|| u.get("inputTokens"))
                 .or_else(|| u.get("input"))
-                .or_else(|| u.get("cache_read_input_tokens"))
         })
         .and_then(|t| t.as_u64())
         .map(|t| t as u32);
@@ -2009,11 +2081,82 @@ fn extract_usage_counts(usage: Option<&serde_json::Value>) -> (Option<u32>, Opti
         .and_then(|t| t.as_u64())
         .map(|t| t as u32);
 
+    let cache_read = usage
+        .and_then(|u| {
+            u.get("cache_read_input_tokens")
+                .or_else(|| u.get("cacheReadInputTokens"))
+                .or_else(|| u.get("cached_input_tokens"))
+                .or_else(|| u.get("cachedInputTokens"))
+                .or_else(|| u.pointer("/cache/read"))
+                .or_else(|| u.pointer("/cacheRead"))
+        })
+        .and_then(|t| t.as_u64())
+        .map(|t| t as u32);
+    let cache_creation = usage
+        .and_then(|u| {
+            u.get("cache_creation_input_tokens")
+                .or_else(|| u.get("cacheCreationInputTokens"))
+                .or_else(|| u.pointer("/cache/write"))
+                .or_else(|| u.pointer("/cacheWrite"))
+        })
+        .and_then(|t| t.as_u64())
+        .map(|t| t as u32);
+
     let has_non_zero_usage =
         raw_input_tokens.unwrap_or(0) > 0 || raw_output_tokens.unwrap_or(0) > 0;
     if !has_non_zero_usage {
         return (None, None);
     }
 
-    (raw_input_tokens.or(Some(0)), raw_output_tokens.or(Some(0)))
+    let input_tokens = raw_input_tokens
+        .map(|raw| {
+            raw.saturating_sub(cache_read.unwrap_or(0))
+                .saturating_sub(cache_creation.unwrap_or(0))
+        });
+
+    (input_tokens, raw_output_tokens)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_opencode_json_output;
+
+    #[test]
+    fn parses_step_finish_usage_from_part_tokens() {
+        let json = serde_json::json!({
+            "type": "step_finish",
+            "timestamp": 1777269151308_u64,
+            "sessionID": "ses_232812fe3ffeEiKsp35xj8vNn2",
+            "part": {
+                "id": "prt_dcd7f1613001GHuOCAqD1gdr3V",
+                "reason": "stop",
+                "snapshot": "75222364c0977dfe3470d763b51eec056614e5df",
+                "messageID": "msg_dcd7ed115001Iz687Pb0fRjShs",
+                "sessionID": "ses_232812fe3ffeEiKsp35xj8vNn2",
+                "type": "step-finish",
+                "tokens": {
+                    "total": 50913,
+                    "input": 33054,
+                    "output": 3,
+                    "reasoning": 0,
+                    "cache": {
+                        "write": 0,
+                        "read": 17856
+                    }
+                },
+                "cost": 0
+            }
+        });
+
+        let event = parse_opencode_json_output("session-1", &json, Some("modelhub/glm-5.1"))
+            .expect("expected usage event");
+
+        assert_eq!(event.event_type, "usage");
+        assert_eq!(event.input_tokens, Some(15198));
+        assert_eq!(event.output_tokens, Some(3));
+        assert_eq!(
+            event.external_session_id.as_deref(),
+            Some("ses_232812fe3ffeEiKsp35xj8vNn2")
+        );
+    }
 }

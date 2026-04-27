@@ -249,6 +249,10 @@ fn build_thinking_event(session_id: &str, content: String) -> CliStreamEvent {
         output_tokens: None,
         model: None,
         external_session_id: None,
+    raw_input_tokens: None,
+    raw_output_tokens: None,
+    cache_read_input_tokens: None,
+    cache_creation_input_tokens: None,
     }
 }
 
@@ -266,6 +270,10 @@ fn build_thinking_start_event(session_id: &str) -> CliStreamEvent {
         output_tokens: None,
         model: None,
         external_session_id: None,
+    raw_input_tokens: None,
+    raw_output_tokens: None,
+    cache_read_input_tokens: None,
+    cache_creation_input_tokens: None,
     }
 }
 
@@ -287,6 +295,10 @@ fn build_tool_input_delta_event(
         output_tokens: None,
         model: None,
         external_session_id: None,
+    raw_input_tokens: None,
+    raw_output_tokens: None,
+    cache_read_input_tokens: None,
+    cache_creation_input_tokens: None,
     }
 }
 
@@ -848,7 +860,9 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
             &completion_fragments,
             stdout_outcome.emitted_error || stderr_outcome.emitted_error,
         );
-        let execution_succeeded = status.success() || should_treat_failure_as_success;
+        let should_complete_as_success = should_treat_failure_as_success
+            || (detected_failure.is_none() && stdout_outcome.emitted_content);
+        let execution_succeeded = status.success() || should_complete_as_success;
 
         if timeout_error_message.is_none() && detected_failure.is_none() && execution_succeeded {
             let done_event = CliStreamEvent {
@@ -864,6 +878,10 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                 output_tokens: None,
                 model: None,
                 external_session_id: None,
+            raw_input_tokens: None,
+            raw_output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             };
             emit_cli_event(&app, &event_name, plan_id.as_ref(), &done_event);
         }
@@ -915,7 +933,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
         }
 
         if !status.success() {
-            if should_treat_failure_as_success {
+            if should_complete_as_success {
                 log_info!(
                     "忽略 CLI 非零/空退出码：已收到有效输出，exit_code={:?}, {}",
                     status.code(),
@@ -1030,13 +1048,26 @@ fn extract_usage_counts(usage: Option<&serde_json::Value>) -> (Option<u32>, Opti
         .and_then(|u| {
             u.get("input_tokens")
                 .or_else(|| u.get("inputTokens"))
-                .or_else(|| u.get("cache_read_input_tokens"))
-                .or_else(|| u.get("cacheReadInputTokens"))
         })
         .and_then(|t| t.as_u64())
         .map(|t| t as u32);
     let raw_output_tokens = usage
         .and_then(|u| u.get("output_tokens").or_else(|| u.get("outputTokens")))
+        .and_then(|t| t.as_u64())
+        .map(|t| t as u32);
+
+    let cache_read = usage
+        .and_then(|u| {
+            u.get("cache_read_input_tokens")
+                .or_else(|| u.get("cacheReadInputTokens"))
+        })
+        .and_then(|t| t.as_u64())
+        .map(|t| t as u32);
+    let cache_creation = usage
+        .and_then(|u| {
+            u.get("cache_creation_input_tokens")
+                .or_else(|| u.get("cacheCreationInputTokens"))
+        })
         .and_then(|t| t.as_u64())
         .map(|t| t as u32);
 
@@ -1046,7 +1077,12 @@ fn extract_usage_counts(usage: Option<&serde_json::Value>) -> (Option<u32>, Opti
         return (None, None);
     }
 
-    let input_tokens = raw_input_tokens.or(Some(0));
+    let input_tokens = raw_input_tokens
+        .map(|raw| {
+            raw.saturating_sub(cache_read.unwrap_or(0))
+                .saturating_sub(cache_creation.unwrap_or(0))
+        })
+        .or(Some(0));
     let output_tokens = raw_output_tokens.or(Some(0));
 
     (input_tokens, output_tokens)
@@ -1090,6 +1126,10 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                     output_tokens: None,
                     model: None,
                     external_session_id: Some(sid),
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
                 })
             }
         }
@@ -1166,6 +1206,10 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                         output_tokens: None,
                         model: None,
                         external_session_id: None,
+                    raw_input_tokens: None,
+                    raw_output_tokens: None,
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
                     })
                 }
                 _ => None,
@@ -1176,92 +1220,31 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
             None
         }
         "message_start" => {
-            let message = json.get("message")?;
-
-            // 提取 token 使用量
-            let (input_tokens, output_tokens) = extract_usage_counts(message.get("usage"));
-
-            // 提取模型信息
-            let model = message
-                .get("model")
-                .and_then(|m| m.as_str())
-                .map(|m| m.to_string());
-
-            if input_tokens.is_some() || output_tokens.is_some() || model.is_some() {
-                Some(CliStreamEvent {
-                    event_type: "message_start".to_string(),
-                    session_id: session_id.to_string(),
-                    content: None,
-                    tool_name: None,
-                    tool_call_id: None,
-                    tool_input: None,
-                    tool_result: None,
-                    error: None,
-                    input_tokens,
-                    output_tokens,
-                    model,
-                    external_session_id: None,
-                })
-            } else {
-                None
-            }
+            let _ = json.get("message")?;
+            None
         }
         "message_delta" => {
-            let (input_tokens, output_tokens) = extract_usage_counts(json.get("usage"));
-
-            if input_tokens.is_some() || output_tokens.is_some() {
-                Some(CliStreamEvent {
-                    event_type: "usage".to_string(),
-                    session_id: session_id.to_string(),
-                    content: None,
-                    tool_name: None,
-                    tool_call_id: None,
-                    tool_input: None,
-                    tool_result: None,
-                    error: None,
-                    input_tokens,
-                    output_tokens,
-                    model: None,
-                    external_session_id: None,
-                })
-            } else {
-                None
-            }
+            let _ = json.get("usage");
+            None
         }
         // message_stop 只表示当前一轮模型消息结束，不代表整个 CLI 执行完成。
         // 在 agentic 工具调用场景中，CLI 会执行工具后继续下一轮对话，产生多个 message_stop。
         // 因此不能将 message_stop 转换为 done 事件，否则会导致前端过早标记消息为"已完成"。
         // 最终的 done 事件由进程退出后的代码统一发出。
         "message_stop" => {
-            // 不再将 message_stop 映射为 "done"。
-            // 最终的 done 事件由进程退出后的代码统一发出，
-            // 确保 result 事件中的 session_id 先被处理和持久化，
-            // 避免排队消息在 session_id 存储前就开始处理。
-            let (input_tokens, output_tokens) = extract_usage_counts(json.get("usage"));
-            if input_tokens.is_some() || output_tokens.is_some() {
-                Some(CliStreamEvent {
-                    event_type: "usage".to_string(),
-                    session_id: session_id.to_string(),
-                    content: None,
-                    tool_name: None,
-                    tool_call_id: None,
-                    tool_input: None,
-                    tool_result: None,
-                    error: None,
-                    input_tokens,
-                    output_tokens,
-                    model: None,
-                    external_session_id: None,
-                })
-            } else {
-                None
-            }
+            // 不再将 message_stop 映射为 done，也不消费其 usage。
+            None
         }
         "result" => {
-            let (input_tokens, output_tokens) = extract_usage_counts(json.get("usage"));
             let model = extract_result_model_name(json);
+            let external_session_id = extract_external_session_id(json);
+            let (input_tokens, output_tokens) = extract_usage_counts(json.get("usage"));
 
-            if input_tokens.is_some() || output_tokens.is_some() || model.is_some() {
+            if model.is_some()
+                || external_session_id.is_some()
+                || input_tokens.is_some()
+                || output_tokens.is_some()
+            {
                 Some(CliStreamEvent {
                     event_type: "usage".to_string(),
                     session_id: session_id.to_string(),
@@ -1274,48 +1257,19 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                     input_tokens,
                     output_tokens,
                     model,
-                    external_session_id: None,
-                })
-            } else {
-                // result 事件可能不携带 usage/model，但仍包含 session_id，
-                // 需要提取以保证 resume 绑定能正确存储。
-                extract_external_session_id(json).map(|sid| CliStreamEvent {
-                    event_type: "usage".to_string(),
-                    session_id: session_id.to_string(),
-                    content: None,
-                    tool_name: None,
-                    tool_call_id: None,
-                    tool_input: None,
-                    tool_result: None,
-                    error: None,
-                    input_tokens: None,
-                    output_tokens: None,
-                    model: None,
-                    external_session_id: Some(sid),
-                })
-            }
-        }
-        "turn.completed" => {
-            let (input_tokens, output_tokens) = extract_usage_counts(json.get("usage"));
-
-            if input_tokens.is_some() || output_tokens.is_some() {
-                Some(CliStreamEvent {
-                    event_type: "usage".to_string(),
-                    session_id: session_id.to_string(),
-                    content: None,
-                    tool_name: None,
-                    tool_call_id: None,
-                    tool_input: None,
-                    tool_result: None,
-                    error: None,
-                    input_tokens,
-                    output_tokens,
-                    model: None,
-                    external_session_id: None,
+                    external_session_id,
+                    raw_input_tokens: None,
+                    raw_output_tokens: None,
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
                 })
             } else {
                 None
             }
+        }
+        "turn.completed" => {
+            let _ = json.get("usage");
+            None
         }
         "tool_use" => {
             let tool_name = json.get("name").and_then(|n| n.as_str())?;
@@ -1340,6 +1294,10 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                 output_tokens: None,
                 model: None,
                 external_session_id: None,
+            raw_input_tokens: None,
+            raw_output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             })
         }
         "tool_result" => {
@@ -1359,6 +1317,10 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                 output_tokens: None,
                 model: None,
                 external_session_id: None,
+            raw_input_tokens: None,
+            raw_output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
             })
         }
         "error" => {
@@ -1373,11 +1335,17 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
         "assistant" => {
             let message = json.get("message")?;
             let content_array = message.get("content").and_then(|c| c.as_array())?;
-            let (input_tokens, output_tokens) = extract_usage_counts(message.get("usage"));
             let model = message
                 .get("model")
                 .and_then(|m| m.as_str())
                 .map(|m| m.to_string());
+
+            // Claude CLI 在一次 agentic 执行中会输出多条 assistant 事件，
+            // 同一 message/turn 的 usage 可能被重复附带在多条事件里。
+            // 统一只以最终 result.usage 作为 token 的 canonical 来源，
+            // 避免前端和 usage 落库出现重复累计。
+            let input_tokens = None;
+            let output_tokens = None;
 
             // 遍历所有 content items，找到第一个有效的并返回
             // 优先级：thinking > text > tool_use
@@ -1428,6 +1396,10 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                             output_tokens,
                             model: model.clone(),
                             external_session_id: None,
+                        raw_input_tokens: None,
+                        raw_output_tokens: None,
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                         });
                     }
                     "tool_use" => {
@@ -1450,6 +1422,10 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                             output_tokens,
                             model: model.clone(),
                             external_session_id: None,
+                        raw_input_tokens: None,
+                        raw_output_tokens: None,
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                         });
                     }
                     _ => {
@@ -1498,6 +1474,10 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                             output_tokens: None,
                             model: None,
                             external_session_id: None,
+                        raw_input_tokens: None,
+                        raw_output_tokens: None,
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                         })
                     }
                     _ => {
@@ -1521,8 +1501,8 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
 #[cfg(test)]
 mod tests {
     use super::{
-        should_ignore_stderr_line, should_treat_process_failure_as_success, StderrReadOutcome,
-        StdoutReadOutcome,
+        parse_claude_json_output, should_ignore_stderr_line,
+        should_treat_process_failure_as_success, StderrReadOutcome, StdoutReadOutcome,
     };
 
     #[test]
@@ -1575,5 +1555,81 @@ mod tests {
             &stdout_outcome,
             &stderr_outcome,
         ));
+    }
+
+    #[test]
+    fn ignores_assistant_usage_and_waits_for_result_usage() {
+        let json = serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "type": "message",
+                "model": "glm-5.1",
+                "usage": {
+                    "input_tokens": 10140,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "output_tokens": 0
+                },
+                "role": "assistant",
+                "id": "20260427135221d5f4e77d05f14038",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "ok"
+                    }
+                ]
+            },
+            "parent_tool_use_id": null,
+            "session_id": "f942ab3e-be1a-4684-8bee-e88f444e1a0e",
+            "uuid": "5bf1cbc1-af5e-4f1f-b47f-ff8e02337520"
+        });
+
+        let event =
+            parse_claude_json_output("session-1", &json).expect("expected assistant event");
+
+        assert_eq!(event.event_type, "content");
+        assert_eq!(event.content.as_deref(), Some("ok"));
+        assert_eq!(event.input_tokens, None);
+        assert_eq!(event.output_tokens, None);
+        assert_eq!(event.model.as_deref(), Some("glm-5.1"));
+        assert_eq!(event.external_session_id, None);
+    }
+
+    #[test]
+    fn parses_result_usage_from_usage_payload() {
+        let json = serde_json::json!({
+            "type": "result",
+            "subtype": "success",
+            "is_error": false,
+            "duration_ms": 11403,
+            "duration_api_ms": 11343,
+            "num_turns": 1,
+            "result": "ok",
+            "stop_reason": "end_turn",
+            "session_id": "f942ab3e-be1a-4684-8bee-e88f444e1a0e",
+            "usage": {
+                "input_tokens": 65630,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 320,
+                "output_tokens": 3
+            },
+            "modelUsage": {
+                "glm-5.1": {
+                    "inputTokens": 65630,
+                    "outputTokens": 3
+                }
+            }
+        });
+
+        let event = parse_claude_json_output("session-1", &json).expect("expected usage event");
+
+        assert_eq!(event.event_type, "usage");
+        assert_eq!(event.input_tokens, Some(65310));
+        assert_eq!(event.output_tokens, Some(3));
+        assert_eq!(event.model.as_deref(), Some("glm-5.1"));
+        assert_eq!(
+            event.external_session_id.as_deref(),
+            Some("f942ab3e-be1a-4684-8bee-e88f444e1a0e")
+        );
     }
 }
