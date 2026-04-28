@@ -472,12 +472,12 @@ export function useTaskBoard(options: UseTaskBoardOptions) {
     }
   }
 
-  // 从“执行中且暂停”状态恢复整条执行流
+  // 仅恢复进行中列里的任务，不将待办任务加入执行队列
   async function handleStartExecution() {
     if (!currentPlanId.value) return
 
     try {
-      await taskExecutionStore.resumePlanExecutionFlow(currentPlanId.value)
+      await taskExecutionStore.resumeInProgressExecutionFlow(currentPlanId.value)
     } catch (error) {
       console.error('Failed to start execution:', error)
     }
@@ -539,7 +539,9 @@ export function useTaskBoard(options: UseTaskBoardOptions) {
         maxRetries: taskData.maxRetries || 3,
         implementationSteps: taskData.implementationSteps,
         testSteps: taskData.testSteps,
-        acceptanceCriteria: taskData.acceptanceCriteria
+        acceptanceCriteria: taskData.acceptanceCriteria,
+        dependencies: taskData.dependencies,
+        memoryLibraryIds: taskData.memoryLibraryIds
       })
       showCreateModal.value = false
     } catch (error) {

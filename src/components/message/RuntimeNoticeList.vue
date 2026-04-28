@@ -16,9 +16,11 @@ const props = withDefaults(defineProps<{
   notices: RuntimeNotice[]
   defaultExpanded?: boolean
   fallbackUsage?: UsageFallback | null
+  compactContextSummary?: boolean
 }>(), {
   defaultExpanded: false,
-  fallbackUsage: null
+  fallbackUsage: null,
+  compactContextSummary: false
 })
 const { t } = useI18n()
 
@@ -63,8 +65,48 @@ function isEnvironmentNotice(notice: RuntimeNotice) {
   return notice.id === 'environment'
 }
 
+function isCompactContextNotice(notice: RuntimeNotice) {
+  return props.compactContextSummary && notice.id === 'context'
+}
+
 function noticeChips(notice: RuntimeNotice) {
   return summarizeRuntimeNotice(notice).map(chip => formatChipLabel(notice, chip))
+}
+
+function extractNoticeFieldValue(notice: RuntimeNotice, labels: string[]) {
+  const lines = notice.content
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+
+  for (const line of lines) {
+    const normalizedLine = line.replace(/^-\s*/, '')
+    const separatorIndex = normalizedLine.indexOf(':')
+    if (separatorIndex < 0) {
+      continue
+    }
+
+    const label = normalizedLine.slice(0, separatorIndex).trim().toLowerCase()
+    const value = normalizedLine.slice(separatorIndex + 1).trim()
+    if (!value) {
+      continue
+    }
+
+    if (labels.includes(label)) {
+      return value
+    }
+  }
+
+  return null
+}
+
+function compactContextNoticeChips(notice: RuntimeNotice) {
+  const chips = [
+    extractNoticeFieldValue(notice, ['模型', 'model']),
+    extractNoticeFieldValue(notice, ['专家', 'expert'])
+  ].filter((value): value is string => Boolean(value))
+
+  return chips.length > 0 ? chips : noticeChips(notice).slice(0, 2)
 }
 
 function usageSummary(notice: RuntimeNotice) {
@@ -291,7 +333,32 @@ function formatChipLabel(notice: RuntimeNotice, chip: string) {
         </div>
 
         <template v-else>
+          <div
+            v-if="isCompactContextNotice(notice)"
+            class="runtime-notice__header runtime-notice__header--static"
+          >
+            <div class="runtime-notice__header-main">
+              <span class="runtime-notice__eyebrow">{{ t('message.runtimeNotice.runtime') }}</span>
+              <span class="runtime-notice__title">{{ notice.title }}</span>
+            </div>
+            <div class="runtime-notice__header-side">
+              <div
+                v-if="compactContextNoticeChips(notice).length > 0"
+                class="runtime-notice__chips"
+              >
+                <span
+                  v-for="chip in compactContextNoticeChips(notice)"
+                  :key="chip"
+                  class="runtime-notice__chip"
+                >
+                  {{ chip }}
+                </span>
+              </div>
+            </div>
+          </div>
+
           <button
+            v-else
             type="button"
             class="runtime-notice__header"
             @click="toggleNotice(notice.id)"
@@ -321,6 +388,7 @@ function formatChipLabel(notice: RuntimeNotice, chip: string) {
           </button>
 
           <div
+            v-if="!isCompactContextNotice(notice)"
             v-show="isExpanded(notice.id)"
             class="runtime-notice__content"
           >
@@ -401,6 +469,10 @@ function formatChipLabel(notice: RuntimeNotice, chip: string) {
 .runtime-notice__summary-runtime:hover,
 .runtime-notice__header:hover {
   background: var(--runtime-notice-hover);
+}
+
+.runtime-notice__header--static {
+  cursor: default;
 }
 
 .runtime-notice__header-main {

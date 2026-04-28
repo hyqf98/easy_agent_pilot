@@ -91,7 +91,7 @@ import {
 import { loadMountedMemoryPrompt } from '@/services/memory/mountedMemoryPrompt'
 import { resolveUsageModelHint } from '@/services/conversation/usageModelHint'
 import {
-  classifyCliFailureFragments,
+  classifyCliFailureWithExplicitPriority,
   createCliFailureFragment,
   type CliFailureMatch
 } from '@/utils/cliFailureMonitor'
@@ -155,6 +155,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
   // 待持久化的日志缓冲区 (taskId -> PendingLogBuffer)
   const pendingLogBuffers = ref<Map<string, PendingLogBuffer>>(new Map())
   const pendingLogWrites = new Map<string, Set<Promise<unknown>>>()
+  const pendingTaskRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const usageBaselines = new Map<string, UsageBaseline>()
 
   // ==================== Getters ====================
@@ -253,6 +254,33 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
     clearPendingLogBuffer(taskId, pendingLogBuffers.value)
   }
 
+  function clearPendingTaskRetry(taskId: string): void {
+    const timer = pendingTaskRetryTimers.get(taskId)
+    if (!timer) {
+      return
+    }
+
+    clearTimeout(timer)
+    pendingTaskRetryTimers.delete(taskId)
+  }
+
+  function scheduleTaskRetry(planId: string, taskId: string): void {
+    clearPendingTaskRetry(taskId)
+
+    const timer = setTimeout(() => {
+      pendingTaskRetryTimers.delete(taskId)
+
+      const state = executionStates.value.get(taskId)
+      if (!state || state.status !== 'queued' || isTaskStopRequested(taskId, stopRequestedTaskIds.value)) {
+        return
+      }
+
+      void executeTask(planId, taskId)
+    }, TASK_AUTO_RETRY_DELAY_MS)
+
+    pendingTaskRetryTimers.set(taskId, timer)
+  }
+
   async function flushPendingLogs(taskId: string): Promise<void> {
     await flushTaskPendingLogs(taskId, pendingLogBuffers.value)
   }
@@ -292,6 +320,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
   function resetExecutionRuntime(taskId: string): void {
     const state = executionStates.value.get(taskId)
     resetExecutionStateRuntime(state)
+    clearPendingTaskRetry(taskId)
     clearPendingBuffer(taskId)
   }
 
@@ -343,8 +372,17 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
     }
 
     const logStartIndex = options.logStartIndex ?? 0
-    const fragments = [
+    const explicitFragments = [
       createCliFailureFragment('error', options.errorMessage),
+      ...state.logs.slice(logStartIndex).flatMap((log) => [
+        createCliFailureFragment('error', log.type === 'error' ? log.content : undefined)
+      ]),
+      ...state.toolCalls.flatMap((toolCall) => [
+        createCliFailureFragment('error', toolCall.errorMessage)
+      ])
+    ].filter((item): item is NonNullable<typeof item> => Boolean(item))
+    const fragments = [
+      ...explicitFragments,
       createCliFailureFragment('content', state.accumulatedContent),
       ...state.logs.slice(logStartIndex).flatMap((log) => [
         createCliFailureFragment(
@@ -358,7 +396,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
       ])
     ].filter((item): item is NonNullable<typeof item> => Boolean(item))
 
-    return classifyCliFailureFragments(runtimeLabel, fragments)
+    return classifyCliFailureWithExplicitPriority(runtimeLabel, explicitFragments, fragments)
   }
 
   function updateTaskTokenUsage(
@@ -574,6 +612,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
   async function enqueueTask(planId: string, taskId: string): Promise<void> {
     const taskStore = useTaskStore()
     await markTaskInProgress(taskId)
+    clearPendingTaskRetry(taskId)
 
     const queue = getOrCreateQueue(planId)
     const state = initExecutionState(taskId)
@@ -667,6 +706,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
     const isResume = options.resume === true
     const executionSessionId = `task-${taskId}`
     const resumeContext = isResume ? buildResumeExecutionContext(state) : ''
+    clearPendingTaskRetry(taskId)
     clearTaskStopRequested(taskId, stopRequestedTaskIds.value)
     state.status = 'running'
     state.sessionId = executionSessionId
@@ -1053,10 +1093,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
           recordTaskUsageOnce()
           skipQueueAdvance = true
 
-          // 使用 setTimeout 延迟重试，避免立即重入
-          setTimeout(() => {
-            void executeTask(planId, taskId)
-          }, TASK_AUTO_RETRY_DELAY_MS)
+          scheduleTaskRetry(planId, taskId)
 
           return
         } else {
@@ -1555,6 +1592,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
 
     const sessionId = `task-${taskId}`
     markTaskStopRequested(taskId, stopRequestedTaskIds.value)
+    clearPendingTaskRetry(taskId)
 
     if (isRunningTask) {
       state.status = 'stopped'
@@ -1648,6 +1686,37 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
     }
   }
 
+  async function resumeInProgressExecutionFlow(planId: string): Promise<void> {
+    const queue = getOrCreateQueue(planId)
+    const currentTaskId = queue.currentTaskId
+    const currentState = currentTaskId
+      ? executionStates.value.get(currentTaskId)
+      : undefined
+
+    if (currentTaskId && currentState?.status === 'running') {
+      await syncPlanRuntimeState(planId)
+      return
+    }
+
+    queue.isPaused = false
+    queue.currentTaskId = null
+    queue.pendingTaskIds = []
+    queue.lastInterruptedTaskId = null
+
+    const candidateTaskIds = getOrderedInProgressTaskIds(planId)
+    if (candidateTaskIds.length === 0) {
+      normalizePlanExecutionStates(planId)
+      await syncPlanRuntimeState(planId)
+      return
+    }
+
+    normalizePlanExecutionStates(planId)
+
+    for (const taskId of candidateTaskIds) {
+      await enqueueTask(planId, taskId)
+    }
+  }
+
   async function detachTaskFromExecution(taskId: string): Promise<void> {
     const taskStore = useTaskStore()
     const task = taskStore.tasks.find(item => item.id === taskId)
@@ -1657,6 +1726,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
 
     const queue = executionQueues.value.get(task.planId)
     if (queue) {
+      clearPendingTaskRetry(taskId)
       removeTaskFromQueue(queue, taskId)
       if (queue.lastInterruptedTaskId === taskId) {
         queue.lastInterruptedTaskId = null
@@ -1813,6 +1883,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
 
     taskIds.forEach((taskId) => {
       markTaskStopRequested(taskId, stopRequestedTaskIds.value)
+      clearPendingTaskRetry(taskId)
       clearPendingBuffer(taskId)
       agentExecutor.abort(`task-${taskId}`)
     })
@@ -1866,6 +1937,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
     startTaskExecution,
     pausePlanExecutionFlow,
     resumePlanExecutionFlow,
+    resumeInProgressExecutionFlow,
     resumeTaskExecution,
     detachTaskFromExecution,
     synchronizePlanExecutionQueue,

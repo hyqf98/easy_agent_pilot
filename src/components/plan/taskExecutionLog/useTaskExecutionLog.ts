@@ -28,6 +28,11 @@ interface UseTaskExecutionLogOptions {
   }
 }
 
+interface TaskExecutionRetryState {
+  current: number
+  max: number
+}
+
 export function useTaskExecutionLog(options: UseTaskExecutionLogOptions) {
   function formatTodoStatusLabel(status: TodoItem['status']) {
     switch (status) {
@@ -121,6 +126,32 @@ export function useTaskExecutionLog(options: UseTaskExecutionLogOptions) {
 
   const logs = computed(() => {
     return executionState.value?.logs ?? []
+  })
+
+  const activeCliRetryState = computed<TaskExecutionRetryState | null>(() => {
+    for (let index = logs.value.length - 1; index >= 0; index -= 1) {
+      const log = logs.value[index]
+      const metadata = log.metadata
+
+      if (
+        metadata?.retryGroup === 'cli_failure_retry'
+        && typeof metadata.retryCount === 'number'
+        && typeof metadata.maxRetries === 'number'
+      ) {
+        return {
+          current: metadata.retryCount,
+          max: metadata.maxRetries
+        }
+      }
+
+      if (log.type === 'content' || log.type === 'thinking' || log.type === 'thinking_start' || log.type === 'tool_use'
+        || log.type === 'tool_input_delta' || log.type === 'tool_result' || log.type === 'error'
+        || (log.type === 'system' && metadata?.retryGroup !== 'cli_failure_retry')) {
+        return null
+      }
+    }
+
+    return null
   })
 
   const isTodoCollapsed = ref(true)
@@ -449,6 +480,7 @@ export function useTaskExecutionLog(options: UseTaskExecutionLogOptions) {
     todoCompletedCount,
     activeTodoItems,
     hiddenActiveTodoCount,
+    activeCliRetryState,
     logActivity,
     isWaitingInput,
     effectiveStatus,

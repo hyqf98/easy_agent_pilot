@@ -37,11 +37,17 @@ const RETRYABLE_PATTERNS = [
   'connection refused',
   'connection aborted',
   'connection closed',
+  'broken pipe',
+  'epipe',
+  'socket hang up',
+  'unexpected eof',
+  'stream disconnected',
+  'server disconnected',
+  'resource temporarily unavailable',
+  'temporarily busy',
   'econnreset',
   'econnrefused',
   'etimedout',
-  'api error',
-  'apl error',
   '达到速率限制',
   '账户已达到速率限制',
   '请求频率',
@@ -122,12 +128,14 @@ function hasStructuredErrorPayload(normalized: string): boolean {
     || trimmed.startsWith("[{'error'")
 }
 
+function looksLikeFailurePayload(normalized: string): boolean {
+  return startsWithErrorContext(normalized) || hasStructuredErrorPayload(normalized)
+}
+
 function isPrimaryResponseContent(normalized: string): boolean {
   return Boolean(normalized)
     && !hasStructuredTaskResult(normalized)
-    && !startsWithErrorContext(normalized)
-    && !hasStructuredErrorPayload(normalized)
-    && !hasRetryablePattern(normalized)
+    && !looksLikeFailurePayload(normalized)
 }
 
 function sourceAllowsRetryableMatch(
@@ -142,7 +150,7 @@ function sourceAllowsRetryableMatch(
     return false
   }
 
-  return startsWithErrorContext(normalized) || hasStructuredErrorPayload(normalized)
+  return looksLikeFailurePayload(normalized)
 }
 
 function isNonRetryableFailure(
@@ -157,7 +165,7 @@ function isNonRetryableFailure(
     return false
   }
 
-  return startsWithErrorContext(normalized) || hasStructuredErrorPayload(normalized)
+  return looksLikeFailurePayload(normalized)
 }
 
 function stripAnsiEscapes(text: string): string {
@@ -225,4 +233,17 @@ export function classifyCliFailureFragments(
   }
 
   return null
+}
+
+export function classifyCliFailureWithExplicitPriority(
+  runtimeLabel: string,
+  explicitFragments: CliFailureFragment[],
+  allFragments: CliFailureFragment[]
+): CliFailureMatch | null {
+  const explicitFailure = classifyCliFailureFragments(runtimeLabel, explicitFragments)
+  if (explicitFailure?.kind === 'retryable') {
+    return explicitFailure
+  }
+
+  return classifyCliFailureFragments(runtimeLabel, allFragments)
 }

@@ -31,10 +31,12 @@ const props = withDefaults(defineProps<{
   groupToolCalls?: boolean
   showElapsedMeta?: boolean
   formCancelText?: string
+  compactContextNotices?: boolean
 }>(), {
   groupToolCalls: false,
   showElapsedMeta: false,
-  formCancelText: '取消'
+  formCancelText: '取消',
+  compactContextNotices: false
 })
 const { t } = useI18n()
 const themeStore = useThemeStore()
@@ -554,6 +556,7 @@ function getEntryElapsedLabel(entry: TimelineEntry) {
           <RuntimeNoticeList
             :notices="toRuntimeNotices(block.entry.content)"
             :fallback-usage="block.entry.runtimeFallbackUsage || null"
+            :compact-context-summary="props.compactContextNotices"
           />
         </div>
 

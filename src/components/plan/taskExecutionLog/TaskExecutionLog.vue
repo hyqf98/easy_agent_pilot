@@ -27,6 +27,7 @@ const {
   todoCompletedCount,
   activeTodoItems,
   hiddenActiveTodoCount,
+  activeCliRetryState,
   isWaitingInput,
   effectiveStatus,
   isRunning,
@@ -277,7 +278,10 @@ const {
         v-else
         class="log-entries"
       >
-        <ExecutionTimeline :entries="timelineEntries" />
+        <ExecutionTimeline
+          :entries="timelineEntries"
+          :compact-context-notices="true"
+        />
       </div>
 
       <!-- 运行指示器 -->
@@ -286,7 +290,11 @@ const {
         class="running-indicator"
       >
         <span class="indicator-dot" />
-        <span class="indicator-text">{{ t('taskExecution.aiRunning') }}</span>
+        <span class="indicator-text">
+          {{ activeCliRetryState
+            ? t('message.status.assistantRetrying', { current: activeCliRetryState.current, max: activeCliRetryState.max })
+            : t('taskExecution.aiRunning') }}
+        </span>
       </div>
     </div>
   </div>

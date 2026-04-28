@@ -63,7 +63,7 @@ import type { ExecutionLogMetadata } from '@/types/taskExecution'
 import type { ToolCall } from '@/stores/message'
 import type { AgentRuntimeKey } from '@/services/conversation/runtimeProfiles'
 import {
-  classifyCliFailureFragments,
+  classifyCliFailureWithExplicitPriority,
   createCliFailureFragment,
   type CliFailureMatch
 } from '@/utils/cliFailureMonitor'
@@ -308,8 +308,17 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
     }
 
     const logStartIndex = options.logStartIndex ?? 0
-    const fragments = [
+    const explicitFragments = [
       createCliFailureFragment('error', options.errorMessage),
+      ...state.logs.slice(logStartIndex).flatMap((log) => [
+        createCliFailureFragment('error', log.type === 'error' ? log.content : undefined)
+      ]),
+      ...state.toolCalls.flatMap((toolCall) => [
+        createCliFailureFragment('error', toolCall.errorMessage)
+      ])
+    ].filter((item): item is NonNullable<typeof item> => Boolean(item))
+    const fragments = [
+      ...explicitFragments,
       createCliFailureFragment('content', state.accumulatedContent),
       ...state.logs.slice(logStartIndex).flatMap((log) => [
         createCliFailureFragment(
@@ -323,7 +332,7 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
       ])
     ].filter((item): item is NonNullable<typeof item> => Boolean(item))
 
-    return classifyCliFailureFragments(runtimeLabel, fragments)
+    return classifyCliFailureWithExplicitPriority(runtimeLabel, explicitFragments, fragments)
   }
 
   async function loadSteps(runId: string): Promise<SoloStep[]> {

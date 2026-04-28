@@ -58,11 +58,17 @@ const RETRYABLE_PATTERNS: &[&str] = &[
     "connection refused",
     "connection aborted",
     "connection closed",
+    "broken pipe",
+    "epipe",
+    "socket hang up",
+    "unexpected eof",
+    "stream disconnected",
+    "server disconnected",
+    "resource temporarily unavailable",
+    "temporarily busy",
     "econnreset",
     "econnrefused",
     "etimedout",
-    "api error",
-    "apl error",
     "达到速率限制",
     "账户已达到速率限制",
     "请求频率",
@@ -219,12 +225,14 @@ fn has_structured_error_payload(normalized: &str) -> bool {
         || trimmed.starts_with("[{'error'")
 }
 
+fn looks_like_failure_payload(normalized: &str) -> bool {
+    starts_with_error_context(normalized) || has_structured_error_payload(normalized)
+}
+
 fn is_primary_response_content(normalized: &str) -> bool {
     !normalized.is_empty()
         && !has_structured_task_result(normalized)
-        && !starts_with_error_context(normalized)
-        && !has_structured_error_payload(normalized)
-        && !is_retryable_failure(normalized)
+        && !looks_like_failure_payload(normalized)
 }
 
 fn has_primary_response_content(fragments: &[CliTextFragment]) -> bool {
@@ -242,7 +250,7 @@ fn source_allows_retryable_match(source: CliTextSource, normalized: &str) -> boo
                 return false;
             }
 
-            starts_with_error_context(normalized) || has_structured_error_payload(normalized)
+            looks_like_failure_payload(normalized)
         }
     }
 }
@@ -255,7 +263,7 @@ fn is_non_retryable_failure(source: CliTextSource, normalized: &str) -> bool {
                 return false;
             }
 
-            starts_with_error_context(normalized) || has_structured_error_payload(normalized)
+            looks_like_failure_payload(normalized)
         }
     }
 }
@@ -366,5 +374,38 @@ mod tests {
 
         let failure = classify_cli_completion("Claude", &fragments, true);
         assert!(failure.is_none());
+    }
+
+    #[test]
+    fn ignores_normal_assistant_explanation_that_mentions_rate_limit() {
+        let fragments = vec![
+            CliTextFragment::new(
+                CliTextSource::Content,
+                "如果出现 429 rate limit，请降低并发后重试；当前任务已经分析完成。"
+            )
+            .expect("fragment"),
+            CliTextFragment::new(
+                CliTextSource::Stderr,
+                "fatal error: external helper exited unexpectedly"
+            )
+            .expect("fragment"),
+        ];
+
+        let failure = classify_cli_completion("Codex", &fragments, true);
+        assert!(failure.is_none());
+    }
+
+    #[test]
+    fn classifies_retryable_process_pipe_failures() {
+        let fragments = vec![CliTextFragment::new(
+            CliTextSource::Stderr,
+            "error: broken pipe (os error 32)"
+        )
+        .expect("fragment")];
+
+        let failure =
+            classify_cli_completion("Codex", &fragments, true).expect("should classify");
+
+        assert_eq!(failure.kind, CliCompletionFailureKind::Retryable);
     }
 }

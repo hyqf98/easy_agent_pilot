@@ -329,9 +329,7 @@ onMounted(async () => {
         <div
           v-else
           class="overview-panel__empty"
-        >
-          {{ t('taskBoard.planOverview.emptyOverview') }}
-        </div>
+        />
       </div>
 
       <div

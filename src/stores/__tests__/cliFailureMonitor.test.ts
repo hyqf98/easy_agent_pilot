@@ -51,4 +51,21 @@ describe('cliFailureMonitor', () => {
 
     expect(result).toBeNull()
   })
+
+  it('ignores normal assistant explanations that mention rate limits', () => {
+    const result = classifyCliFailureFragments('Codex', [
+      createCliFailureFragment('content', '如果出现 429 rate limit，请降低并发后重试；当前任务已经分析完成。')!,
+      createCliFailureFragment('stderr', 'fatal error: external helper exited unexpectedly')!
+    ])
+
+    expect(result).toBeNull()
+  })
+
+  it('classifies broken pipe process exits as retryable', () => {
+    const result = classifyCliFailureFragments('Codex', [
+      createCliFailureFragment('stderr', 'error: broken pipe (os error 32)')!
+    ])
+
+    expect(result?.kind).toBe('retryable')
+  })
 })

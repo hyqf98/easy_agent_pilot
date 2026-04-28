@@ -33,7 +33,7 @@ import type { RuntimeNotice } from '@/utils/runtimeNotice'
 import { buildContextStrategyNotice } from '@/utils/runtimeNotice'
 import { loadAgentMcpServers } from '@/utils/mcpServerConfig'
 import {
-  classifyCliFailureFragments,
+  classifyCliFailureWithExplicitPriority,
   createCliFailureFragment
 } from '@/utils/cliFailureMonitor'
 import {
@@ -765,17 +765,14 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       return
     }
 
-    const explicitFailure = classifyCliFailureFragments('Plan Split CLI', [
+    const explicitFragments = [
       createCliFailureFragment('error', session.value.errorMessage),
       createCliFailureFragment('error', session.value.parseError)
+    ].filter((item): item is NonNullable<typeof item> => Boolean(item))
+    const retryableFailure = classifyCliFailureWithExplicitPriority('Plan Split CLI', explicitFragments, [
+      ...explicitFragments,
+      createCliFailureFragment('content', session.value.rawContent)
     ].filter((item): item is NonNullable<typeof item> => Boolean(item)))
-    const retryableFailure = explicitFailure?.kind === 'retryable'
-      ? explicitFailure
-      : classifyCliFailureFragments('Plan Split CLI', [
-          createCliFailureFragment('error', session.value.errorMessage),
-          createCliFailureFragment('error', session.value.parseError),
-          createCliFailureFragment('content', session.value.rawContent)
-        ].filter((item): item is NonNullable<typeof item> => Boolean(item)))
     if (!retryableFailure || retryableFailure.kind !== 'retryable') {
       autoRetryScheduled.value = false
       autoRetryNextRunAt.value = null
