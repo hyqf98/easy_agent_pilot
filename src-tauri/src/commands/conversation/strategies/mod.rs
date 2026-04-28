@@ -7,6 +7,7 @@ mod codex_sdk;
 mod opencode_cli;
 
 pub use claude_cli::ClaudeCliStrategy;
+pub(crate) use claude_cli::lookup_claude_tool_use_usage;
 pub use claude_sdk::ClaudeSdkStrategy;
 pub use codex_cli::CodexCliStrategy;
 pub use codex_sdk::CodexSdkStrategy;

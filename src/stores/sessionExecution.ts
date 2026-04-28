@@ -44,6 +44,13 @@ export interface QueuedMessageDraft {
   errorMessage?: string
 }
 
+export interface SessionRetryState {
+  assistantMessageId: string
+  userMessageId: string
+  current: number
+  max: number
+}
+
 /**
  * 单个会话的执行状态
  */
@@ -78,6 +85,10 @@ export interface SessionExecutionState {
   streamTimerId: ReturnType<typeof setInterval> | null
   /** 当前流式消息 ID */
   currentStreamingMessageId: string | null
+  /** 当前正在展示的重试状态 */
+  currentRetryState: SessionRetryState | null
+  /** 同一条用户消息累计重试次数 */
+  retryCountsByUserMessageId: Record<string, number>
   /** 待发送消息队列 */
   queuedMessages: QueuedMessageDraft[]
 }
@@ -181,6 +192,12 @@ export const useSessionExecutionStore = defineStore('sessionExecution', () => {
     }
   })
 
+  const getCurrentRetryState = computed(() => {
+    return (sessionId: string) => {
+      return getExecutionState(sessionId).currentRetryState
+    }
+  })
+
   /**
    * 创建默认的执行状态
    */
@@ -204,6 +221,8 @@ export const useSessionExecutionStore = defineStore('sessionExecution', () => {
       isStreaming: false,
       streamTimerId: null,
       currentStreamingMessageId: null,
+      currentRetryState: null,
+      retryCountsByUserMessageId: {},
       queuedMessages: []
     }
   }
@@ -506,6 +525,34 @@ export const useSessionExecutionStore = defineStore('sessionExecution', () => {
     state.currentStreamingMessageId = messageId
   }
 
+  function beginRetryAttempt(
+    sessionId: string,
+    payload: {
+      assistantMessageId: string
+      userMessageId: string
+      max: number
+    }
+  ): SessionRetryState {
+    const state = getExecutionState(sessionId)
+    const nextCurrent = (state.retryCountsByUserMessageId[payload.userMessageId] ?? 0) + 1
+    state.retryCountsByUserMessageId = {
+      ...state.retryCountsByUserMessageId,
+      [payload.userMessageId]: nextCurrent
+    }
+    state.currentRetryState = {
+      assistantMessageId: payload.assistantMessageId,
+      userMessageId: payload.userMessageId,
+      current: nextCurrent,
+      max: payload.max
+    }
+    return state.currentRetryState
+  }
+
+  function clearCurrentRetryState(sessionId: string) {
+    const state = getExecutionState(sessionId)
+    state.currentRetryState = null
+  }
+
   /**
    * 开始发送消息 - 设置相关状态
    */
@@ -623,6 +670,7 @@ export const useSessionExecutionStore = defineStore('sessionExecution', () => {
     getIsAwaitingRetry,
     getIsBusy,
     getIsStreaming,
+    getCurrentRetryState,
     hasAnyRunningSession,
     runningSessionIds,
 
@@ -658,6 +706,8 @@ export const useSessionExecutionStore = defineStore('sessionExecution', () => {
     setIsStreaming,
     setStreamTimerId,
     setCurrentStreamingMessageId,
+    beginRetryAttempt,
+    clearCurrentRetryState,
     startSending,
     endSending,
     stopStreaming,

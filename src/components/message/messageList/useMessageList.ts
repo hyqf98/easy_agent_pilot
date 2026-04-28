@@ -29,6 +29,7 @@ export interface MessageListProps {
   currentStreamingMessageId?: string | null
   hideContextStrategyNotice?: boolean
   topSafeInset?: number
+  forceScrollToBottomToken?: number
 }
 
 export interface MessageListEmits {
@@ -92,6 +93,7 @@ export function useMessageList(props: MessageListProps, emit: MessageListEmits) 
   let resizeRestoreTimer: number | null = null
   let bottomAlignFrame: number | null = null
   let bottomAlignTimeout: number | null = null
+  let forceBottomAlignTimeout: number | null = null
   let isBottomAligning = false
 
   const resolvedSessionId = computed(() => props.sessionId || sessionStore.currentSessionId)
@@ -510,6 +512,13 @@ export function useMessageList(props: MessageListProps, emit: MessageListEmits) 
     isBottomAligning = false
   }
 
+  function clearForceBottomAlignTask() {
+    if (forceBottomAlignTimeout != null) {
+      window.clearTimeout(forceBottomAlignTimeout)
+      forceBottomAlignTimeout = null
+    }
+  }
+
   function scrollToBottom() {
     if (!listRef.value) {
       return
@@ -557,6 +566,27 @@ export function useMessageList(props: MessageListProps, emit: MessageListEmits) 
       saveScrollSnapshot(resolvedSessionId.value)
       isBottomAligning = false
     }, 80)
+  }
+
+  async function forceBottomAlignment() {
+    clearForceBottomAlignTask()
+    isUserAtBottom.value = true
+    showScrollToBottom.value = false
+    await nextTick()
+    updateViewportMetrics()
+    queueBottomAlignment()
+
+    forceBottomAlignTimeout = window.setTimeout(() => {
+      forceBottomAlignTimeout = null
+      if (!isListVisible.value) {
+        return
+      }
+
+      isUserAtBottom.value = true
+      showScrollToBottom.value = false
+      updateViewportMetrics()
+      queueBottomAlignment()
+    }, 180)
   }
 
   function updateViewportMetrics() {
@@ -733,6 +763,14 @@ export function useMessageList(props: MessageListProps, emit: MessageListEmits) 
     }
   })
 
+  watch(() => props.forceScrollToBottomToken, async (token, previousToken) => {
+    if (token === undefined || token === previousToken || !resolvedSessionId.value || !isListVisible.value) {
+      return
+    }
+
+    await forceBottomAlignment()
+  })
+
   watch(latestMessageActivity, async () => {
     const messages = currentMessages.value
     const currentCount = messages.length
@@ -859,6 +897,7 @@ export function useMessageList(props: MessageListProps, emit: MessageListEmits) 
   onUnmounted(() => {
     clearRestoreGuard()
     clearBottomAlignTasks()
+    clearForceBottomAlignTask()
     listRef.value?.removeEventListener('scroll', handleScroll)
     window.removeEventListener('resize', handleViewportResize)
     if (resizeRestoreTimer != null) {

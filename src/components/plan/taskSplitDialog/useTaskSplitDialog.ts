@@ -27,8 +27,10 @@ import {
   upsertRuntimeNotice
 } from '@/utils/runtimeNotice'
 import { normalizeRuntimeUsage } from '@/utils/runtimeUsage'
+import { clearMessageListSessionState } from '@/components/message/messageList/useMessageList'
 import {
   containsFormSchema,
+  extractFormResponse,
   extractFirstFormRequest,
   extractTaskSplitResult
 } from '@/utils/structuredContent'
@@ -242,6 +244,35 @@ function readMetadataNumber(
   return undefined
 }
 
+interface TaskSplitUsageSnapshot {
+  model?: string
+  inputTokens?: number
+  outputTokens?: number
+}
+
+function buildUsageSnapshotFromMetadata(
+  metadata: Record<string, unknown> | null,
+  fallbackModel?: string
+): TaskSplitUsageSnapshot | null {
+  const inputTokens = readMetadataNumber(metadata, 'inputTokens', 'input_tokens')
+  const outputTokens = readMetadataNumber(metadata, 'outputTokens', 'output_tokens')
+  const rawInputTokens = readMetadataNumber(metadata, 'rawInputTokens', 'raw_input_tokens')
+  const rawOutputTokens = readMetadataNumber(metadata, 'rawOutputTokens', 'raw_output_tokens')
+  const model = readMetadataString(metadata, 'model') ?? fallbackModel
+  const resolvedInputTokens = inputTokens ?? rawInputTokens
+  const resolvedOutputTokens = outputTokens ?? rawOutputTokens
+
+  if (resolvedInputTokens === undefined && resolvedOutputTokens === undefined) {
+    return null
+  }
+
+  return {
+    model,
+    inputTokens: resolvedInputTokens,
+    outputTokens: resolvedOutputTokens
+  }
+}
+
 function buildAssistantRuntimeNotices(
   logs: PlanSplitLogRecord[],
   fallbackModel?: string,
@@ -257,15 +288,21 @@ function buildAssistantRuntimeNotices(
   let totalOutputTokens = 0
   let hasUsage = false
   let usageBaseline: ReturnType<typeof normalizeRuntimeUsage>['nextBaseline'] = null
+  let latestUsageSnapshot: TaskSplitUsageSnapshot | null = null
 
   const sortedLogs = [...logs].sort((left, right) => compareTimestamp(left.createdAt, right.createdAt))
 
-  sortedLogs.forEach((log) => {
+  for (const log of sortedLogs) {
     const metadata = parseLogMetadata(log)
     const rawContent = trimContent(log.content)
     const metadataModel = readMetadataString(metadata, 'model')
     if (metadataModel) {
       model = metadataModel
+    }
+
+    const usageSnapshot = buildUsageSnapshotFromMetadata(metadata, model)
+    if (usageSnapshot) {
+      latestUsageSnapshot = usageSnapshot
     }
 
     if (log.type === 'usage' || log.type === 'message_start') {
@@ -295,7 +332,7 @@ function buildAssistantRuntimeNotices(
         totalOutputTokens += normalizedUsage.outputTokens
         hasUsage = true
       }
-      return
+      continue
     }
 
     if (log.type === 'system' && rawContent) {
@@ -304,12 +341,16 @@ function buildAssistantRuntimeNotices(
         notices = upsertRuntimeNotice(notices, runtimeNotice)
       }
     }
-  })
+  }
+
+  const fallbackUsageModel = latestUsageSnapshot?.model ?? model
+  const fallbackInputTokens = latestUsageSnapshot?.inputTokens
+  const fallbackOutputTokens = latestUsageSnapshot?.outputTokens
 
   notices = upsertRuntimeNotice(notices, buildUsageNotice({
-    model,
-    inputTokens: hasUsage ? totalInputTokens : undefined,
-    outputTokens: hasUsage ? totalOutputTokens : undefined
+    model: hasUsage ? model : fallbackUsageModel,
+    inputTokens: hasUsage ? totalInputTokens : fallbackInputTokens,
+    outputTokens: hasUsage ? totalOutputTokens : fallbackOutputTokens
   }))
 
   const startedAt = sortedLogs[0]?.createdAt
@@ -343,6 +384,138 @@ function summarizeFormValues(schema: DynamicFormSchema, values: Record<string, u
   return schema.fields
     .map(field => `${field.label}：${formatFormOptionValue(field, values[field.name])}`)
     .join('\n')
+}
+
+function parseSummaryLineMap(content: string): Map<string, string> {
+  const lineMap = new Map<string, string>()
+
+  content
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .forEach((line) => {
+      const separatorIndex = line.indexOf('：')
+      const fallbackSeparatorIndex = separatorIndex >= 0 ? separatorIndex : line.indexOf(':')
+      if (fallbackSeparatorIndex <= 0) {
+        return
+      }
+
+      const label = line.slice(0, fallbackSeparatorIndex).trim()
+      const value = line.slice(fallbackSeparatorIndex + 1).trim()
+      if (!label) {
+        return
+      }
+
+      lineMap.set(label, value)
+    })
+
+  return lineMap
+}
+
+function parseSummaryValue(
+  field: DynamicFormSchema['fields'][number],
+  rawValue: string
+): unknown {
+  const normalizedValue = rawValue.trim()
+  const isEmptyValue = normalizedValue === '' || normalizedValue === '-'
+
+  switch (field.type) {
+    case 'checkbox':
+      return ['true', '1', 'yes', 'on', '是'].includes(normalizedValue.toLowerCase())
+    case 'multiselect':
+      if (isEmptyValue) {
+        return []
+      }
+      return normalizedValue
+        .split('、')
+        .map(item => item.trim())
+        .filter(Boolean)
+        .map((item) => field.options?.find(option => option.label === item)?.value ?? item)
+    case 'select':
+    case 'radio':
+      if (isEmptyValue) {
+        return ''
+      }
+      return field.options?.find(option => option.label === normalizedValue)?.value ?? normalizedValue
+    case 'number':
+    case 'slider': {
+      if (isEmptyValue) {
+        return undefined
+      }
+      const numericValue = Number(normalizedValue)
+      return Number.isFinite(numericValue) ? numericValue : undefined
+    }
+    default:
+      return isEmptyValue ? '' : normalizedValue
+  }
+}
+
+function reconstructSubmittedFormFromSummary(
+  content: string,
+  schema: DynamicFormSchema
+): Record<string, unknown> | null {
+  const lineMap = parseSummaryLineMap(content)
+  if (lineMap.size === 0) {
+    return null
+  }
+
+  const values: Record<string, unknown> = {}
+
+  for (const field of schema.fields) {
+    if (!lineMap.has(field.label)) {
+      return null
+    }
+
+    const parsedValue = parseSummaryValue(field, lineMap.get(field.label) ?? '')
+    if (field.required) {
+      const isMissingRequired = parsedValue === undefined
+        || parsedValue === null
+        || parsedValue === ''
+        || (Array.isArray(parsedValue) && parsedValue.length === 0)
+      if (isMissingRequired) {
+        return null
+      }
+    }
+
+    values[field.name] = parsedValue
+  }
+
+  return values
+}
+
+function findSubmittedFormFromTranscript(
+  turns: SplitTurn[],
+  turnIndex: number
+): { formId: string; values: Record<string, unknown> } | null {
+  const currentTurn = turns[turnIndex]
+  if (!currentTurn) {
+    return null
+  }
+
+  if (extractFormResponse(currentTurn.userMessage.content)) {
+    return null
+  }
+
+  for (let previousIndex = turnIndex - 1; previousIndex >= 0; previousIndex -= 1) {
+    const previousAssistantContent = trimContent(turns[previousIndex]?.assistantSummary?.content)
+    if (!previousAssistantContent) {
+      continue
+    }
+
+    const formRequest = extractFirstFormRequest(previousAssistantContent)
+    const forms = formRequest?.forms ?? []
+    for (const schema of forms) {
+      const values = reconstructSubmittedFormFromSummary(currentTurn.userMessage.content, schema)
+      if (values) {
+        return {
+          formId: schema.formId,
+          values
+        }
+      }
+    }
+  }
+
+  return null
 }
 
 function collectTurnSessionIds(logs: PlanSplitLogRecord[]): string[] {
@@ -391,6 +564,7 @@ export function useTaskSplitDialog() {
 
   const isConfirming = ref(false)
   const isInitializingSplitSession = ref(false)
+  const splitChatScrollToken = ref(0)
   const queuedPlanId = ref<string | null>(null)
   const userInstruction = ref('')
   const instructionInputRef = ref<HTMLTextAreaElement | null>(null)
@@ -609,6 +783,20 @@ export function useTaskSplitDialog() {
     `plan-split:${activeSplitPlanId.value || taskSplitStore.context?.planId || 'dialog'}`
   )
 
+  function clearSplitDialogScrollState(planId?: string | null) {
+    const targetPlanId = planId?.trim()
+    if (!targetPlanId) {
+      return
+    }
+
+    clearMessageListSessionState(`plan-split:${targetPlanId}`)
+  }
+
+  function requestSplitChatBottomAlign(planId?: string | null) {
+    clearSplitDialogScrollState(planId)
+    splitChatScrollToken.value += 1
+  }
+
   const activeFormQuestion = computed(() => {
     const activeFormId = activeFormSchema.value?.formId
     if (!activeFormId) {
@@ -709,6 +897,9 @@ export function useTaskSplitDialog() {
       const matchedForm = matchedFormIndex >= 0
         ? submittedForms.splice(matchedFormIndex, 1)[0]
         : null
+      const reconstructedForm = matchedForm
+        ? null
+        : findSubmittedFormFromTranscript(turns, turnIndex)
 
       messages.push({
         id: `message-${turn.userMessage.id}`,
@@ -716,6 +907,8 @@ export function useTaskSplitDialog() {
         role: 'user',
         content: matchedForm
           ? buildFormResponseContent(matchedForm.formId, matchedForm.values)
+          : reconstructedForm
+            ? buildFormResponseContent(reconstructedForm.formId, reconstructedForm.values)
           : turn.userMessage.content,
         attachments: turn.userMessage.attachments,
         status: 'completed',
@@ -862,6 +1055,9 @@ export function useTaskSplitDialog() {
         thinking: finalThinking || undefined,
         toolCalls: finalizedToolCalls.length > 0 ? finalizedToolCalls : undefined,
         runtimeNotices: assistantRuntimeNotices.length > 0 ? assistantRuntimeNotices : undefined,
+        retryState: isRunningLatestTurn && taskSplitStore.activeRetryState?.current
+          ? { ...taskSplitStore.activeRetryState }
+          : undefined,
         createdAt: assistantCreatedAt
       }
 
@@ -941,6 +1137,9 @@ export function useTaskSplitDialog() {
 
       if (lastMessage?.role === 'assistant' && lastMessage.status !== 'error') {
         lastMessage.status = resolveMessageStatus('streaming', lastMessage.status)
+        lastMessage.retryState = taskSplitStore.activeRetryState?.current
+          ? { ...taskSplitStore.activeRetryState }
+          : undefined
       } else {
         const latestUserMessage = [...messages]
           .reverse()
@@ -952,6 +1151,9 @@ export function useTaskSplitDialog() {
           role: 'assistant',
           content: runningStatusText.value || '',
           status: 'streaming',
+          retryState: taskSplitStore.activeRetryState?.current
+            ? { ...taskSplitStore.activeRetryState }
+            : undefined,
           createdAt: taskSplitStore.session?.updatedAt || latestUserMessage?.createdAt || new Date().toISOString()
         })
       }
@@ -1069,13 +1271,12 @@ export function useTaskSplitDialog() {
       return
     }
 
-    if (taskSplitStore.session) {
-      await taskSplitStore.retry()
-      return
-    }
-
+    requestSplitChatBottomAlign(dialogContext.planId)
+    await clearPendingAttachments()
+    userInstruction.value = ''
+    mentionDismissKey.value = ''
+    selectedMentionOptionIndex.value = 0
     await taskSplitStore.clearPlanSplitSessions(dialogContext.planId)
-    taskSplitStore.reset()
     await initializeDialogSession()
   }
 
@@ -1528,6 +1729,7 @@ export function useTaskSplitDialog() {
     async ([visible, planId], previousValue) => {
       const prevVisible = previousValue?.[0] ?? false
       if (visible && planId) {
+        requestSplitChatBottomAlign(planId)
         await initializeDialogSession()
         return
       }
@@ -1609,6 +1811,7 @@ export function useTaskSplitDialog() {
     splitChatSessionId,
     splitChatMessages,
     splitCurrentStreamingMessageId,
+    splitChatScrollToken,
     isSplitHistoryLoading,
     activeFormSchema,
     activeFormQuestion,

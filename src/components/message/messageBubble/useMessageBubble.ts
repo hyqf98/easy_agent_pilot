@@ -74,6 +74,25 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
 
     return sessionExecutionStore.getExecutionState(props.sessionId).currentStreamingMessageId === props.message.id
   })
+  const resolvedRetryState = computed(() => {
+    if (props.message.retryState?.current) {
+      return props.message.retryState
+    }
+
+    if (!props.sessionId || !isAssistant.value || !isStreaming.value) {
+      return null
+    }
+
+    const currentRetryState = sessionExecutionStore.getExecutionState(props.sessionId).currentRetryState
+    if (!currentRetryState || currentRetryState.assistantMessageId !== props.message.id) {
+      return null
+    }
+
+    return {
+      current: currentRetryState.current,
+      max: currentRetryState.max
+    }
+  })
   const isError = computed(() => props.message.status === 'error')
   const isInterrupted = computed(() => props.message.status === 'interrupted')
   const canRetry = computed(() => isError.value || isInterrupted.value)
@@ -263,6 +282,16 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
 
     switch (props.message.status) {
       case 'streaming':
+        if (resolvedRetryState.value && resolvedRetryState.value.current > 0) {
+          return {
+            text: t('message.status.assistantRetrying', {
+              current: resolvedRetryState.value.current,
+              max: resolvedRetryState.value.max
+            }),
+            icon: 'loading',
+            class: 'status--retrying'
+          }
+        }
         return { text: t('message.status.assistantStreaming'), icon: 'loading', class: 'status--streaming' }
       case 'interrupted':
         return {

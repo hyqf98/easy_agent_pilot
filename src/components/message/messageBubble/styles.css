@@ -654,7 +654,9 @@
 .message-bubble__status {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--spacing-1);
+  min-width: 0;
 }
 
 .message-bubble__elapsed {
@@ -683,6 +685,8 @@
 
 .status-text {
   opacity: 0.8;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .message-bubble__status.status--pending {
@@ -691,6 +695,10 @@
 
 .message-bubble__status.status--streaming {
   color: var(--color-primary);
+}
+
+.message-bubble__status.status--retrying {
+  color: var(--color-warning, #f59e0b);
 }
 
 .message-bubble__status.status--completed {
@@ -751,6 +759,11 @@
   background-color: var(--color-error-light);
   border-radius: var(--radius-sm);
   border-left: 2px solid var(--color-error);
+  box-sizing: border-box;
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   animation: shake 0.4s ease-out;
 }
 

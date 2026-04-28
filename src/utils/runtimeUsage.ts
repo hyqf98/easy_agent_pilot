@@ -23,7 +23,7 @@ export interface NormalizeRuntimeUsageResult {
   didReset: boolean
 }
 
-const CUMULATIVE_USAGE_RUNTIME_KEYWORDS = ['codex'] as const
+const CUMULATIVE_USAGE_RUNTIME_KEYWORDS = ['codex', 'claude-cli'] as const
 
 function normalizeTokenValue(value?: number): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value)) {

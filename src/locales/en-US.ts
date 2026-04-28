@@ -418,6 +418,7 @@ export default {
       userError: 'Send failed',
       userCompleted: 'Sent',
       assistantStreaming: 'Generating',
+      assistantRetrying: 'Retrying ({current}/{max})',
       assistantStopped: 'Stopped',
       assistantError: 'Generation failed',
       assistantCompleted: 'Completed'
@@ -2228,7 +2229,7 @@ Rules:
 5. A form_request should collect the currently missing high-value information in one round when possible. Prefer 3-8 focused fields and provide suggestion, suggestionReason, optionReasons, and allowOther whenever useful.
 6. select / radio / multiselect options must be [{'{' } "label": "...", "value": "..." {'}'}], and keep allowOther. You may also provide suggestion, suggestionReason, and optionReasons.
 7. Conditional display may only use condition: {'{' } field, value {'}'}.
-8. task_split must include status:"DONE", summary, and tasks. summary must be a 1-3 sentence natural-language recap of the split result or rationale. Every task must contain title, description, priority, implementationSteps, testSteps, and acceptanceCriteria.
+8. task_split must include status:"DONE", summary, and tasks. summary must be a 1-3 sentence natural-language recap of the current change/split result or rationale, and must not repeat the full tasks list. Every task must contain title, description, priority, implementationSteps, testSteps, and acceptanceCriteria.
 9. Tasks must have clear boundaries, be directly executable, and must not hide unresolved user decisions behind vague task wording.
 10. description must not be a generic one-liner. It must clearly state the business goal, the affected pages/modules/services/data, and what technology or implementation approach will be used to achieve the outcome.
 11. implementationSteps must be action-oriented and execution-ready. They must cover change location, core logic, key data/state flow, and edge-case handling. Avoid vague phrases such as "improve feature", "handle logic", or "complete development".
@@ -2237,7 +2238,7 @@ Rules:
 14. acceptanceCriteria must be observable and pass/fail oriented. Prefer business outcomes, UI/API behavior, error-path expectations, and performance/stability constraints. Do not repeat implementation steps as acceptance criteria.
 15. When the user is continuing or optimizing an existing task list, default to the smallest possible change set: only modify the task(s) the user explicitly pointed to, and do not opportunistically rewrite other tasks.
 16. If the user clearly references a specific task (for example via an @ reference, an explicit task number, a uniquely identifiable task title, or wording such as "only optimize task 1"), you must treat it as a local edit request. Do not modify any other task unless the user explicitly asks for whole-list optimization such as "optimize all tasks", "full optimization", or "rework the entire list".
-17. For local edit requests, all non-target tasks must remain unchanged in the returned tasks array. Do not polish, reorder, expand, or improve them. If the instruction is still ambiguous, output form_request to clarify instead of silently expanding the scope to the whole list.
+17. For local edit requests, all non-target tasks must remain unchanged in the returned tasks array and keep the same order. Do not polish, reorder, expand, or improve them. If the instruction is still ambiguous, output form_request to clarify instead of silently expanding the scope to the whole list.
 18. Prefer fewer but more complete high-quality tasks over many vague tasks. Each task should let an executor understand what to do, how to do it, how to test it, and when it is considered done without repeated clarification.
 19. Top-level keys must strictly follow the canonical structure: form_request may only use type, question, and forms; task_split may only use type, status, summary, and tasks. Do not use alias keys such as action, reason, state, phase, payload, or data.
 20. forms must be an array of form schemas. Do not place a raw field array directly into forms; each form must include formId, title, and fields.

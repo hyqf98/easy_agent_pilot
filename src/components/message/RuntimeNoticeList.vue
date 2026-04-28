@@ -71,14 +71,15 @@ function usageSummary(notice: RuntimeNotice) {
   const summary = getUsageNoticeSummary(notice)
   const fallback = props.fallbackUsage
   const requestedModel = requestedModelFallback.value
+  const hasUsageValue = (value: unknown) => value !== null && value !== undefined && value !== ''
 
   if (!summary) {
     if (!fallback) {
       return null
     }
 
-    const hasFallbackInput = typeof fallback.inputTokens === 'number' && fallback.inputTokens > 0
-    const hasFallbackOutput = typeof fallback.outputTokens === 'number' && fallback.outputTokens > 0
+    const hasFallbackInput = typeof fallback.inputTokens === 'number'
+    const hasFallbackOutput = typeof fallback.outputTokens === 'number'
 
     return {
       model: resolveRecordedModelId({
@@ -90,10 +91,10 @@ function usageSummary(notice: RuntimeNotice) {
     }
   }
 
-  const hasRealInput = Boolean(summary.input && summary.input !== '0')
-  const hasRealOutput = Boolean(summary.output && summary.output !== '0')
-  const fallbackInput = typeof fallback?.inputTokens === 'number' && fallback.inputTokens > 0 ? String(fallback.inputTokens) : null
-  const fallbackOutput = typeof fallback?.outputTokens === 'number' && fallback.outputTokens > 0 ? String(fallback.outputTokens) : null
+  const hasRealInput = hasUsageValue(summary.input)
+  const hasRealOutput = hasUsageValue(summary.output)
+  const fallbackInput = typeof fallback?.inputTokens === 'number' ? String(fallback.inputTokens) : null
+  const fallbackOutput = typeof fallback?.outputTokens === 'number' ? String(fallback.outputTokens) : null
 
   return {
     model: resolveRecordedModelId({

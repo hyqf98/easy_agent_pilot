@@ -337,6 +337,7 @@ const zhCN = {
       userError: '发送失败',
       userCompleted: '已发送',
       assistantStreaming: '生成中',
+      assistantRetrying: '重试中({current}/{max})',
       assistantStopped: '已停止',
       assistantError: '生成失败',
       assistantCompleted: '已完成'
@@ -1774,7 +1775,7 @@ const zhCN = {
 5. form_request 应一次性收集当前轮次缺失的关键信息，优先设计 3-8 个高信息量字段，并尽量提供 suggestion、suggestionReason、optionReasons、allowOther。
 6. select / radio / multiselect 的 options 必须是 [{'{' } "label": "...", "value": "..." {'}'}]，并保留 allowOther；可补充 suggestion、suggestionReason、optionReasons。
 7. 条件显示仅使用 condition: {'{' } field, value {'}'}。
-8. task_split 必须包含 status:"DONE"、summary、tasks；summary 用 1-3 句自然语言概括本次拆分思路或结果；每个任务都要有 title、description、priority、implementationSteps、testSteps、acceptanceCriteria。
+8. task_split 必须包含 status:"DONE"、summary、tasks；summary 用 1-3 句自然语言概括本次修改/拆分思路或结果，不能在 summary 里重复粘贴整份 tasks 列表；每个任务都要有 title、description、priority、implementationSteps、testSteps、acceptanceCriteria。
 9. 任务要边界清晰、可直接执行，禁止把仍然依赖用户补充信息的模糊事项直接塞进任务。
 10. description 不能写成泛泛的一句话，必须明确这个任务要完成什么业务目标、涉及哪些页面/模块/服务/数据、使用什么技术或方案来实现什么结果。
 11. implementationSteps 必须写成可直接执行的实现步骤，至少覆盖：改动位置、核心逻辑、关键数据流/状态流、边界处理；避免“完善功能”“处理逻辑”“完成开发”这类空话。
@@ -1783,7 +1784,7 @@ const zhCN = {
 14. acceptanceCriteria 必须是可观察、可验收、可判定通过/失败的结果标准，优先描述业务结果、界面/接口表现、异常分支和性能/稳定性要求，禁止写成重复 implementationSteps 的过程描述。
 15. 当用户是在“继续拆分 / 优化已有任务列表”场景下给出追加指令时，默认采用最小修改原则：只允许修改用户明确点名的任务，禁止顺带修改其他任务。
 16. 只要用户消息里明确引用了某个具体任务（例如 @引用右侧任务、写出任务编号、写出唯一可识别的任务标题，或表达“只优化任务1 / 仅调整这个任务”），就必须视为局部修改请求；除非用户明确写出“整体优化 / 全量优化 / 优化全部任务 / 重整整个列表”，否则不得修改其他任务。
-17. 对于局部修改请求，如果其余任务无需变动，就必须在输出的 tasks 中保留其余任务原样，不得润色、重排、补充或顺手优化；如果用户指令仍然存在歧义，应先输出 form_request 澄清，而不是擅自扩展到全量优化。
+17. 对于局部修改请求，如果其余任务无需变动，就必须在输出的 tasks 中保留其余任务原样，且保持原顺序，不得润色、重排、补充或顺手优化；如果用户指令仍然存在歧义，应先输出 form_request 澄清，而不是擅自扩展到全量优化。
 18. 优先输出少而完整的高质量任务，而不是很多个描述空泛的任务；每个任务都应该让执行者在不反复追问的情况下理解“做什么、怎么做、如何测试、何时算完成”。
 19. 顶层键名必须严格匹配标准结构：form_request 只能使用 type、question、forms；task_split 只能使用 type、status、summary、tasks。禁止使用 action、reason、state、phase、payload、data 等替代键。
 20. forms 必须是 form schema 数组，不能把字段数组直接塞进 forms；每个表单必须包含 formId、title、fields。

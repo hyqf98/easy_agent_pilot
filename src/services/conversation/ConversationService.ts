@@ -299,6 +299,7 @@ export class ConversationService {
     sessionExecutionStore.startSending(sessionId)
     this.clearConversationRetryState(sessionId)
     const isRetry = Boolean(options?.existingUserMessageId?.trim() || options?.reuseAssistantMessageId?.trim())
+    sessionExecutionStore.clearCurrentRetryState(sessionId)
     if (!isRetry) {
       tokenStore.clearRealtimeTokens(sessionId)
     }
@@ -372,7 +373,8 @@ export class ConversationService {
           thinkingActive: false,
           toolCalls: [],
           editTraces: [],
-          errorMessage: ''
+          errorMessage: '',
+          retryState: undefined
         })
       }
 
@@ -1116,6 +1118,38 @@ export class ConversationService {
     /**
      * 统一处理“执行过程中出现失败”的收尾逻辑，覆盖抛异常与 error 事件两种路径。
      */
+    const currentRetryUserMessageId = () => (
+      [...context.messages]
+        .reverse()
+        .find(message => message.role === 'user')
+        ?.id
+      || null
+    )
+    let retryPresentationCleared = false
+
+    const clearRetryPresentationOnRecoveredStream = () => {
+      if (retryPresentationCleared) {
+        return
+      }
+
+      const currentRetryState = sessionExecutionStore.getExecutionState(sessionId).currentRetryState
+      const currentMessageRetryState = getCurrentAiMessage()?.retryState
+      const hasRetryPresentation = (
+        currentRetryState?.assistantMessageId === aiMessage.id
+        || Boolean(currentMessageRetryState?.current)
+      )
+
+      if (!hasRetryPresentation) {
+        return
+      }
+
+      retryPresentationCleared = true
+      sessionExecutionStore.clearCurrentRetryState(sessionId)
+      bufferMessageUpdate({
+        retryState: undefined
+      })
+    }
+
     const handleFailure = async (errorMessage: string) => {
       const classifiedFailure = detectCliFailure(errorMessage)
       const shouldAutoRetry = this.checkConversationAutoRetry(sessionId, classifiedFailure)
@@ -1140,6 +1174,14 @@ export class ConversationService {
         const intervalMinutes = settingsStore.settings.retryIntervalMinutes ?? 5
         const retryCount = this.conversationRetryCount.get(sessionId) ?? 0
         const maxRetries = settingsStore.settings.cliFailureMaxRetries ?? 5
+        const retryUserMessageId = currentRetryUserMessageId()
+        const retryState = retryUserMessageId
+          ? sessionExecutionStore.beginRetryAttempt(sessionId, {
+            assistantMessageId: aiMessage.id,
+            userMessageId: retryUserMessageId,
+            max: maxRetries
+          })
+          : null
         const retryNotice: RuntimeNotice = {
           id: 'conversation-auto-retry',
           title: '自动重试',
@@ -1148,7 +1190,9 @@ export class ConversationService {
         }
         runtimeNoticesState = upsertRuntimeNotice(runtimeNoticesState, retryNotice)
         messageStore.updateMessageBuffered(aiMessage.id, {
-          runtimeNotices: runtimeNoticesState
+          runtimeNotices: runtimeNoticesState,
+          retryState: retryState ?? undefined,
+          createdAt: new Date().toISOString()
         })
 
         this.scheduleConversationAutoRetry(
@@ -1163,6 +1207,7 @@ export class ConversationService {
       }
 
       this.clearConversationRetryState(sessionId)
+      sessionExecutionStore.clearCurrentRetryState(sessionId)
       syncFinalUsageNotice()
       syncProcessingTimeNotice()
       bufferMessageUpdate({
@@ -1227,6 +1272,7 @@ export class ConversationService {
           requestedModelId: context.agent.modelId?.trim() || undefined,
           toolCalls,
           onContent: (content) => {
+            clearRetryPresentationOnRecoveredStream()
             markMetric('firstContentAt')
             accumulatedContent = mergeStreamingText(accumulatedContent, content, runtimeProvider)
             bufferMessageUpdate({
@@ -1234,6 +1280,7 @@ export class ConversationService {
             })
           },
           onThinking: (thinking) => {
+            clearRetryPresentationOnRecoveredStream()
             markMetric('firstThinkingAt')
             accumulatedThinking = mergeStreamingText(accumulatedThinking, thinking, runtimeProvider)
             bufferMessageUpdate({
@@ -1242,11 +1289,13 @@ export class ConversationService {
             })
           },
           onThinkingStart: () => {
+            clearRetryPresentationOnRecoveredStream()
             bufferMessageUpdate({
               thinkingActive: true
             })
           },
           onToolUse: (toolCall) => {
+            clearRetryPresentationOnRecoveredStream()
             markMetric('firstToolAt')
             // 添加或更新工具调用
             const existingIndex = toolCalls.findIndex(tc => tc.id === toolCall.id)
@@ -1278,6 +1327,7 @@ export class ConversationService {
             }
           },
           onToolInputDelta: (toolCallId, toolInput) => {
+            clearRetryPresentationOnRecoveredStream()
             const targetToolCall = (toolCallId
               ? toolCalls.find(tool => tool.id === toolCallId)
               : null) || [...toolCalls].reverse().find(tool => tool.status === 'running')
@@ -1292,6 +1342,9 @@ export class ConversationService {
             })
           },
           onToolResult: (toolCallId, result, isError) => {
+            if (!isError) {
+              clearRetryPresentationOnRecoveredStream()
+            }
             // 更新工具调用的结果
             const tc = toolCalls.find(t => t.id === toolCallId)
             if (tc) {
@@ -1331,6 +1384,7 @@ export class ConversationService {
             })
           },
           onUsage: (usage) => {
+            clearRetryPresentationOnRecoveredStream()
             const normalizedUsageModel = resolveRequestedUsageModel({
               requestedModelId: context.agent.modelId,
               reportedModelId: usage.model
@@ -1348,6 +1402,7 @@ export class ConversationService {
             syncRealtimeUsageNotice()
           },
           onSystem: (content) => {
+            clearRetryPresentationOnRecoveredStream()
             const runtimeNotice = buildRuntimeNoticeFromSystemContent(content)
             if (!runtimeNotice) {
               return
@@ -1388,6 +1443,7 @@ export class ConversationService {
                 toolCalls: [...toolCalls]
               }, { immediate: true })
               this.clearConversationRetryState(sessionId)
+              sessionExecutionStore.clearCurrentRetryState(sessionId)
               sessionStore.updateLastMessage(
                 sessionId,
                 accumulatedContent.slice(0, 50)
@@ -1441,6 +1497,7 @@ export class ConversationService {
             toolCalls: [...toolCalls]
           }, { immediate: true })
           this.clearConversationRetryState(sessionId)
+          sessionExecutionStore.clearCurrentRetryState(sessionId)
           sessionStore.updateLastMessage(
             sessionId,
             accumulatedContent.slice(0, 50)
@@ -1578,7 +1635,8 @@ export class ConversationService {
           editTraces: [],
           runtimeNotices: removeRuntimeNoticeById(currentMessage.runtimeNotices, 'conversation-auto-retry'),
           errorMessage: '',
-          status: 'streaming'
+          status: 'streaming',
+          createdAt: new Date().toISOString()
         })
         sessionExecutionStore.startSending(sessionId)
         await this.executeConversation(context, aiMessage, sessionId, projectId)

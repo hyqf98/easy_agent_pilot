@@ -857,7 +857,9 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
         resumeSessionId: resumableExternalSessionId
       }
 
-      if (!resumableExternalSessionId || !isCumulativeUsageRuntime(agentProvider)) {
+      const usageRuntimeKey = runtimeKey ?? agentProvider ?? undefined
+
+      if (!resumableExternalSessionId || !isCumulativeUsageRuntime(usageRuntimeKey)) {
         usageBaselines.delete(taskId)
       }
 
@@ -930,7 +932,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
                 }
               })()
             }
-            handleStreamEvent(taskId, event, agent.modelId, agentProvider)
+            handleStreamEvent(taskId, event, agent.modelId, usageRuntimeKey)
           })
 
           await flushPendingLogs(taskId)

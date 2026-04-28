@@ -11,6 +11,7 @@ use super::conversation::set_abort_flag;
 use super::conversation::strategies::abnormal_completion::{
     classify_cli_completion, CliCompletionFailureKind, CliTextFragment, CliTextSource,
 };
+use super::conversation::strategies::lookup_claude_tool_use_usage;
 use super::conversation::types::{ExecutionRequest, MessageInput};
 use super::message::MessageAttachment;
 use super::support::{now_rfc3339, open_db_connection};
@@ -138,7 +139,7 @@ pub struct SplitStreamRecord {
 #[derive(Debug, Clone)]
 enum ParsedSplitOutput {
     FormRequest { question: String, forms: Vec<Value> },
-    TaskSplit { tasks: Vec<Value> },
+    TaskSplit { summary: String, tasks: Vec<Value> },
 }
 
 fn is_terminal_session_status(status: &str) -> bool {
@@ -173,6 +174,122 @@ fn map_plan_split_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<PlanSplit
 fn parse_json_vec<T: DeserializeOwned>(raw: Option<&String>) -> Vec<T> {
     raw.and_then(|value| serde_json::from_str::<Vec<T>>(value).ok())
         .unwrap_or_default()
+}
+
+fn extract_execution_request_context(
+    session: Option<&PlanSplitSession>,
+) -> (Option<String>, Option<String>) {
+    let Some(session) = session else {
+        return (None, None);
+    };
+    let Some(raw_request) = session.execution_request_json.as_ref() else {
+        return (None, None);
+    };
+    let Ok(request) = serde_json::from_str::<Value>(raw_request) else {
+        return (None, None);
+    };
+
+    (
+        read_json_string_field(&request, "workingDirectory", "working_directory"),
+        read_json_string_field(&request, "resumeSessionId", "resume_session_id"),
+    )
+}
+
+fn read_json_string_field(value: &Value, camel_key: &str, snake_key: &str) -> Option<String> {
+    value
+        .get(camel_key)
+        .or_else(|| value.get(snake_key))
+        .and_then(|item| item.as_str())
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn read_json_u32_field(value: &Value, camel_key: &str, snake_key: &str) -> Option<u32> {
+    value
+        .get(camel_key)
+        .or_else(|| value.get(snake_key))
+        .and_then(|item| item.as_u64())
+        .map(|item| item as u32)
+}
+
+fn enrich_plan_split_log_metadata_from_claude_transcript(
+    log: &mut PlanSplitLog,
+    working_directory: Option<&str>,
+    fallback_external_session_id: Option<&str>,
+) {
+    if log.log_type != "tool_use" {
+        return;
+    }
+
+    let Some(raw_metadata) = log.metadata.as_ref() else {
+        return;
+    };
+    let Ok(mut metadata) = serde_json::from_str::<Value>(raw_metadata) else {
+        return;
+    };
+    let tool_name = read_json_string_field(&metadata, "toolName", "tool_name");
+    let tool_call_id = read_json_string_field(&metadata, "toolCallId", "tool_call_id");
+    let external_session_id = read_json_string_field(&metadata, "externalSessionId", "external_session_id")
+        .or_else(|| fallback_external_session_id.map(ToOwned::to_owned));
+    let raw_output_tokens = read_json_u32_field(&metadata, "rawOutputTokens", "raw_output_tokens");
+    if raw_output_tokens.unwrap_or(0) > 0 {
+        return;
+    }
+
+    let Some(external_session_id) = external_session_id else {
+        return;
+    };
+    let Some(usage) = lookup_claude_tool_use_usage(
+        working_directory,
+        &external_session_id,
+        tool_call_id.as_deref(),
+        tool_name.as_deref(),
+    ) else {
+        return;
+    };
+    let Some(metadata_obj) = metadata.as_object_mut() else {
+        return;
+    };
+
+    metadata_obj.insert(
+        "rawInputTokens".to_string(),
+        usage.raw_input_tokens.map(Value::from).unwrap_or(Value::Null),
+    );
+    metadata_obj.insert(
+        "rawOutputTokens".to_string(),
+        usage.raw_output_tokens.map(Value::from).unwrap_or(Value::Null),
+    );
+    metadata_obj.insert(
+        "cacheReadInputTokens".to_string(),
+        usage.cache_read_input_tokens
+            .map(Value::from)
+            .unwrap_or(Value::Null),
+    );
+    metadata_obj.insert(
+        "cacheCreationInputTokens".to_string(),
+        usage.cache_creation_input_tokens
+            .map(Value::from)
+            .unwrap_or(Value::Null),
+    );
+    metadata_obj.insert(
+        "externalSessionId".to_string(),
+        Value::String(external_session_id),
+    );
+    if metadata_obj
+        .get("model")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        metadata_obj.insert(
+            "model".to_string(),
+            usage.model.map(Value::String).unwrap_or(Value::Null),
+        );
+    }
+
+    log.metadata = serde_json::to_string(&metadata).ok();
 }
 
 fn read_session(
@@ -424,8 +541,16 @@ fn build_form_response_prompt(form_id: &str, values: &Value) -> String {
     };
 
     format!(
-        "表单 {form_id} 用户回答: {serialized}\n\n继续：需要更多信息则输出 form_request；信息足够则输出 task_split（status=DONE）。"
+        "表单 {form_id} 用户回答: {serialized}\n\n继续：需要更多信息则输出 form_request；信息足够则输出 task_split（status=DONE）。\n\n输出约束：\n1. 只输出一个 JSON；form_request 顶层仅允许 type/question/forms；task_split 顶层仅允许 type/status/summary/tasks。\n2. task_split 时，summary 是本轮修改/拆分总结（1-3 句），tasks 是完整任务列表；不要在 JSON 外重复输出任务列表。\n3. 不要输出 Markdown、代码块、解释性前后文或别名键。"
     )
+}
+
+fn build_form_request_message_content(question: &str, forms: &[Value]) -> Result<String, String> {
+    serialize_json(&serde_json::json!({
+        "type": "form_request",
+        "question": question,
+        "forms": forms,
+    }))
 }
 
 fn extract_assistant_summary(output: &ParsedSplitOutput) -> String {
@@ -433,8 +558,13 @@ fn extract_assistant_summary(output: &ParsedSplitOutput) -> String {
         ParsedSplitOutput::FormRequest { question, forms } => {
             format!("[AI提问] {}（共 {} 个表单）", question, forms.len())
         }
-        ParsedSplitOutput::TaskSplit { tasks } => {
-            format!("[AI完成任务拆分] 共 {} 个任务", tasks.len())
+        ParsedSplitOutput::TaskSplit { summary, tasks } => {
+            let trimmed = summary.trim();
+            if trimmed.is_empty() {
+                format!("[AI完成任务拆分] 共 {} 个任务", tasks.len())
+            } else {
+                trimmed.to_string()
+            }
         }
     }
 }
@@ -878,6 +1008,8 @@ fn parse_split_output(
             if !is_done {
                 return Err("task_split 必须包含 status: DONE。".to_string());
             }
+            let summary = as_non_empty_string(record.get("summary"))
+                .ok_or_else(|| "task_split 缺少非空 summary。".to_string())?;
             let tasks_raw = record
                 .get("tasks")
                 .and_then(|value| value.as_array())
@@ -900,7 +1032,7 @@ fn parse_split_output(
             for task in tasks_raw {
                 tasks.push(normalize_task(task)?);
             }
-            return Ok(ParsedSplitOutput::TaskSplit { tasks });
+            return Ok(ParsedSplitOutput::TaskSplit { summary, tasks });
         }
     }
 
@@ -1117,8 +1249,17 @@ fn apply_parsed_output_to_session(
         &mut messages,
         "assistant",
         match &output {
-            ParsedSplitOutput::FormRequest { question, .. } => question.clone(),
-            ParsedSplitOutput::TaskSplit { .. } => raw_content.clone(),
+            ParsedSplitOutput::FormRequest { question, forms } => {
+                build_form_request_message_content(question, forms)?
+            }
+            ParsedSplitOutput::TaskSplit { summary, tasks } => {
+                let trimmed = summary.trim();
+                if trimmed.is_empty() {
+                    format!("任务拆分完成，共生成 {} 个任务。", tasks.len())
+                } else {
+                    trimmed.to_string()
+                }
+            }
         },
     );
     llm_messages.push(MessageInput {
@@ -1135,13 +1276,14 @@ fn apply_parsed_output_to_session(
             session.form_queue_json = Some(serialize_json(&forms)?);
             session.current_form_index = Some(0);
         }
-        ParsedSplitOutput::TaskSplit { tasks } => {
+        ParsedSplitOutput::TaskSplit { summary, tasks } => {
             session.status = "completed".to_string();
             session.form_queue_json = None;
             session.current_form_index = None;
             session.result_json = Some(serialize_json(&serde_json::json!({
                 "type": "task_split",
                 "status": "DONE",
+                "summary": summary,
                 "tasks": tasks,
             }))?);
         }
@@ -1497,6 +1639,9 @@ pub fn get_plan_split_session(plan_id: String) -> Result<Option<PlanSplitSession
 pub fn list_plan_split_logs(plan_id: String) -> Result<Vec<PlanSplitLog>, String> {
     let started_at = Instant::now();
     let conn = open_db_connection().map_err(|error| error.to_string())?;
+    let session = read_session(&conn, &plan_id)?;
+    let (working_directory, fallback_external_session_id) =
+        extract_execution_request_context(session.as_ref());
     let mut stmt = conn
         .prepare(
             "SELECT id, plan_id, session_id, log_type, content, metadata, created_at
@@ -1506,7 +1651,7 @@ pub fn list_plan_split_logs(plan_id: String) -> Result<Vec<PlanSplitLog>, String
         )
         .map_err(|error| error.to_string())?;
 
-    let logs = stmt
+    let mut logs = stmt
         .query_map([&plan_id], |row| {
             Ok(PlanSplitLog {
                 id: row.get(0)?,
@@ -1521,6 +1666,13 @@ pub fn list_plan_split_logs(plan_id: String) -> Result<Vec<PlanSplitLog>, String
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
+    for log in &mut logs {
+        enrich_plan_split_log_metadata_from_claude_transcript(
+            log,
+            working_directory.as_deref(),
+            fallback_external_session_id.as_deref(),
+        );
+    }
 
     let content_bytes: usize = logs.iter().map(|log| log.content.len()).sum();
     let metadata_bytes: usize = logs
@@ -1546,6 +1698,9 @@ pub fn list_recent_plan_split_logs(
 ) -> Result<Vec<PlanSplitLog>, String> {
     let limit = limit.unwrap_or(80).clamp(1, 500);
     let conn = open_db_connection().map_err(|error| error.to_string())?;
+    let session = read_session(&conn, &plan_id)?;
+    let (working_directory, fallback_external_session_id) =
+        extract_execution_request_context(session.as_ref());
     let mut stmt = conn
         .prepare(
             "SELECT id, plan_id, session_id, log_type, content, metadata, created_at
@@ -1560,7 +1715,7 @@ pub fn list_recent_plan_split_logs(
         )
         .map_err(|error| error.to_string())?;
 
-    let logs = stmt
+    let mut logs = stmt
         .query_map(rusqlite::params![&plan_id, limit], |row| {
             Ok(PlanSplitLog {
                 id: row.get(0)?,
@@ -1575,6 +1730,13 @@ pub fn list_recent_plan_split_logs(
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
+    for log in &mut logs {
+        enrich_plan_split_log_metadata_from_claude_transcript(
+            log,
+            working_directory.as_deref(),
+            fallback_external_session_id.as_deref(),
+        );
+    }
 
     Ok(logs)
 }

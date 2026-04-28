@@ -33,18 +33,78 @@ function t(key: string, params?: Record<string, unknown>): string {
   return params ? i18n.global.t(key, params) as string : i18n.global.t(key) as string
 }
 
+interface PlanSplitInstructionGuardOptions {
+  targetIndex?: number
+  totalTaskCount?: number
+  taskCountMode?: TaskCountMode
+  minTaskCount?: number
+}
+
+function isChineseLocale() {
+  return String(i18n.global.locale || '').toLowerCase().startsWith('zh')
+}
+
+export function appendPlanSplitInstructionGuard(
+  content: string,
+  options: PlanSplitInstructionGuardOptions = {}
+): string {
+  const taskCountMode = options.taskCountMode ?? 'min'
+  const minTaskCount = Math.max(1, options.minTaskCount ?? 1)
+  const totalTaskCount = options.totalTaskCount ?? minTaskCount
+  const hasScopedTask = typeof options.targetIndex === 'number' && options.targetIndex >= 0
+  const countRule = taskCountMode === 'exact'
+    ? (
+        isChineseLocale()
+          ? `tasks 数量必须严格等于 ${totalTaskCount}。`
+          : `tasks length must stay exactly ${totalTaskCount}.`
+      )
+    : (
+        isChineseLocale()
+          ? `tasks 数量至少为 ${minTaskCount}。`
+          : `tasks length must be at least ${minTaskCount}.`
+      )
+  const scopedRule = hasScopedTask
+    ? (
+        isChineseLocale()
+          ? `仅允许修改任务 ${Number(options.targetIndex) + 1}；其余任务保持原顺序并逐字段原样保留。`
+          : `Only task ${Number(options.targetIndex) + 1} may change; every other task must keep the same order and identical field values.`
+      )
+    : null
+
+  const guardLines = isChineseLocale()
+    ? [
+        '输出约束：',
+        '1. 只输出一个 JSON；form_request 顶层仅允许 type/question/forms；task_split 顶层仅允许 type/status/summary/tasks。',
+        '2. task_split 时，summary 是本轮修改/拆分总结（1-3 句），tasks 是完整任务列表；不要在 JSON 外重复输出任务列表。',
+        `3. ${countRule}`,
+        scopedRule ? `4. ${scopedRule}` : '4. 不要输出 Markdown、代码块、解释性前后文或别名键。'
+      ]
+    : [
+        'Output constraints:',
+        '1. Return exactly one JSON object; form_request may only use type/question/forms, and task_split may only use type/status/summary/tasks.',
+        '2. For task_split, summary is the 1-3 sentence change/split recap and tasks is the full task list; do not repeat the task list outside JSON.',
+        `3. ${countRule}`,
+        scopedRule ? `4. ${scopedRule}` : '4. Do not output markdown, code fences, prose outside JSON, or alias keys.'
+      ]
+
+  return `${content.trim()}\n\n${guardLines.filter(Boolean).join('\n')}`.trim()
+}
+
 export function buildPlanSplitSystemPrompt(): string {
   return t('prompts.plan.splitSystem').trim()
 }
 
 export function buildPlanSplitKickoffPrompt(context: PlanSplitPromptContext): string {
-  return [
+  return appendPlanSplitInstructionGuard([
     `${t('prompts.plan.kickoffPlanName')}: ${context.planName}`,
     `${t('prompts.plan.kickoffPlanDescription')}: ${context.planDescription?.trim() || t('prompts.plan.none')}`,
     `${t('prompts.plan.kickoffMinTaskCount')}: ${context.minTaskCount}`,
     '',
     t('prompts.plan.kickoffStart')
-  ].join('\n').trim()
+  ].join('\n').trim(), {
+    taskCountMode: 'min',
+    minTaskCount: context.minTaskCount
+  })
 }
 
 export function buildTaskResplitKickoffPrompt(context: TaskResplitPromptContext): string {
@@ -64,7 +124,7 @@ export function buildTaskResplitKickoffPrompt(context: TaskResplitPromptContext)
     ? `\n\n${t('prompts.plan.extraRequirements')}:\n${context.userPrompt}`
     : ''
 
-  return `${t('prompts.plan.resplitIntro', { minTaskCount: context.minTaskCount })}
+  return appendPlanSplitInstructionGuard(`${t('prompts.plan.resplitIntro', { minTaskCount: context.minTaskCount })}
 
 ${t('prompts.plan.plan')}: ${context.planName}
 ${t('prompts.plan.task')}: ${context.taskTitle}
@@ -79,7 +139,10 @@ ${testStepsList}
 ${t('prompts.plan.acceptanceCriteria')}:
 ${criteriaList}${userPromptSection}
 
-${t('prompts.plan.directTaskSplitDone')}`.trim()
+${t('prompts.plan.directTaskSplitDone')}`.trim(), {
+    taskCountMode: 'min',
+    minTaskCount: context.minTaskCount
+  })
 }
 
 function formatTaskList(tasks: AITaskItem[]): string {
@@ -144,7 +207,7 @@ export function buildTaskListOptimizeKickoffPrompt(context: TaskListOptimizeProm
       acceptanceCriteria: targetTask.acceptanceCriteria || [],
       dependsOn: targetTask.dependsOn || []
     }
-    return [
+    return appendPlanSplitInstructionGuard([
       `你只需要优化任务 ${targetIndex + 1}《${targetTask.title}》，其余任务必须逐字原样输出，不可做任何修改。`,
       '如果用户没有明确要求整体优化或全量优化，你必须把这次请求理解为单任务局部修改，而不是整表优化。',
       '',
@@ -153,6 +216,7 @@ export function buildTaskListOptimizeKickoffPrompt(context: TaskListOptimizeProm
       `2. 仅允许修改任务 ${targetIndex + 1} 的字段内容。`,
       `3. 其余任务（索引 0-${context.tasks.length - 1} 中排除 ${targetIndex} 的部分）的所有字段必须与下方「其余任务原始数据」完全一致，禁止改写、润色或重排。`,
       '4. 对于目标任务，你可以重写标题、描述、实现步骤、测试步骤、验收标准，调整优先级。',
+      '5. summary 只总结目标任务本次改动，并明确其余任务保持不变。',
       '',
       `${t('prompts.plan.plan')}: ${context.planName}`,
       `${t('prompts.plan.description')}: ${context.planDescription?.trim() || t('prompts.plan.none')}`,
@@ -165,11 +229,16 @@ export function buildTaskListOptimizeKickoffPrompt(context: TaskListOptimizeProm
       userPromptSection,
       '',
       `输出 task_split（status=DONE），tasks 数组长度必须严格等于 ${context.tasks.length}，其中任务 ${targetIndex + 1} 是优化后的版本，其余任务与上方「其余任务原始数据」逐字段一致。`
-    ].join('\n').trim()
+    ].join('\n').trim(), {
+      targetIndex,
+      totalTaskCount: context.tasks.length,
+      taskCountMode: 'exact',
+      minTaskCount: context.tasks.length
+    })
   }
 
   if (taskCountMode === 'min') {
-    return [
+    return appendPlanSplitInstructionGuard([
       '你将根据用户的最新要求重新整理当前任务列表。',
       `要求：可以新增、删除、合并、拆分或重排任务，但返回的 tasks 数量至少为 ${minTaskCount}。`,
       '允许：重写任务标题、描述、实现步骤、测试步骤、验收标准、优先级与 dependsOn 依赖关系。',
@@ -183,10 +252,13 @@ export function buildTaskListOptimizeKickoffPrompt(context: TaskListOptimizeProm
       userPromptSection,
       '',
       `输出 task_split（status=DONE），并保证 tasks 数量不少于 ${minTaskCount}。`
-    ].join('\n').trim()
+    ].join('\n').trim(), {
+      taskCountMode: 'min',
+      minTaskCount
+    })
   }
 
-  return [
+  return appendPlanSplitInstructionGuard([
     '你将对当前整份任务列表进行整体优化。',
     `要求：必须保留任务数量不变，当前任务数为 ${context.tasks.length}。`,
     '允许：重写任务描述、实现步骤、测试步骤、验收标准；调整任务顺序；修正 dependsOn 依赖关系。',
@@ -200,7 +272,11 @@ export function buildTaskListOptimizeKickoffPrompt(context: TaskListOptimizeProm
     userPromptSection,
     '',
     `输出 task_split（status=DONE），并保证 tasks 数量必须严格等于 ${context.tasks.length}。`
-  ].join('\n').trim()
+  ].join('\n').trim(), {
+    totalTaskCount: context.tasks.length,
+    taskCountMode: 'exact',
+    minTaskCount: context.tasks.length
+  })
 }
 
 export function buildFormResponsePrompt(formId: string, values: Record<string, unknown>): string {
@@ -208,11 +284,11 @@ export function buildFormResponsePrompt(formId: string, values: Record<string, u
     .map(([key, val]) => `${key}: ${typeof val === 'object' ? JSON.stringify(val) : val}`)
     .join(', ')
 
-  return [
+  return appendPlanSplitInstructionGuard([
     t('prompts.plan.formResponse', { formId, valueStr }),
     '',
     t('prompts.plan.formResponseContinue')
-  ].join('\n').trim()
+  ].join('\n').trim())
 }
 
 export function buildOutputCorrectionPrompt(minTaskCount: number): string {

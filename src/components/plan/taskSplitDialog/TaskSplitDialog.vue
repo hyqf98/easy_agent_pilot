@@ -34,6 +34,7 @@ const {
   splitChatSessionId,
   splitChatMessages,
   splitCurrentStreamingMessageId,
+  splitChatScrollToken,
   isSplitHistoryLoading,
   restartSplit,
   handleActiveFormSubmit,
@@ -134,6 +135,7 @@ const {
                   :messages="splitChatMessages"
                   :external-is-sending="isSessionRunning || isSplitHistoryLoading"
                   :current-streaming-message-id="splitCurrentStreamingMessageId"
+                  :force-scroll-to-bottom-token="splitChatScrollToken"
                   hide-context-strategy-notice
                   @form-submit="handleActiveFormSubmit"
                   @stop="stopSplitTask"
@@ -229,13 +231,6 @@ const {
               @click="continueSplitTask"
             >
               {{ t('taskSplit.continueSplit') }}
-            </button>
-            <button
-              class="btn btn-secondary"
-              :disabled="isConfirming"
-              @click="handleCloseClick"
-            >
-              {{ t('taskSplit.close') }}
             </button>
             <button
               class="btn btn-secondary"

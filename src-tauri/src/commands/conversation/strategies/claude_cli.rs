@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
+use std::{fs, path::Path};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -345,9 +346,12 @@ fn extract_textish_value(value: Option<&serde_json::Value>) -> Option<String> {
 fn extract_external_session_id(json: &serde_json::Value) -> Option<String> {
     [
         json.get("session_id"),
+        json.get("sessionId"),
         json.pointer("/session/id"),
         json.pointer("/message/session_id"),
+        json.pointer("/message/sessionId"),
         json.pointer("/result/session_id"),
+        json.pointer("/result/sessionId"),
         json.pointer("/payload/id"),
         json.pointer("/session_meta/payload/id"),
     ]
@@ -366,6 +370,178 @@ fn attach_external_session_id(
         event.external_session_id = extract_external_session_id(json);
     }
 
+    event
+}
+
+fn build_claude_project_slug(working_directory: &str) -> String {
+    working_directory
+        .trim()
+        .replace(['/', '\\', ':'], "-")
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ClaudeToolUseUsage {
+    pub raw_input_tokens: Option<u32>,
+    pub raw_output_tokens: Option<u32>,
+    pub cache_read_input_tokens: Option<u32>,
+    pub cache_creation_input_tokens: Option<u32>,
+    pub model: Option<String>,
+}
+
+fn find_claude_session_transcript(
+    working_directory: Option<&str>,
+    external_session_id: &str,
+) -> Option<PathBuf> {
+    let home_dir = dirs::home_dir()?;
+    let projects_dir = home_dir.join(".claude").join("projects");
+    if !projects_dir.is_dir() {
+        return None;
+    }
+
+    if let Some(working_directory) = working_directory.map(str::trim).filter(|value| !value.is_empty())
+    {
+        let preferred = projects_dir
+            .join(build_claude_project_slug(working_directory))
+            .join(format!("{external_session_id}.jsonl"));
+        if preferred.is_file() {
+            return Some(preferred);
+        }
+    }
+
+    let entries = fs::read_dir(&projects_dir).ok()?;
+    for entry in entries.flatten() {
+        let candidate = entry.path().join(format!("{external_session_id}.jsonl"));
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
+fn lookup_tool_use_usage_from_transcript(
+    transcript_path: &Path,
+    external_session_id: &str,
+    tool_call_id: Option<&str>,
+    tool_name: Option<&str>,
+) -> Option<ClaudeToolUseUsage> {
+    let file_contents = fs::read_to_string(transcript_path).ok()?;
+
+    for line in file_contents.lines().rev() {
+        let json = serde_json::from_str::<serde_json::Value>(line).ok()?;
+        if json.get("type").and_then(|value| value.as_str()) != Some("assistant") {
+            continue;
+        }
+
+        let transcript_session_id = json
+            .get("sessionId")
+            .or_else(|| json.get("session_id"))
+            .and_then(|value| value.as_str());
+        if transcript_session_id != Some(external_session_id) {
+            continue;
+        }
+
+        let message = json.get("message")?;
+        let content_items = message.get("content").and_then(|value| value.as_array())?;
+        let matches_tool_use = content_items.iter().any(|item| {
+            if item.get("type").and_then(|value| value.as_str()) != Some("tool_use") {
+                return false;
+            }
+
+            let item_tool_call_id = item.get("id").and_then(|value| value.as_str());
+            let item_tool_name = item.get("name").and_then(|value| value.as_str());
+            if let Some(expected_tool_call_id) = tool_call_id {
+                if item_tool_call_id != Some(expected_tool_call_id) {
+                    return false;
+                }
+            }
+            if let Some(expected_tool_name) = tool_name {
+                if item_tool_name != Some(expected_tool_name) {
+                    return false;
+                }
+            }
+            true
+        });
+
+        if !matches_tool_use {
+            continue;
+        }
+
+        let usage = extract_usage_counts(message.get("usage"));
+        if usage.raw_input_tokens.is_none()
+            && usage.raw_output_tokens.is_none()
+            && usage.cache_read_input_tokens.is_none()
+            && usage.cache_creation_input_tokens.is_none()
+        {
+            continue;
+        }
+
+        let model = message
+            .get("model")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string());
+        return Some(ClaudeToolUseUsage {
+            raw_input_tokens: usage.raw_input_tokens,
+            raw_output_tokens: usage.raw_output_tokens,
+            cache_read_input_tokens: usage.cache_read_input_tokens,
+            cache_creation_input_tokens: usage.cache_creation_input_tokens,
+            model,
+        });
+    }
+
+    None
+}
+
+pub(crate) fn lookup_claude_tool_use_usage(
+    working_directory: Option<&str>,
+    external_session_id: &str,
+    tool_call_id: Option<&str>,
+    tool_name: Option<&str>,
+) -> Option<ClaudeToolUseUsage> {
+    let transcript_path = find_claude_session_transcript(working_directory, external_session_id)?;
+    lookup_tool_use_usage_from_transcript(
+        &transcript_path,
+        external_session_id,
+        tool_call_id,
+        tool_name,
+    )
+}
+
+fn hydrate_tool_use_usage_from_transcript(
+    mut event: CliStreamEvent,
+    working_directory: Option<&str>,
+) -> CliStreamEvent {
+    if event.event_type != "tool_use" {
+        return event;
+    }
+
+    let should_hydrate = event.raw_output_tokens.unwrap_or(0) == 0
+        || event.raw_input_tokens.is_none()
+        || event.cache_read_input_tokens.is_none()
+        || event.external_session_id.is_none();
+    if !should_hydrate {
+        return event;
+    }
+
+    let Some(external_session_id) = event.external_session_id.clone() else {
+        return event;
+    };
+    let Some(usage) = lookup_claude_tool_use_usage(
+        working_directory,
+        &external_session_id,
+        event.tool_call_id.as_deref(),
+        event.tool_name.as_deref(),
+    ) else {
+        return event;
+    };
+
+    event.raw_input_tokens = usage.raw_input_tokens;
+    event.raw_output_tokens = usage.raw_output_tokens;
+    event.cache_read_input_tokens = usage.cache_read_input_tokens;
+    event.cache_creation_input_tokens = usage.cache_creation_input_tokens;
+    if event.model.is_none() {
+        event.model = usage.model;
+    }
     event
 }
 
@@ -599,6 +775,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
         let event_name_clone = event_name.clone();
         let plan_id_clone = plan_id.clone();
         let stdout_monitor = monitor.clone();
+        let stdout_working_directory = resolved_working_dir.clone();
 
         // 处理标准输出
         let stdout_handle = tokio::spawn(async move {
@@ -614,7 +791,13 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
 
                     match serde_json::from_str::<serde_json::Value>(&line) {
                         Ok(json_value) => {
-                            let event = parse_claude_json_output(&session_id_clone, &json_value);
+                            let event = parse_claude_json_output(&session_id_clone, &json_value)
+                                .map(|event| {
+                                    hydrate_tool_use_usage_from_transcript(
+                                        event,
+                                        stdout_working_directory.as_deref(),
+                                    )
+                                });
                             if let Some(event) = event {
                                 outcome.emitted_non_error_event |=
                                     is_successful_event_type(&event.event_type);
@@ -1043,7 +1226,17 @@ fn parse_claude_json_blob_output(session_id: &str, output: &str) -> Option<CliSt
     None
 }
 
-fn extract_usage_counts(usage: Option<&serde_json::Value>) -> (Option<u32>, Option<u32>) {
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct UsageCounts {
+    input_tokens: Option<u32>,
+    output_tokens: Option<u32>,
+    raw_input_tokens: Option<u32>,
+    raw_output_tokens: Option<u32>,
+    cache_read_input_tokens: Option<u32>,
+    cache_creation_input_tokens: Option<u32>,
+}
+
+fn extract_usage_counts(usage: Option<&serde_json::Value>) -> UsageCounts {
     let raw_input_tokens = usage
         .and_then(|u| {
             u.get("input_tokens")
@@ -1074,7 +1267,7 @@ fn extract_usage_counts(usage: Option<&serde_json::Value>) -> (Option<u32>, Opti
     let has_non_zero_usage =
         raw_input_tokens.unwrap_or(0) > 0 || raw_output_tokens.unwrap_or(0) > 0;
     if !has_non_zero_usage {
-        return (None, None);
+        return UsageCounts::default();
     }
 
     let input_tokens = raw_input_tokens
@@ -1085,7 +1278,14 @@ fn extract_usage_counts(usage: Option<&serde_json::Value>) -> (Option<u32>, Opti
         .or(Some(0));
     let output_tokens = raw_output_tokens.or(Some(0));
 
-    (input_tokens, output_tokens)
+    UsageCounts {
+        input_tokens,
+        output_tokens,
+        raw_input_tokens,
+        raw_output_tokens,
+        cache_read_input_tokens: cache_read,
+        cache_creation_input_tokens: cache_creation,
+    }
 }
 
 fn extract_result_model_name(json: &serde_json::Value) -> Option<String> {
@@ -1238,12 +1438,12 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
         "result" => {
             let model = extract_result_model_name(json);
             let external_session_id = extract_external_session_id(json);
-            let (input_tokens, output_tokens) = extract_usage_counts(json.get("usage"));
+            let usage = extract_usage_counts(json.get("usage"));
 
             if model.is_some()
                 || external_session_id.is_some()
-                || input_tokens.is_some()
-                || output_tokens.is_some()
+                || usage.input_tokens.is_some()
+                || usage.output_tokens.is_some()
             {
                 Some(CliStreamEvent {
                     event_type: "usage".to_string(),
@@ -1254,14 +1454,14 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                     tool_input: None,
                     tool_result: None,
                     error: None,
-                    input_tokens,
-                    output_tokens,
+                    input_tokens: usage.input_tokens,
+                    output_tokens: usage.output_tokens,
                     model,
                     external_session_id,
-                    raw_input_tokens: None,
-                    raw_output_tokens: None,
-                    cache_read_input_tokens: None,
-                    cache_creation_input_tokens: None,
+                    raw_input_tokens: usage.raw_input_tokens,
+                    raw_output_tokens: usage.raw_output_tokens,
+                    cache_read_input_tokens: usage.cache_read_input_tokens,
+                    cache_creation_input_tokens: usage.cache_creation_input_tokens,
                 })
             } else {
                 None
@@ -1339,11 +1539,13 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                 .get("model")
                 .and_then(|m| m.as_str())
                 .map(|m| m.to_string());
+            let usage = extract_usage_counts(message.get("usage"));
 
             // Claude CLI 在一次 agentic 执行中会输出多条 assistant 事件，
             // 同一 message/turn 的 usage 可能被重复附带在多条事件里。
-            // 统一只以最终 result.usage 作为 token 的 canonical 来源，
-            // 避免前端和 usage 落库出现重复累计。
+            // 对标准 Claude，最终 result.usage 仍然是 canonical 来源；
+            // 但部分 Claude 兼容源只会把 usage 挂在 assistant.message 上。
+            // 这里仅透传 raw usage，交给前端按 runtime 归一化，避免重复累计。
             let input_tokens = None;
             let output_tokens = None;
 
@@ -1372,6 +1574,10 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                                 output_tokens,
                                 model: model.clone(),
                                 external_session_id: extract_external_session_id(json),
+                                raw_input_tokens: usage.raw_input_tokens,
+                                raw_output_tokens: usage.raw_output_tokens,
+                                cache_read_input_tokens: usage.cache_read_input_tokens,
+                                cache_creation_input_tokens: usage.cache_creation_input_tokens,
                                 ..build_thinking_event(session_id, thinking_text)
                             });
                         }
@@ -1395,11 +1601,11 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                             input_tokens,
                             output_tokens,
                             model: model.clone(),
-                            external_session_id: None,
-                        raw_input_tokens: None,
-                        raw_output_tokens: None,
-                        cache_read_input_tokens: None,
-                        cache_creation_input_tokens: None,
+                            external_session_id: extract_external_session_id(json),
+                        raw_input_tokens: usage.raw_input_tokens,
+                        raw_output_tokens: usage.raw_output_tokens,
+                        cache_read_input_tokens: usage.cache_read_input_tokens,
+                        cache_creation_input_tokens: usage.cache_creation_input_tokens,
                         });
                     }
                     "tool_use" => {
@@ -1421,11 +1627,11 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                             input_tokens,
                             output_tokens,
                             model: model.clone(),
-                            external_session_id: None,
-                        raw_input_tokens: None,
-                        raw_output_tokens: None,
-                        cache_read_input_tokens: None,
-                        cache_creation_input_tokens: None,
+                            external_session_id: extract_external_session_id(json),
+                        raw_input_tokens: usage.raw_input_tokens,
+                        raw_output_tokens: usage.raw_output_tokens,
+                        cache_read_input_tokens: usage.cache_read_input_tokens,
+                        cache_creation_input_tokens: usage.cache_creation_input_tokens,
                         });
                     }
                     _ => {
@@ -1500,8 +1706,11 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::{
-        parse_claude_json_output, should_ignore_stderr_line,
+        hydrate_tool_use_usage_from_transcript, parse_claude_json_output,
+        should_ignore_stderr_line,
         should_treat_process_failure_as_success, StderrReadOutcome, StdoutReadOutcome,
     };
 
@@ -1558,7 +1767,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_assistant_usage_and_waits_for_result_usage() {
+    fn forwards_assistant_raw_usage_without_normalized_tokens() {
         let json = serde_json::json!({
             "type": "assistant",
             "message": {
@@ -1591,8 +1800,15 @@ mod tests {
         assert_eq!(event.content.as_deref(), Some("ok"));
         assert_eq!(event.input_tokens, None);
         assert_eq!(event.output_tokens, None);
+        assert_eq!(event.raw_input_tokens, Some(10140));
+        assert_eq!(event.raw_output_tokens, Some(0));
+        assert_eq!(event.cache_read_input_tokens, Some(0));
+        assert_eq!(event.cache_creation_input_tokens, Some(0));
         assert_eq!(event.model.as_deref(), Some("glm-5.1"));
-        assert_eq!(event.external_session_id, None);
+        assert_eq!(
+            event.external_session_id.as_deref(),
+            Some("f942ab3e-be1a-4684-8bee-e88f444e1a0e")
+        );
     }
 
     #[test]
@@ -1626,10 +1842,105 @@ mod tests {
         assert_eq!(event.event_type, "usage");
         assert_eq!(event.input_tokens, Some(65310));
         assert_eq!(event.output_tokens, Some(3));
+        assert_eq!(event.raw_input_tokens, Some(65630));
+        assert_eq!(event.raw_output_tokens, Some(3));
+        assert_eq!(event.cache_read_input_tokens, Some(320));
+        assert_eq!(event.cache_creation_input_tokens, Some(0));
         assert_eq!(event.model.as_deref(), Some("glm-5.1"));
         assert_eq!(
             event.external_session_id.as_deref(),
             Some("f942ab3e-be1a-4684-8bee-e88f444e1a0e")
         );
+    }
+
+    #[test]
+    fn extracts_external_session_id_from_camel_case_field() {
+        let json = serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "type": "message",
+                "model": "glm-5.1",
+                "usage": {
+                    "input_tokens": 10,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "output_tokens": 0
+                },
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "call_123",
+                        "name": "StructuredOutput",
+                        "input": {
+                            "type": "form_request"
+                        }
+                    }
+                ]
+            },
+            "sessionId": "camel-session-id"
+        });
+
+        let event = parse_claude_json_output("session-1", &json).expect("expected tool_use event");
+
+        assert_eq!(event.event_type, "tool_use");
+        assert_eq!(event.external_session_id.as_deref(), Some("camel-session-id"));
+    }
+
+    #[test]
+    fn hydrates_tool_use_usage_from_claude_transcript() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "easy-agent-claude-hydrate-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let project_dir = temp_root
+            .join(".claude")
+            .join("projects")
+            .join("-Users-test-demo");
+        fs::create_dir_all(&project_dir).expect("create project dir");
+        let transcript_path = project_dir.join("session-123.jsonl");
+        fs::write(
+            &transcript_path,
+            concat!(
+                "{\"type\":\"assistant\",\"sessionId\":\"session-123\",\"message\":{\"model\":\"glm-5.1\",\"usage\":{\"input_tokens\":73887,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":50944,\"output_tokens\":916},\"content\":[{\"type\":\"tool_use\",\"id\":\"call_abc\",\"name\":\"StructuredOutput\",\"input\":{\"type\":\"form_request\"}}]}}\n"
+            ),
+        )
+        .expect("write transcript");
+
+        let previous_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", &temp_root);
+
+        let event = super::CliStreamEvent {
+            event_type: "tool_use".to_string(),
+            session_id: "session-local".to_string(),
+            content: None,
+            tool_name: Some("StructuredOutput".to_string()),
+            tool_call_id: Some("call_abc".to_string()),
+            tool_input: Some("{\"type\":\"form_request\"}".to_string()),
+            tool_result: None,
+            error: None,
+            input_tokens: None,
+            output_tokens: None,
+            model: None,
+            external_session_id: Some("session-123".to_string()),
+            raw_input_tokens: Some(17525),
+            raw_output_tokens: Some(0),
+            cache_read_input_tokens: Some(0),
+            cache_creation_input_tokens: Some(0),
+        };
+
+        let hydrated = hydrate_tool_use_usage_from_transcript(event, Some("/Users/test/demo"));
+
+        match previous_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = fs::remove_dir_all(&temp_root);
+
+        assert_eq!(hydrated.raw_input_tokens, Some(73887));
+        assert_eq!(hydrated.raw_output_tokens, Some(916));
+        assert_eq!(hydrated.cache_read_input_tokens, Some(50944));
+        assert_eq!(hydrated.cache_creation_input_tokens, Some(0));
+        assert_eq!(hydrated.model.as_deref(), Some("glm-5.1"));
     }
 }

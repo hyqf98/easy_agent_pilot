@@ -52,6 +52,11 @@ export interface CompressionMetadata {
   panelExpanded?: boolean
 }
 
+export interface MessageRetryState {
+  current: number
+  max: number
+}
+
 export interface Message {
   id: string
   sessionId: string
@@ -67,6 +72,7 @@ export interface Message {
   thinkingActive?: boolean
   editTraces?: FileEditTrace[]
   runtimeNotices?: RuntimeNotice[]
+  retryState?: MessageRetryState
   createdAt: string
   // 压缩消息的元数据
   compressionMetadata?: CompressionMetadata

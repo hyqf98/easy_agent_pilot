@@ -6,7 +6,7 @@ import { inferAgentProvider, useAgentStore, type AgentConfig } from './agent'
 import { useAgentTeamsStore } from './agentTeams'
 import { usePlanStore } from './plan'
 import { useSettingsStore } from './settings'
-import type { MessageAttachment } from './message'
+import type { MessageAttachment, MessageRetryState } from './message'
 import { logger } from '@/utils/logger'
 import { normalizeFormSchemaForRendering, normalizeFormSchemasForRendering } from '@/utils/formSchema'
 import {
@@ -19,6 +19,7 @@ import {
   resolveExpertById
 } from '@/services/agentTeams/runtime'
 import {
+  appendPlanSplitInstructionGuard,
   buildPlanSplitJsonSchema,
   buildPlanSplitKickoffPrompt,
   buildPlanSplitSystemPrompt,
@@ -533,6 +534,8 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
   const autoRetryTimer = ref<ReturnType<typeof setTimeout> | null>(null)
   const autoRetryScheduled = ref(false)
   const autoRetryNextRunAt = ref<number | null>(null)
+  const retryAttemptCount = ref(0)
+  const activeRetryState = ref<MessageRetryState | null>(null)
 
   let initVersion = 0
   let logLoadingTimer: ReturnType<typeof setTimeout> | null = null
@@ -556,6 +559,8 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     usageModelHint: string | null
     recordedUsageSessionIds: Set<string>
     autoRetryCount: number
+    retryAttemptCount: number
+    activeRetryState: MessageRetryState | null
   }
 
   const planStateCache = new Map<string, PlanSplitCache>()
@@ -603,6 +608,8 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     refinementState.value = null
     autoRetryCount.value = 0
     autoRetryNextRunAt.value = null
+    retryAttemptCount.value = 0
+    activeRetryState.value = null
   }
 
   function saveCurrentPlanState() {
@@ -625,7 +632,9 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       runtimeNotices: [...runtimeNotices.value],
       usageModelHint: usageModelHint.value,
       recordedUsageSessionIds: new Set(recordedUsageSessionIds.value),
-      autoRetryCount: autoRetryCount.value
+      autoRetryCount: autoRetryCount.value,
+      retryAttemptCount: retryAttemptCount.value,
+      activeRetryState: activeRetryState.value
     })
   }
 
@@ -647,6 +656,8 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     usageModelHint.value = cached.usageModelHint
     recordedUsageSessionIds.value = new Set(cached.recordedUsageSessionIds)
     autoRetryCount.value = cached.autoRetryCount
+    retryAttemptCount.value = cached.retryAttemptCount
+    activeRetryState.value = cached.activeRetryState
     isProcessing.value = cached.session?.status === 'running'
     runtimeMetrics.value = null
     autoRetryScheduled.value = false
@@ -754,11 +765,17 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       return
     }
 
-    const retryableFailure = classifyCliFailureFragments('Plan Split CLI', [
+    const explicitFailure = classifyCliFailureFragments('Plan Split CLI', [
       createCliFailureFragment('error', session.value.errorMessage),
-      createCliFailureFragment('error', session.value.parseError),
-      createCliFailureFragment('content', session.value.rawContent)
+      createCliFailureFragment('error', session.value.parseError)
     ].filter((item): item is NonNullable<typeof item> => Boolean(item)))
+    const retryableFailure = explicitFailure?.kind === 'retryable'
+      ? explicitFailure
+      : classifyCliFailureFragments('Plan Split CLI', [
+          createCliFailureFragment('error', session.value.errorMessage),
+          createCliFailureFragment('error', session.value.parseError),
+          createCliFailureFragment('content', session.value.rawContent)
+        ].filter((item): item is NonNullable<typeof item> => Boolean(item)))
     if (!retryableFailure || retryableFailure.kind !== 'retryable') {
       autoRetryScheduled.value = false
       autoRetryNextRunAt.value = null
@@ -775,8 +792,13 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
 
     autoRetryScheduled.value = true
     autoRetryCount.value += 1
+    retryAttemptCount.value += 1
     const retryNumber = autoRetryCount.value
     const delaySeconds = Math.ceil(PLAN_SPLIT_AUTO_RETRY_DELAY_MS / 1000)
+    activeRetryState.value = {
+      current: retryAttemptCount.value,
+      max: maxRetries
+    }
     autoRetryNextRunAt.value = Date.now() + PLAN_SPLIT_AUTO_RETRY_DELAY_MS
 
     upsertAutoRetryProgressLog(retryNumber, maxRetries, delaySeconds)
@@ -790,7 +812,8 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       }
       try {
         await restartFromPersistedContext(session.value, {
-          preserveAutoRetryState: true
+          preserveAutoRetryState: true,
+          preserveRetryState: true
         })
       } catch (error) {
         logger.error('[TaskSplit] Auto-retry failed:', error)
@@ -842,11 +865,26 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     if (snapshot.status === 'completed' || snapshot.status === 'stopped') {
       cancelAutoRetry()
       autoRetryCount.value = 0
+      activeRetryState.value = null
     }
 
     if (snapshot.status === 'failed' && context.value && !autoRetryScheduled.value) {
       scheduleAutoRetry()
     }
+  }
+
+  function shouldClearRecoveredRetryState(type: PlanSplitLogRecord['type']) {
+    return [
+      'content',
+      'thinking',
+      'thinking_start',
+      'tool_use',
+      'tool_input_delta',
+      'tool_result',
+      'usage',
+      'message_start',
+      'system'
+    ].includes(type)
   }
 
   function recordPlanSplitUsage(snapshot: PlanSplitSessionRecord) {
@@ -979,6 +1017,28 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       executionSessionId: snapshot.executionSessionId,
       updatedAt: snapshot.updatedAt
     })
+    const recoveredSnapshot = await invoke<PlanSplitSessionRecord | null>('stop_plan_split', {
+      planId
+    }).catch((error) => {
+      logger.warn('[TaskSplit] Failed to stop stale running session:', error)
+      return null
+    })
+
+    if (recoveredSnapshot) {
+      const splitLogs = await invoke<RustPlanSplitLogRecord[]>('list_plan_split_logs', {
+        planId
+      }).catch((error) => {
+        logger.warn('[TaskSplit] Failed to reload logs for stale running session:', error)
+        return null
+      })
+
+      if (splitLogs) {
+        logs.value = toPlanSplitLogs(splitLogs)
+      }
+      applySessionSnapshot(recoveredSnapshot, true)
+      return true
+    }
+
     await invoke('clear_plan_split_session', { planId })
     logs.value = []
     applySessionSnapshot(null, false)
@@ -1018,6 +1078,10 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
           ;(globalThis as { __EASY_AGENT_LAST_PLAN_SPLIT_METRICS?: PlanSplitRuntimeMetrics | null }).__EASY_AGENT_LAST_PLAN_SPLIT_METRICS = runtimeMetrics.value
         }
         return
+      }
+
+      if (activeRetryState.value && shouldClearRecoveredRetryState(payload.type as PlanSplitLogRecord['type'])) {
+        activeRetryState.value = null
       }
 
       if (!runtimeMetrics.value) {
@@ -1063,6 +1127,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     options?: {
       preserveLogs?: boolean
       preserveAutoRetryState?: boolean
+      preserveRetryState?: boolean
       resumeSessionId?: string
       preserveResult?: boolean
     }
@@ -1085,6 +1150,9 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     cancelAutoRetry()
     if (!options?.preserveAutoRetryState) {
       autoRetryCount.value = 0
+    }
+    if (!options?.preserveRetryState) {
+      activeRetryState.value = null
     }
     runtimeMetrics.value = {
       startedAt: performance.now()
@@ -1312,6 +1380,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     snapshot: PlanSplitSessionRecord,
     options?: {
       preserveAutoRetryState?: boolean
+      preserveRetryState?: boolean
       extraUserPrompt?: string
       extraUserAttachments?: MessageAttachment[]
       displayContent?: string
@@ -1325,6 +1394,9 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     if (!options?.preserveAutoRetryState) {
       cancelAutoRetry()
       autoRetryCount.value = 0
+    }
+    if (!options?.preserveRetryState) {
+      activeRetryState.value = null
     }
 
     const resumeSessionId = parseJson<ExecutionRequest | null>(
@@ -1365,7 +1437,17 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
         ...llmMessages,
         {
           role: 'user',
-          content: extraUserPrompt || '请结合附件继续调整当前任务拆分结果。',
+          content: appendPlanSplitInstructionGuard(
+            extraUserPrompt || '请结合附件继续调整当前任务拆分结果。',
+            {
+              targetIndex: refinementState.value?.targetIndex ?? undefined,
+              totalTaskCount: splitResult.value?.length,
+              taskCountMode: context.value.taskCountMode ?? 'min',
+              minTaskCount: context.value.taskCountMode === 'exact'
+                ? Math.max(1, splitResult.value?.length ?? context.value.granularity)
+                : Math.max(1, context.value.granularity)
+            }
+          ),
           attachments: extraUserAttachments
         }
       ]
@@ -1414,6 +1496,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     await startBackgroundSession(context.value, llmMessages, uiMessages, {
       preserveLogs: true,
       preserveAutoRetryState: options?.preserveAutoRetryState,
+      preserveRetryState: options?.preserveRetryState,
       resumeSessionId,
       preserveResult: Boolean(splitResult.value?.length)
     })
@@ -1423,6 +1506,8 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     if (!session.value) {
       return
     }
+
+    activeRetryState.value = null
 
     await restartFromPersistedContext(session.value, {
       trimLatestTurn: true
@@ -1482,6 +1567,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     await invoke('clear_plan_split_session', { planId })
     planStateCache.delete(planId)
     if (context.value?.planId === planId) {
+      detachStream()
       resetState()
     }
   }
@@ -1814,6 +1900,8 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     autoRetryCount,
     autoRetryScheduled,
     autoRetryNextRunAt,
+    retryAttemptCount,
+    activeRetryState,
     cancelAutoRetry,
     updateSplitTask,
     removeSplitTask,
