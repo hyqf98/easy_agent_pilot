@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "updated": "2026-04-28",
+  "providers": {
+    "claude": [
+      { "modelId": "claude-opus-4-7", "displayName": "Claude Opus 4.7", "contextWindow": 1000000, "sortOrder": 1 },
+      { "modelId": "claude-sonnet-5", "displayName": "Claude Sonnet 5", "contextWindow": 1000000, "sortOrder": 2 },
+      { "modelId": "claude-opus-4-6", "displayName": "Claude Opus 4.6", "contextWindow": 1000000, "sortOrder": 3 },
+      { "modelId": "claude-opus-4-6[1m]", "displayName": "Claude Opus 4.6 [1M]", "contextWindow": 1000000, "sortOrder": 4 },
+      { "modelId": "claude-sonnet-4-6", "displayName": "Claude Sonnet 4.6", "contextWindow": 200000, "sortOrder": 5 },
+      { "modelId": "claude-sonnet-4-6[1m]", "displayName": "Claude Sonnet 4.6 [1M]", "contextWindow": 1000000, "sortOrder": 6 }
+    ],
+    "codex": [
+      { "modelId": "gpt-5.5", "displayName": "GPT-5.5", "contextWindow": 1000000, "sortOrder": 1 },
+      { "modelId": "gpt-5.4", "displayName": "GPT-5.4", "contextWindow": 400000, "sortOrder": 2 },
+      { "modelId": "gpt-5.4-mini", "displayName": "GPT-5.4 Mini", "contextWindow": 400000, "sortOrder": 3 }
+    ]
+  }
+}
