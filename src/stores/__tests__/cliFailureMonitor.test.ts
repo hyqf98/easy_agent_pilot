@@ -17,6 +17,17 @@ describe('cliFailureMonitor', () => {
     expect(result?.kind).toBe('retryable')
   })
 
+  it('classifies retryable gateway timeout payloads', () => {
+    const result = classifyCliFailureFragments('Claude', [
+      createCliFailureFragment(
+        'content',
+        'API Error: 504 <html><head><title>504 Gateway Time-out</title></head><body><center><h1>504 Gateway Time-out</h1></center><hr><center>nginx</center></body></html>'
+      )!
+    ])
+
+    expect(result?.kind).toBe('retryable')
+  })
+
   it('classifies explicit stderr errors as non-retryable', () => {
     const result = classifyCliFailureFragments('Claude', [
       createCliFailureFragment('stderr', 'fatal error: unsupported model configuration')!

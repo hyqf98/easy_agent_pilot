@@ -19,7 +19,6 @@ export interface CliFailureMatch {
 }
 
 const RETRYABLE_PATTERNS = [
-  '429',
   'rate limit',
   'too many requests',
   'throttl',
@@ -30,6 +29,9 @@ const RETRYABLE_PATTERNS = [
   'temporarily unavailable',
   'temporarily_unavailable',
   'service unavailable',
+  'bad gateway',
+  'gateway timeout',
+  'gateway time-out',
   'timeout',
   'timed out',
   'network error',
@@ -43,6 +45,9 @@ const RETRYABLE_PATTERNS = [
   'unexpected eof',
   'stream disconnected',
   'server disconnected',
+  'upstream timed out',
+  'upstream connect error',
+  'upstream prematurely closed connection',
   'resource temporarily unavailable',
   'temporarily busy',
   'econnreset',
@@ -99,8 +104,41 @@ function normalizeText(value: string | null | undefined): string {
   return value?.trim().toLowerCase() || ''
 }
 
+function hasRetryableHttpStatus(normalized: string): boolean {
+  const hasTransientStatus = ['429', '502', '503', '504'].some(status =>
+    normalized.includes(status)
+  )
+
+  if (!hasTransientStatus) {
+    return false
+  }
+
+  return [
+    'api error',
+    'apl error',
+    'http',
+    'status',
+    'error',
+    'rate limit',
+    'too many requests',
+    'temporarily unavailable',
+    'service unavailable',
+    'gateway',
+    'timeout',
+    'timed out',
+    'nginx',
+    'upstream',
+    '达到速率限制',
+    '请求频率',
+    '限流',
+    '服务暂时不可用',
+    '网络超时'
+  ].some(signal => normalized.includes(signal))
+}
+
 function hasRetryablePattern(normalized: string): boolean {
-  return RETRYABLE_PATTERNS.some(pattern => normalized.includes(pattern))
+  return hasRetryableHttpStatus(normalized)
+    || RETRYABLE_PATTERNS.some(pattern => normalized.includes(pattern))
 }
 
 function hasErrorContext(normalized: string): boolean {

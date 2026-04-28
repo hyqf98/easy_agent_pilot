@@ -116,6 +116,7 @@ function buildResultSummary(content: string) {
   }
 
   return {
+    summary: result.summary?.trim() || '',
     count: result.tasks.length,
     tasks: result.tasks
   }
@@ -124,14 +125,31 @@ function buildResultSummary(content: string) {
 function buildAssistantDisplayContent(content: string) {
   const summary = buildResultSummary(content)
   if (summary) {
-    return [
-      `任务拆分完成，共生成 ${summary.count} 个任务。`,
-      '',
-      ...summary.tasks.map((task, index) => `${index + 1}. ${task.title}`)
-    ].join('\n')
+    return summary.summary || `任务拆分完成，共生成 ${summary.count} 个任务。`
   }
 
   return content.trim()
+}
+
+function estimateTokenCountFromText(content?: string | null): number | undefined {
+  const normalized = trimContent(content)?.replace(/\s+/g, ' ')
+  if (!normalized) {
+    return undefined
+  }
+
+  let hanCharCount = 0
+  let otherCharCount = 0
+
+  for (const char of normalized) {
+    if (/[\u3400-\u9fff]/.test(char)) {
+      hanCharCount += 1
+    } else {
+      otherCharCount += 1
+    }
+  }
+
+  const estimatedTokens = Math.round(hanCharCount + otherCharCount / 4)
+  return estimatedTokens > 0 ? estimatedTokens : undefined
 }
 
 function buildFormRequestContent(question: string, forms: DynamicFormSchema[]) {
@@ -276,9 +294,10 @@ function buildUsageSnapshotFromMetadata(
 function buildAssistantRuntimeNotices(
   logs: PlanSplitLogRecord[],
   fallbackModel?: string,
-  runtimeProvider?: string
+  runtimeProvider?: string,
+  fallbackAssistantContent?: string
 ): RuntimeNotice[] {
-  if (logs.length === 0 && !fallbackModel) {
+  if (logs.length === 0) {
     return []
   }
 
@@ -346,12 +365,22 @@ function buildAssistantRuntimeNotices(
   const fallbackUsageModel = latestUsageSnapshot?.model ?? model
   const fallbackInputTokens = latestUsageSnapshot?.inputTokens
   const fallbackOutputTokens = latestUsageSnapshot?.outputTokens
+  const estimatedOutputTokens = estimateTokenCountFromText(fallbackAssistantContent)
+  const resolvedInputTokens = hasUsage ? totalInputTokens : fallbackInputTokens
+  const resolvedOutputTokens = hasUsage
+    ? (totalOutputTokens > 0 ? totalOutputTokens : fallbackOutputTokens || estimatedOutputTokens)
+    : (fallbackOutputTokens || estimatedOutputTokens)
+  const shouldShowUsageNotice = latestUsageSnapshot !== null
+    || resolvedInputTokens !== undefined
+    || resolvedOutputTokens !== undefined
 
-  notices = upsertRuntimeNotice(notices, buildUsageNotice({
-    model: hasUsage ? model : fallbackUsageModel,
-    inputTokens: hasUsage ? totalInputTokens : fallbackInputTokens,
-    outputTokens: hasUsage ? totalOutputTokens : fallbackOutputTokens
-  }))
+  if (shouldShowUsageNotice) {
+    notices = upsertRuntimeNotice(notices, buildUsageNotice({
+      model: hasUsage ? model : fallbackUsageModel,
+      inputTokens: resolvedInputTokens,
+      outputTokens: resolvedOutputTokens
+    }))
+  }
 
   const startedAt = sortedLogs[0]?.createdAt
   const finishedAt = sortedLogs[sortedLogs.length - 1]?.createdAt
@@ -1031,7 +1060,8 @@ export function useTaskSplitDialog() {
       const assistantRuntimeNotices = buildAssistantRuntimeNotices(
         turn.logs,
         usageModelFallback,
-        runtimeProvider
+        runtimeProvider,
+        finalContent
       )
       const hasAssistantPayload = Boolean(
         finalContent
@@ -1094,7 +1124,8 @@ export function useTaskSplitDialog() {
             ? sortedLogs.filter(log => trimContent(log.sessionId) === activeExecutionSessionId)
             : sortedLogs,
           usageModelFallback,
-          runtimeProvider
+          runtimeProvider,
+          activeFormContent
         )
 
         messages.push({

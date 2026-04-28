@@ -40,7 +40,6 @@ pub struct CliCompletionFailure {
 }
 
 const RETRYABLE_PATTERNS: &[&str] = &[
-    "429",
     "rate limit",
     "too many requests",
     "throttl",
@@ -51,6 +50,9 @@ const RETRYABLE_PATTERNS: &[&str] = &[
     "temporarily unavailable",
     "temporarily_unavailable",
     "service unavailable",
+    "bad gateway",
+    "gateway timeout",
+    "gateway time-out",
     "timeout",
     "timed out",
     "network error",
@@ -64,6 +66,9 @@ const RETRYABLE_PATTERNS: &[&str] = &[
     "unexpected eof",
     "stream disconnected",
     "server disconnected",
+    "upstream timed out",
+    "upstream connect error",
+    "upstream prematurely closed connection",
     "resource temporarily unavailable",
     "temporarily busy",
     "econnreset",
@@ -193,9 +198,44 @@ fn normalize_text(text: &str) -> String {
 }
 
 fn is_retryable_failure(normalized: &str) -> bool {
-    RETRYABLE_PATTERNS
+    has_retryable_http_status(normalized)
+        || RETRYABLE_PATTERNS
+            .iter()
+            .any(|pattern| normalized.contains(pattern))
+}
+
+fn has_retryable_http_status(normalized: &str) -> bool {
+    let has_transient_status = ["429", "502", "503", "504"]
         .iter()
-        .any(|pattern| normalized.contains(pattern))
+        .any(|status| normalized.contains(status));
+
+    if !has_transient_status {
+        return false;
+    }
+
+    [
+        "api error",
+        "apl error",
+        "http",
+        "status",
+        "error",
+        "rate limit",
+        "too many requests",
+        "temporarily unavailable",
+        "service unavailable",
+        "gateway",
+        "timeout",
+        "timed out",
+        "nginx",
+        "upstream",
+        "达到速率限制",
+        "请求频率",
+        "限流",
+        "服务暂时不可用",
+        "网络超时",
+    ]
+    .iter()
+    .any(|signal| normalized.contains(signal))
 }
 
 fn contains_error_context(normalized: &str) -> bool {
@@ -285,6 +325,20 @@ mod tests {
 
         let failure =
             classify_cli_completion("OpenCode", &fragments, false).expect("should classify");
+
+        assert_eq!(failure.kind, CliCompletionFailureKind::Retryable);
+    }
+
+    #[test]
+    fn classifies_retryable_gateway_timeout_payload() {
+        let fragments = vec![CliTextFragment::new(
+            CliTextSource::Content,
+            "API Error: 504 <html><head><title>504 Gateway Time-out</title></head><body><center><h1>504 Gateway Time-out</h1></center><hr><center>nginx</center></body></html>",
+        )
+        .expect("fragment")];
+
+        let failure =
+            classify_cli_completion("Claude", &fragments, false).expect("should classify");
 
         assert_eq!(failure.kind, CliCompletionFailureKind::Retryable);
     }

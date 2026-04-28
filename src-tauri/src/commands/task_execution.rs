@@ -252,6 +252,30 @@ fn summarize_overview_list(items: &[String], limit: usize) -> String {
     }
 }
 
+fn summarize_task_file_changes(
+    added_files: &[OverviewFileEntry],
+    modified_files: &[OverviewFileEntry],
+    changed_files: &[OverviewFileEntry],
+    deleted_files: &[OverviewFileEntry],
+) -> String {
+    let mut segments: Vec<String> = Vec::new();
+
+    if !added_files.is_empty() {
+        segments.push(format!("新增 {}", summarize_file_entries(added_files, 2)));
+    }
+    if !modified_files.is_empty() {
+        segments.push(format!("修改 {}", summarize_file_entries(modified_files, 2)));
+    }
+    if !changed_files.is_empty() {
+        segments.push(format!("变更 {}", summarize_file_entries(changed_files, 2)));
+    }
+    if !deleted_files.is_empty() {
+        segments.push(format!("删除 {}", summarize_file_entries(deleted_files, 2)));
+    }
+
+    segments.join("；")
+}
+
 fn build_plan_execution_overview(
     conn: &rusqlite::Connection,
     plan_id: &str,
@@ -293,26 +317,13 @@ fn build_plan_execution_overview(
 
     let mut success_items: Vec<String> = Vec::new();
     let mut failed_items: Vec<String> = Vec::new();
-    let mut added_files: Vec<OverviewFileEntry> = Vec::new();
-    let mut modified_files: Vec<OverviewFileEntry> = Vec::new();
-    let mut changed_files: Vec<OverviewFileEntry> = Vec::new();
-    let mut deleted_files: Vec<OverviewFileEntry> = Vec::new();
 
     for (title, status, summary, files, fail_reason) in records.iter() {
         let summary_text = summary.as_deref().unwrap_or_default();
-        match status.as_deref() {
-            Some("success") => success_items.push(format_task_overview_item(title, summary_text)),
-            Some("failed") => {
-                let reason =
-                    truncate_overview_text(fail_reason.as_deref().unwrap_or(summary_text), 48);
-                if reason.is_empty() {
-                    failed_items.push(title.clone());
-                } else {
-                    failed_items.push(format!("{}（{}）", title, reason));
-                }
-            }
-            _ => {}
-        }
+        let mut added_files: Vec<OverviewFileEntry> = Vec::new();
+        let mut modified_files: Vec<OverviewFileEntry> = Vec::new();
+        let mut changed_files: Vec<OverviewFileEntry> = Vec::new();
+        let mut deleted_files: Vec<OverviewFileEntry> = Vec::new();
 
         for raw_file in files {
             if let Some(path) = raw_file.strip_prefix("added:") {
@@ -333,55 +344,53 @@ fn build_plan_execution_overview(
             }
             push_unique_file_entry(&mut changed_files, raw_file.trim());
         }
+
+        match status.as_deref() {
+            Some("success") => {
+                let file_changes = summarize_task_file_changes(
+                    &added_files,
+                    &modified_files,
+                    &changed_files,
+                    &deleted_files,
+                );
+                if !file_changes.is_empty() {
+                    success_items.push(format!("{}（{}）", title, file_changes));
+                } else {
+                    success_items.push(format_task_overview_item(title, summary_text));
+                }
+            }
+            Some("failed") => {
+                let reason =
+                    truncate_overview_text(fail_reason.as_deref().unwrap_or(summary_text), 48);
+                if reason.is_empty() {
+                    failed_items.push(title.clone());
+                } else {
+                    failed_items.push(format!("{}（{}）", title, reason));
+                }
+            }
+            _ => {}
+        }
     }
 
     let executed_count = success_items.len() + failed_items.len();
-    let mut segments = vec![format!(
-        "已执行 {} 个任务，其中 {} 个完成、{} 个失败",
-        executed_count,
-        success_items.len(),
-        failed_items.len()
-    )];
+    let mut segments = vec![format!("成功 {} 个，失败 {} 个", success_items.len(), failed_items.len())];
 
     if !success_items.is_empty() {
         segments.push(format!(
-            "完成任务摘要：{}",
-            summarize_overview_list(&success_items, 3)
+            "成功任务：{}",
+            summarize_overview_list(&success_items, 4)
         ));
     }
 
     if !failed_items.is_empty() {
         segments.push(format!(
             "失败任务：{}",
-            summarize_overview_list(&failed_items, 2)
+            summarize_overview_list(&failed_items, 3)
         ));
     }
 
-    let mut file_segments: Vec<String> = Vec::new();
-    if !added_files.is_empty() {
-        file_segments.push(format!("新增 {}", summarize_file_entries(&added_files, 3)));
-    }
-    if !modified_files.is_empty() {
-        file_segments.push(format!(
-            "修改 {}",
-            summarize_file_entries(&modified_files, 3)
-        ));
-    }
-    if !changed_files.is_empty() {
-        file_segments.push(format!(
-            "变更 {}",
-            summarize_file_entries(&changed_files, 3)
-        ));
-    }
-    if !deleted_files.is_empty() {
-        file_segments.push(format!(
-            "删除 {}",
-            summarize_file_entries(&deleted_files, 3)
-        ));
-    }
-
-    if !file_segments.is_empty() {
-        segments.push(format!("文件变更：{}", file_segments.join("；")));
+    if executed_count == 0 {
+        return Ok(String::new());
     }
 
     Ok(format!("{}。", segments.join("；")))
