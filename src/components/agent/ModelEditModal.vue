@@ -18,6 +18,7 @@ const CONTEXT_WINDOW_PRESETS = [
 
 const props = defineProps<{
   agentId: string
+  provider?: string
   model?: AgentModelConfig | null
 }>()
 
@@ -32,8 +33,30 @@ const emit = defineEmits<{
 
 const agentConfigStore = useAgentConfigStore()
 
-// 是否是编辑模式
 const isEditMode = computed(() => !!props.model)
+
+const providerPlaceholders = computed(() => {
+  switch (props.provider) {
+    case 'opencode':
+      return {
+        modelId: '例如: openai/gpt-4.1, modelscope/glm-5.1',
+        displayName: '例如: OpenAI GPT-4.1, GLM 5.1',
+        modelHint: '按 provider/模型ID 格式填写，opencode 会直接使用这个值调用 -m'
+      }
+    case 'codex':
+      return {
+        modelId: '例如: gpt-5, codex-mini, o4-mini',
+        displayName: '例如: GPT-5, Codex Mini',
+        modelHint: '按 Codex CLI 支持的模型 ID 填写'
+      }
+    default:
+      return {
+        modelId: '例如: opus4.6, sonnet4.5, haiku3.5',
+        displayName: '例如: Claude Opus 4.6, Claude Sonnet 4.5',
+        modelHint: '按 Claude CLI 支持的模型 ID 填写，例如 opus4.6'
+      }
+  }
+})
 
 // 保存按钮是否可用
 const canSave = computed(() => {
@@ -159,11 +182,11 @@ const handleClose = () => {
               v-model="formData.modelId"
               type="text"
               class="form-input"
-              :placeholder="isBuiltinDefaultModel ? '使用系统默认模型' : '例如: gpt-4o, claude-3-5-sonnet-20241022'"
+              :placeholder="isBuiltinDefaultModel ? '使用系统默认模型' : providerPlaceholders.modelId"
               :disabled="isBuiltinDefaultModel"
             >
             <p class="form-hint">
-              {{ isBuiltinDefaultModel ? '此配置使用系统默认模型，无需指定模型 ID' : '模型在 API 中的唯一标识符' }}
+              {{ isBuiltinDefaultModel ? '此配置使用系统默认模型，无需指定模型 ID' : providerPlaceholders.modelHint }}
             </p>
           </div>
 
@@ -173,7 +196,7 @@ const handleClose = () => {
               v-model="formData.displayName"
               type="text"
               class="form-input"
-              placeholder="例如: GPT-4o, Claude 3.5 Sonnet"
+              :placeholder="providerPlaceholders.displayName"
             >
             <p class="form-hint">
               在界面上显示的友好名称

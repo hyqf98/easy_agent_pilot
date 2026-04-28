@@ -44,6 +44,7 @@ import { FILE_MENTION_PATTERN, getMentionDisplayText, getMentionTitle, isGlobalM
 import { createComposerFileMention, formatMentionLiteral } from '@/utils/composerFileMention'
 import { resolveSessionAgent, resolveSessionAgentId } from '@/utils/sessionAgent'
 import { resolveAttachmentPreviewUrl } from '@/utils/attachmentPreview'
+import { formatAgentModelLabel } from '@/utils/agentModelLabel'
 import type { MemorySuggestion, MemorySuggestionSourceType } from '@/types/memory'
 import {
   buildExpertSystemPrompt,
@@ -95,6 +96,7 @@ const MEMORY_SUGGESTION_EMPTY_STATE_DELAY_MS = 3000
 const MEMORY_SUGGESTION_EMPTY_STATE_RECHECK_MS = 240
 const MEMORY_SUGGESTION_KEYBOARD_ACTIVE_MS = 800
 const MEMORY_PREVIEW_HIDE_DELAY_MS = 120
+const PROJECT_INIT_SECTION_TITLE = '## Project Architecture Analysis (Auto Generated)'
 
 function buildMemoryReferenceToken(sourceType: MemorySuggestionSourceType, sourceId: string): string {
   return `[[memory-ref:${sourceType}:${sourceId}]]`
@@ -221,6 +223,34 @@ function getLeadingSlashSegment(text: string): { content: string; length: number
   }
 }
 
+function buildProjectInitPrompt(projectPath: string, extraPrompt?: string): string {
+  const lines = [
+    `请对当前项目执行一次初始化架构分析，项目根目录为：${projectPath}`,
+    '',
+    '执行要求：',
+    '1. 先基于当前仓库真实代码、目录、配置和运行链路完成分析，不要脱离现有实现臆测。',
+    '2. 直接使用 CLI 自己读取并更新当前项目根目录的 AGENTS.md，不要只在对话里给建议。',
+    '3. 如果 AGENTS.md 已存在，必须保留原有人工规则与内容，只新增或更新一个自动生成区块，不要覆盖整份文件。',
+    `4. 自动生成区块标题固定为：${PROJECT_INIT_SECTION_TITLE}`,
+    '5. 该区块至少包含：项目概览、核心模块/目录职责、关键运行链路、主要数据与状态流、开发约束、调试排查入口。',
+    '6. 内容要简洁、可维护、便于后续 agent 快速理解项目，不要写成长篇空话。',
+    '7. 完成后再回复结果，明确说明 AGENTS.md 已更新，并简要概括写入了哪些内容。',
+    '',
+    '额外约束：',
+    '- 你可以读取和编辑项目文件。',
+    '- 不要修改 AGENTS.md 之外的文件，除非为了读取上下文所必需。',
+    '- 不要输出大段分析草稿到聊天里，重点是把内容落到 AGENTS.md。'
+  ]
+
+  if (extraPrompt?.trim()) {
+    lines.push('')
+    lines.push('用户补充要求：')
+    lines.push(extraPrompt.trim())
+  }
+
+  return lines.join('\n')
+}
+
 export function useConversationComposer(options: UseConversationComposerOptions) {
   const { t } = useI18n()
   const messageStore = useMessageStore()
@@ -336,13 +366,18 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
   const modelOptions = computed(() => {
     const agentId = currentAgent.value?.id
+    const provider = currentAgent.value?.provider || inferAgentProvider(currentAgent.value)
     if (!agentId) return []
 
     return agentConfigStore.getModelsConfigs(agentId)
       .filter(config => config.enabled)
       .map(config => ({
         value: config.modelId,
-        label: config.displayName,
+        label: formatAgentModelLabel({
+          provider,
+          modelId: config.modelId,
+          displayName: config.displayName
+        }),
         isDefault: config.isDefault
       }))
   })
@@ -1429,16 +1464,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     focusInput()
   }
 
-  const handleSlashCommandSelect = async (command: SlashCommandDescriptor) => {
-    if (command.name === 'compact') {
-      await runSlashCommand({
-        name: command.name,
-        argsText: ''
-      })
-      focusInput()
-      return
-    }
-
+  const handleSlashCommandSelect = (command: SlashCommandDescriptor) => {
     const textarea = textareaRef.value
     const nextText = command.insertText.endsWith(' ')
       ? command.insertText
@@ -1888,6 +1914,114 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     focusInput()
   }
 
+  const sendWithExpert = async (input: {
+    expertId: string
+    userInput: string
+    previewContent?: string
+    targetSessionId?: string
+  }): Promise<boolean> => {
+    const sessionId = input.targetSessionId ?? currentSessionId.value
+    if (!sessionId || !input.userInput.trim() || isSending.value) {
+      return false
+    }
+
+    await Promise.all([
+      agentStore.loadAgents(),
+      agentTeamsStore.loadExperts()
+    ])
+
+    const targetSession = sessionStore.sessions.find(session => session.id === sessionId) || null
+    const expert = resolveExpertById(input.expertId, agentTeamsStore.experts)
+    const runtime = resolveExpertRuntime(expert, agentStore.agents)
+    const executionAgent = runtime?.agent
+      ? {
+          ...runtime.agent,
+          modelId: runtime.modelId || runtime.agent.modelId
+        }
+      : null
+
+    if (!expert || !executionAgent) {
+      notificationStore.smartError('发送失败', new Error('未找到可用专家运行时'))
+      return false
+    }
+
+    const availability = conversationService.isAgentAvailable(executionAgent)
+    if (!availability.available) {
+      notificationStore.smartError('发送失败', new Error(availability.reason || '当前专家运行时不可用'))
+      return false
+    }
+
+    try {
+      if (targetSession?.expertId !== expert.id || targetSession?.agentId !== executionAgent.id) {
+        await sessionStore.updateSession(sessionId, {
+          expertId: expert.id,
+          agentId: executionAgent.id,
+          agentType: executionAgent.provider || executionAgent.type || 'claude',
+          cliSessionId: '',
+          cliSessionProvider: ''
+        })
+      }
+
+      await conversationService.sendMessage(
+        sessionId,
+        input.userInput,
+        executionAgent.id,
+        targetSession?.projectId,
+        [],
+        {
+          workingDirectory: currentWorkingDirectory.value || currentProjectPath.value || undefined,
+          modelId: executionAgent.modelId?.trim() || undefined,
+          injectedSystemMessages: [
+            buildExpertSystemPrompt(expert.prompt)
+          ],
+          previewContent: input.previewContent
+        }
+      )
+      return true
+    } catch (error) {
+      console.error('Failed to send message with expert:', error)
+      const normalizedError = error instanceof Error
+        ? error
+        : new Error(getErrorMessage(error, '发送失败'))
+      notificationStore.smartError('发送失败', normalizedError)
+      sessionExecutionStore.endSending(sessionId)
+      return false
+    }
+  }
+
+  const runProjectInit = async (extraPrompt?: string): Promise<void> => {
+    const sessionId = currentSessionId.value
+    const projectPath = currentProjectPath.value
+
+    if (!sessionId) {
+      throw new Error('当前没有可用会话')
+    }
+
+    if (!projectPath) {
+      throw new Error('当前会话未绑定项目，无法执行 /init')
+    }
+
+    await agentTeamsStore.loadExperts()
+    const architectExpert = agentTeamsStore.builtinArchitectExpert
+      || agentTeamsStore.enabledExperts.find(expert => expert.category === 'architect')
+      || null
+
+    if (!architectExpert) {
+      throw new Error('未找到架构分析专家')
+    }
+
+    const success = await sendWithExpert({
+      expertId: architectExpert.id,
+      userInput: buildProjectInitPrompt(projectPath, extraPrompt),
+      previewContent: extraPrompt?.trim() ? `/init ${extraPrompt.trim()}` : '/init',
+      targetSessionId: sessionId
+    })
+
+    if (!success) {
+      throw new Error('/init 执行失败')
+    }
+  }
+
   const runSlashCommand = async (parsedSlashCommand: ParsedSlashCommand) => {
     const sessionId = currentSessionId.value
     if (!sessionId) {
@@ -1903,6 +2037,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       openCompressionDialog: handleOpenCompress,
       clearSession: clearCurrentSession,
       setWorkingDirectory: options.setWorkingDirectory,
+      runProjectInit,
       notifySuccess: message => notificationStore.success(message),
       notifyWarning: message => notificationStore.warning(message),
       notifyError: message => notificationStore.error(t('common.error'), message)

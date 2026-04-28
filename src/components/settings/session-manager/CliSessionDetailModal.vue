@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { EaIcon, EaModal } from '@/components/common'
 import {
@@ -30,7 +30,12 @@ const modalVisible = computed({
   set: (value: boolean) => emit('update:visible', value)
 })
 
+const expandedMessageKeys = ref<string[]>([])
+const expandedMessageKeySet = computed(() => new Set(expandedMessageKeys.value))
+
 const formatTime = (value: string) => formatCliTime(value)
+
+const getMessageKey = (message: CliSessionMessage) => `${message.line_no}-${message.message_type}`
 
 const getMessageDisplayContent = (message: CliSessionMessage) =>
   getCliMessageDisplayContent(message, {
@@ -39,12 +44,64 @@ const getMessageDisplayContent = (message: CliSessionMessage) =>
     progress: '[Progress] 当前记录未包含可直接展示的文本内容',
     noParsedContent: '[No parsed content] 请展开 Raw JSON 查看原始记录'
   })
+
+const isUserMessage = (message: CliSessionMessage) =>
+  message.message_type === 'user' || message.role === 'user'
+
+const isAssistantMessage = (message: CliSessionMessage) =>
+  message.message_type === 'assistant' || message.role === 'assistant'
+
+const getMessageAlignmentClass = (message: CliSessionMessage) => {
+  if (isAssistantMessage(message)) return 'message-row--assistant'
+  if (isUserMessage(message)) return 'message-row--user'
+  return 'message-row--event'
+}
+
+const getBubbleClass = (message: CliSessionMessage) => {
+  if (isAssistantMessage(message)) return 'message-bubble--assistant'
+  if (isUserMessage(message)) return 'message-bubble--user'
+  return 'message-bubble--event'
+}
+
+const isExpanded = (message: CliSessionMessage) => expandedMessageKeySet.value.has(getMessageKey(message))
+
+const toggleExpanded = (message: CliSessionMessage) => {
+  const key = getMessageKey(message)
+  const next = new Set(expandedMessageKeys.value)
+
+  if (next.has(key)) {
+    next.delete(key)
+  } else {
+    next.add(key)
+  }
+
+  expandedMessageKeys.value = Array.from(next)
+}
+
+const getCollapsedPreview = (message: CliSessionMessage) => {
+  const content = getMessageDisplayContent(message)
+  if (!content) {
+    return t('settings.sessionManager.noPreview')
+  }
+
+  return content.replace(/\s+/g, ' ').trim()
+}
+
+watch(() => props.detail?.session_path, () => {
+  expandedMessageKeys.value = []
+})
+
+watch(() => props.visible, (visible) => {
+  if (!visible) {
+    expandedMessageKeys.value = []
+  }
+})
 </script>
 
 <template>
   <EaModal
     v-model:visible="modalVisible"
-    size="large"
+    content-class="cli-session-detail-modal"
   >
     <template #header>
       <div class="modal-title-wrap">
@@ -117,47 +174,75 @@ const getMessageDisplayContent = (message: CliSessionMessage) =>
         </div>
       </div>
 
-      <div class="message-list">
+      <div class="message-feed">
         <div
           v-for="msg in detail.messages"
-          :key="`${msg.line_no}-${msg.message_type}`"
-          class="message-item"
-          :class="`message-item--${msg.message_type}`"
+          :key="getMessageKey(msg)"
+          class="message-row"
+          :class="getMessageAlignmentClass(msg)"
         >
-          <div class="message-item__header">
-            <div class="message-item__type">
-              <EaIcon
-                :name="getCliMessageIcon(msg.message_type)"
-                :size="14"
-                :style="{ color: getCliMessageColor(msg.message_type) }"
-              />
-              <span>{{ msg.message_type }}</span>
-              <span
-                v-if="msg.role"
-                class="message-item__role"
-              >
-                {{ msg.role }}
-              </span>
-            </div>
-            <span
-              v-if="msg.timestamp"
-              class="message-item__time"
-            >
-              {{ formatTime(msg.timestamp) }}
-            </span>
-          </div>
-
           <div
-            v-if="getMessageDisplayContent(msg)"
-            class="message-item__content"
+            class="message-bubble"
+            :class="getBubbleClass(msg)"
           >
-            {{ getMessageDisplayContent(msg) }}
-          </div>
+            <div class="message-item__header">
+              <div class="message-item__type">
+                <EaIcon
+                  :name="getCliMessageIcon(msg.message_type)"
+                  :size="14"
+                  :style="{ color: getCliMessageColor(msg.message_type) }"
+                />
+                <span>{{ msg.message_type }}</span>
+                <span
+                  v-if="msg.role"
+                  class="message-item__role"
+                >
+                  {{ msg.role }}
+                </span>
+              </div>
+              <div class="message-item__meta">
+                <span
+                  v-if="msg.timestamp"
+                  class="message-item__time"
+                >
+                  {{ formatTime(msg.timestamp) }}
+                </span>
+                <button
+                  type="button"
+                  class="message-item__toggle"
+                  @click="toggleExpanded(msg)"
+                >
+                  <EaIcon
+                    :name="isExpanded(msg) ? 'chevron-up' : 'chevron-down'"
+                    :size="14"
+                  />
+                  <span>{{ isExpanded(msg) ? '收起' : '展开' }}</span>
+                </button>
+              </div>
+            </div>
 
-          <details class="message-item__raw">
-            <summary>{{ t('settings.sessionManager.rawJson') }}</summary>
-            <pre>{{ msg.raw_json }}</pre>
-          </details>
+            <div
+              v-if="!isExpanded(msg)"
+              class="message-item__preview"
+            >
+              {{ getCollapsedPreview(msg) }}
+            </div>
+
+            <div
+              v-else-if="getMessageDisplayContent(msg)"
+              class="message-item__content"
+            >
+              {{ getMessageDisplayContent(msg) }}
+            </div>
+
+            <details
+              v-if="isExpanded(msg)"
+              class="message-item__raw"
+            >
+              <summary>{{ t('settings.sessionManager.rawJson') }}</summary>
+              <pre>{{ msg.raw_json }}</pre>
+            </details>
+          </div>
         </div>
       </div>
     </div>
@@ -202,6 +287,7 @@ const getMessageDisplayContent = (message: CliSessionMessage) =>
   display: flex;
   flex-direction: column;
   gap: var(--spacing-4);
+  min-height: 0;
 }
 
 .detail-summary {
@@ -231,34 +317,66 @@ const getMessageDisplayContent = (message: CliSessionMessage) =>
 }
 
 .detail-summary__value--truncate {
-  max-width: 200px;
+  max-width: 320px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.message-list {
+.message-feed {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
-  max-height: 60vh;
+  max-height: min(68vh, 760px);
   overflow: auto;
   padding-right: var(--spacing-2);
 }
 
-.message-item {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background-color: var(--color-bg-tertiary);
+.message-row {
+  display: flex;
+}
+
+.message-row--assistant {
+  justify-content: flex-start;
+}
+
+.message-row--user {
+  justify-content: flex-end;
+}
+
+.message-row--event {
+  justify-content: flex-start;
+}
+
+.message-bubble {
+  width: fit-content;
+  min-width: min(18rem, 100%);
+  max-width: min(100%, 980px);
   overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background-color: var(--color-bg-tertiary);
 }
 
-.message-item--user {
-  border-left: 3px solid var(--color-primary);
-}
-
-.message-item--assistant {
+.message-bubble--assistant {
+  max-width: min(86%, 980px);
   border-left: 3px solid var(--color-success);
+}
+
+.message-bubble--user {
+  max-width: min(86%, 980px);
+  border-left: 3px solid var(--color-primary);
+  background-color: var(--color-primary-light);
+}
+
+.message-bubble--event {
+  max-width: min(92%, 1040px);
+  margin-left: var(--spacing-3);
+}
+
+:global(.ea-modal.cli-session-detail-modal) {
+  width: min(1240px, calc(100vw - 32px));
+  max-width: min(1240px, calc(100vw - 32px));
 }
 
 .message-item__header {
@@ -268,6 +386,12 @@ const getMessageDisplayContent = (message: CliSessionMessage) =>
   gap: var(--spacing-2);
   padding: var(--spacing-2) var(--spacing-3);
   background-color: var(--color-bg-secondary);
+}
+
+.message-item__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
 }
 
 .message-item__type {
@@ -290,6 +414,32 @@ const getMessageDisplayContent = (message: CliSessionMessage) =>
 .message-item__time {
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
+}
+
+.message-item__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  padding: 0;
+}
+
+.message-item__toggle:hover {
+  color: var(--color-text-primary);
+}
+
+.message-item__preview {
+  padding: var(--spacing-3);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .message-item__content {
@@ -325,5 +475,13 @@ const getMessageDisplayContent = (message: CliSessionMessage) =>
   word-break: break-word;
   max-height: 200px;
   overflow: auto;
+}
+
+@media (max-width: 900px) {
+  .message-bubble--assistant,
+  .message-bubble--user,
+  .message-bubble--event {
+    max-width: 100%;
+  }
 }
 </style>

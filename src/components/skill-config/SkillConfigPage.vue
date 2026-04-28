@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAgentStore, type AgentConfig } from '@/stores/agent'
+import { useProjectStore } from '@/stores/project'
 import { useSkillConfigStore, type UnifiedMcpConfig, type UnifiedSkillConfig, type UnifiedPluginConfig } from '@/stores/skillConfig'
 import type { CliType } from '@/stores/providerProfile'
 import {
@@ -27,6 +28,7 @@ import type { CliSyncResult, CreateVisualSkillInput, SyncConfigType } from '@/st
 
 const { t } = useI18n()
 const agentStore = useAgentStore()
+const projectStore = useProjectStore()
 const skillConfigStore = useSkillConfigStore()
 
 const activeTab = ref<'mcp' | 'skills' | 'plugins'>('mcp')
@@ -124,6 +126,17 @@ watch(
   () => skillConfigStore.selectedAgent?.id,
   () => {
     resetConfigEditor()
+  }
+)
+
+watch(
+  () => projectStore.currentProject?.path,
+  (nextPath, prevPath) => {
+    if (nextPath === prevPath || skillConfigStore.selectedAgent?.type !== 'cli') {
+      return
+    }
+
+    void skillConfigStore.refreshCliConfigs()
   }
 )
 

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAgentStore } from '@/stores/agent'
+import { useProjectStore } from '@/stores/project'
 import { useMarketplaceStore, type McpInstallInput } from '@/stores/marketplace'
 import { EaButton, EaIcon, EaInput, EaModal, EaSelect } from '@/components/common'
 import type { McpMarketItem } from '@/types/marketplace'
@@ -19,9 +20,12 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const agentStore = useAgentStore()
+const projectStore = useProjectStore()
 const marketplaceStore = useMarketplaceStore()
 
 const selectedAgentId = ref('')
+const scope = ref<'global' | 'project'>('global')
+const projectPath = ref('')
 const customCommand = ref('')
 const customArgs = ref('')
 const envKey = ref('')
@@ -41,6 +45,11 @@ const selectedAgent = computed(() =>
   cliAgents.value.find(agent => agent.id === selectedAgentId.value)
 )
 
+const currentProjectPath = computed(() => projectStore.currentProject?.path ?? '')
+const supportsProjectScope = computed(() =>
+  selectedAgent.value?.provider === 'claude' || selectedAgent.value?.provider === 'opencode'
+)
+
 const selectedDetail = computed(() => {
   const detail = marketplaceStore.selectedMcpDetail
   return detail?.slug === props.mcpItem.slug ? detail : null
@@ -54,7 +63,29 @@ const defaultArgs = computed(() =>
   (selectedDetail.value?.install_args || props.mcpItem.install_args || []).join(' ')
 )
 
-const canInstall = computed(() => Boolean(selectedAgentId.value) && !isInstalling.value)
+const canInstall = computed(() => {
+  if (!selectedAgentId.value || isInstalling.value) {
+    return false
+  }
+
+  if (scope.value !== 'project') {
+    return true
+  }
+
+  return Boolean(projectPath.value.trim())
+})
+
+const scopeHint = computed(() => {
+  if (!selectedAgent.value) {
+    return t('marketplace.globalOnly')
+  }
+
+  if (scope.value === 'project') {
+    return t('marketplace.projectInstallHint')
+  }
+
+  return t('marketplace.globalOnly')
+})
 
 function splitArgs(value: string): string[] {
   const matches = value.match(/"[^"]*"|'[^']*'|\S+/g) || []
@@ -99,8 +130,8 @@ async function handleInstall() {
       command: customCommand.value || defaultCommand.value,
       args: splitArgs(customArgs.value || defaultArgs.value),
       env: { ...customEnv.value },
-      scope: 'global',
-      project_path: null
+      scope: scope.value,
+      project_path: scope.value === 'project' ? projectPath.value.trim() : null
     }
 
     const result = await marketplaceStore.installMcp(input)
@@ -124,7 +155,28 @@ function handleClose() {
   }
 }
 
+watch(
+  () => selectedAgent.value?.provider,
+  provider => {
+    if (provider !== 'claude' && provider !== 'opencode') {
+      scope.value = 'global'
+    }
+  },
+  { immediate: true }
+)
+
+watch(
+  () => currentProjectPath.value,
+  path => {
+    if (!projectPath.value && path) {
+      projectPath.value = path
+    }
+  },
+  { immediate: true }
+)
+
 onMounted(async () => {
+  await agentStore.loadAgents()
   if (cliAgents.value.length > 0) {
     selectedAgentId.value = cliAgents.value[0].id
   }
@@ -132,6 +184,7 @@ onMounted(async () => {
   await marketplaceStore.fetchMcpDetail(props.mcpItem.slug, marketplaceStore.activeMarketSource)
   customCommand.value = defaultCommand.value
   customArgs.value = defaultArgs.value
+  projectPath.value = currentProjectPath.value
 })
 </script>
 
@@ -185,8 +238,51 @@ onMounted(async () => {
             v-else
             class="mcp-install-modal__hint"
           >
-            {{ t('marketplace.globalOnly') }}
+            {{ scopeHint }}
           </p>
+        </div>
+
+        <div class="mcp-install-modal__field">
+          <label>{{ t('marketplace.installScope') }}</label>
+          <div class="mcp-install-modal__radio-group">
+            <label class="mcp-install-modal__radio">
+              <input
+                v-model="scope"
+                type="radio"
+                value="global"
+              >
+              <span>{{ t('marketplace.scopeGlobal') }}</span>
+            </label>
+            <label
+              class="mcp-install-modal__radio"
+              :class="{ 'mcp-install-modal__radio--disabled': !supportsProjectScope }"
+            >
+              <input
+                v-model="scope"
+                type="radio"
+                value="project"
+                :disabled="!supportsProjectScope"
+              >
+              <span>{{ t('marketplace.scopeProject') }}</span>
+            </label>
+          </div>
+          <p
+            v-if="!supportsProjectScope && selectedAgent"
+            class="mcp-install-modal__hint"
+          >
+            {{ t('marketplace.projectScopeUnavailable') }}
+          </p>
+        </div>
+
+        <div
+          v-if="scope === 'project'"
+          class="mcp-install-modal__field"
+        >
+          <label>{{ t('marketplace.projectPath') }}</label>
+          <EaInput
+            v-model="projectPath"
+            :placeholder="t('marketplace.projectPathPlaceholder')"
+          />
         </div>
 
         <div class="mcp-install-modal__field">
@@ -350,6 +446,24 @@ onMounted(async () => {
   margin: 0;
   font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
+}
+
+.mcp-install-modal__radio-group {
+  display: flex;
+  gap: var(--spacing-4);
+}
+
+.mcp-install-modal__radio {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.mcp-install-modal__radio--disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .mcp-install-modal__env-list {

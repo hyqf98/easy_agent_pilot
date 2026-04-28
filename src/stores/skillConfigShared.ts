@@ -131,6 +131,7 @@ export interface ScannedMcpServer {
   name: string
   transport: 'stdio' | 'sse' | 'http'
   scope: 'user' | 'local' | 'project'
+  disabled: boolean
   command?: string
   args?: string[]
   env?: Record<string, string>
@@ -293,9 +294,26 @@ export function transformCliMcpConfig(name: string, config: CliMcpServerConfig):
   }
 }
 
+export function transformScannedCliMcpConfig(server: ScannedMcpServer): UnifiedMcpConfig {
+  return {
+    id: `cli-${server.scope}-${server.name}`,
+    name: server.name,
+    enabled: !server.disabled,
+    source: 'file',
+    isReadOnly: true,
+    transportType: server.transport,
+    scope: server.scope,
+    command: server.command,
+    args: server.args,
+    env: server.env,
+    url: server.url,
+    headers: server.headers,
+  }
+}
+
 export function transformCliSkill(skill: ScannedSkill): UnifiedSkillConfig {
   return {
-    id: `cli-skill-${skill.name}`,
+    id: `cli-skill-${skill.path}`,
     name: skill.name,
     enabled: true,
     source: 'file',
@@ -310,7 +328,7 @@ export function transformCliSkill(skill: ScannedSkill): UnifiedSkillConfig {
 
 export function transformCliPlugin(plugin: ScannedPlugin): UnifiedPluginConfig {
   return {
-    id: `cli-plugin-${plugin.name}`,
+    id: `cli-plugin-${plugin.path}`,
     name: plugin.name,
     enabled: plugin.enabled,
     source: 'file',

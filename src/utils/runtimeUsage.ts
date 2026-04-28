@@ -48,8 +48,14 @@ export function normalizeRuntimeUsage(
   const cacheReadInputTokens = normalizeTokenValue(options.cacheReadInputTokens)
   const cacheCreationInputTokens = normalizeTokenValue(options.cacheCreationInputTokens)
   const baseline = options.baseline ?? null
+  const hasRawUsage = (
+    typeof rawInputTokens === 'number'
+    || typeof rawOutputTokens === 'number'
+    || typeof cacheReadInputTokens === 'number'
+    || typeof cacheCreationInputTokens === 'number'
+  )
 
-  if (!isCumulativeUsageRuntime(options.provider)) {
+  if (!hasRawUsage && !isCumulativeUsageRuntime(options.provider)) {
     return {
       inputTokens,
       outputTokens,
@@ -96,7 +102,7 @@ export function normalizeRuntimeUsage(
         ? (outputTokens ?? nextRawOutputTokens)
         : Math.max(0, nextRawOutputTokens - previousOutputTokens))
     : undefined
-  const hasRawUsage = (
+  const hasUsageBaseline = (
     typeof nextRawInputTokens === 'number'
     || typeof nextRawOutputTokens === 'number'
     || typeof cacheReadInputTokens === 'number'
@@ -106,7 +112,7 @@ export function normalizeRuntimeUsage(
   return {
     inputTokens: normalizedInputTokens,
     outputTokens: normalizedOutputTokens,
-    nextBaseline: hasRawUsage
+    nextBaseline: hasUsageBaseline
       ? {
           rawInputTokens: typeof nextRawInputTokens === 'number'
             ? nextRawInputTokens

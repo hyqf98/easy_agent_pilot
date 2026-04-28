@@ -1,6 +1,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useAgentStore, type AgentConfig, type CliTool } from '@/stores/agent'
+import { useCliInstallerStore } from '@/stores/cliInstaller'
 
 interface MigrationResult {
   success: boolean
@@ -20,6 +21,7 @@ const PAGE_SIZE = 10
 
 export function useAgentSettingsPage() {
   const agentStore = useAgentStore()
+  const cliInstallerStore = useCliInstallerStore()
 
   const addingToolName = ref<string | null>(null)
   const currentPage = ref(1)
@@ -249,6 +251,7 @@ export function useAgentSettingsPage() {
     PAGE_SIZE,
     addingToolName,
     agentStore,
+    cliInstallerStore,
     currentPage,
     searchQuery,
     showModal,

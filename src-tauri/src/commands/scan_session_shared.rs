@@ -47,6 +47,26 @@ pub(crate) fn clean_display_text(text: &str) -> Option<String> {
     Some(normalized.to_string())
 }
 
+fn extract_wrapped_user_prompt(text: &str) -> Option<String> {
+    let cleaned = clean_display_text(text)?;
+    let trimmed = cleaned.trim();
+
+    if !(trimmed.starts_with("system:") || trimmed.starts_with("developer:")) {
+        return Some(cleaned);
+    }
+
+    for marker in ["\nuser:\n", "\nuser: ", "user:\n", "user: "] {
+        if let Some(index) = cleaned.rfind(marker) {
+            let tail = &cleaned[index + marker.len()..];
+            if let Some(unwrapped) = clean_display_text(tail) {
+                return Some(unwrapped);
+            }
+        }
+    }
+
+    Some(cleaned)
+}
+
 fn format_json_string(text: &str) -> Option<String> {
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
         return format_json_value(&value);
@@ -55,7 +75,7 @@ fn format_json_string(text: &str) -> Option<String> {
     clean_display_text(text)
 }
 
-fn format_json_value(value: &serde_json::Value) -> Option<String> {
+pub(crate) fn format_json_value(value: &serde_json::Value) -> Option<String> {
     match value {
         serde_json::Value::Null => None,
         serde_json::Value::String(text) => clean_display_text(text),
@@ -256,6 +276,12 @@ pub(crate) fn extract_jsonl_project_path(json: &serde_json::Value) -> Option<Str
 }
 
 pub(crate) fn extract_jsonl_role(json: &serde_json::Value) -> Option<String> {
+    let top_level_type = json.get("type").and_then(|v| v.as_str()).unwrap_or_default();
+
+    if matches!(top_level_type, "user" | "assistant" | "system") {
+        return Some(top_level_type.to_string());
+    }
+
     json.get("payload")
         .and_then(|payload| payload.get("role"))
         .and_then(|v| v.as_str())
@@ -264,6 +290,16 @@ pub(crate) fn extract_jsonl_role(json: &serde_json::Value) -> Option<String> {
             json.get("message")
                 .and_then(|m| m.get("role"))
                 .and_then(|v| v.as_str())
+        })
+        .or_else(|| {
+            json.get("payload")
+                .and_then(|payload| payload.get("type"))
+                .and_then(|v| v.as_str())
+                .and_then(|payload_type| match payload_type {
+                    "user_message" => Some("user"),
+                    "agent_message" => Some("assistant"),
+                    _ => None,
+                })
         })
         .map(|s| s.to_string())
 }
@@ -314,12 +350,17 @@ pub(crate) fn extract_jsonl_message_type(json: &serde_json::Value) -> String {
 }
 
 pub(crate) fn extract_jsonl_message_content(json: &serde_json::Value) -> Option<String> {
+    let message_type = extract_jsonl_message_type(json);
+
     if let Some(payload) = json.get("payload") {
         let top_level_type = json
             .get("type")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
         if let Some(text) = extract_payload_message_content(top_level_type, payload) {
+            if message_type == "user" {
+                return extract_wrapped_user_prompt(&text);
+            }
             return Some(text);
         }
     }
@@ -327,6 +368,9 @@ pub(crate) fn extract_jsonl_message_content(json: &serde_json::Value) -> Option<
     if let Some(message) = json.get("message") {
         if let Some(content) = message.get("content") {
             if let Some(text) = format_json_value(content) {
+                if message_type == "user" {
+                    return extract_wrapped_user_prompt(&text);
+                }
                 return Some(text);
             }
         }
@@ -334,6 +378,9 @@ pub(crate) fn extract_jsonl_message_content(json: &serde_json::Value) -> Option<
 
     if let Some(content) = json.get("content") {
         if let Some(text) = format_json_value(content) {
+            if message_type == "user" {
+                return extract_wrapped_user_prompt(&text);
+            }
             return Some(text);
         }
     }

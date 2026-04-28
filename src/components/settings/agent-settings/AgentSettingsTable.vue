@@ -2,6 +2,8 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { AgentConfig, AgentProvider, AgentType } from '@/stores/agent'
+import type { CliName } from '@/stores/cliInstaller'
+import type { VersionInfo } from '@/components/settings/cli/types'
 import { EaButton, EaIcon, EaStateBlock } from '@/components/common'
 
 interface Props {
@@ -13,6 +15,7 @@ interface Props {
   pageNumbers: number[]
   pageSize: number
   testingAgentId: string | null
+  versionInfoMap: Record<CliName, VersionInfo | null>
 }
 
 const props = defineProps<Props>()
@@ -45,6 +48,11 @@ function getProviderText(provider?: AgentProvider): string {
 
 function getTypeText(type: AgentType): string {
   return type === 'cli' ? 'CLI' : 'SDK'
+}
+
+function getVersionUpdate(agent: AgentConfig): VersionInfo | null {
+  if (agent.type !== 'cli' || !agent.provider) return null
+  return props.versionInfoMap[agent.provider as CliName] ?? null
 }
 
 function formatDate(dateStr: string): string {
@@ -100,6 +108,12 @@ function changePage(page: number) {
                   class="agent-name-cell__icon"
                 />
                 <span class="agent-name-cell__text">{{ agent.name }}</span>
+                <span
+                  v-if="getVersionUpdate(agent)?.has_update"
+                  class="agent-name-cell__update-badge"
+                >
+                  {{ t('settings.agentList.updateAvailable', { version: getVersionUpdate(agent)!.latest }) }}
+                </span>
               </div>
             </td>
             <td class="agent-table__td agent-table__td--type">
@@ -315,6 +329,16 @@ function changePage(page: number) {
   font-weight: var(--font-weight-medium);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-name-cell__update-badge {
+  flex-shrink: 0;
+  padding: 1px var(--spacing-2);
+  background-color: var(--color-info-light, rgba(59, 130, 246, 0.1));
+  color: var(--color-info, #3b82f6);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
   white-space: nowrap;
 }
 

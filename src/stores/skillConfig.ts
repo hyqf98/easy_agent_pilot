@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useNotificationStore } from './notification'
+import { useProjectStore } from './project'
 import { getErrorMessage } from '@/utils/api'
 import type { AgentConfig } from './agent'
 import {
@@ -10,6 +11,7 @@ import {
   transformCliMcpConfig,
   transformCliPlugin,
   transformCliSkill,
+  transformScannedCliMcpConfig,
   transformDbMcpConfig,
   transformDbPluginsConfig,
   transformDbSkillsConfig,
@@ -62,6 +64,7 @@ export type {
 // ============================================================================
 
 export const useSkillConfigStore = defineStore('skillConfig', () => {
+  const projectStore = useProjectStore()
   // State
   const selectedAgentId = ref<string | null>(null)
   const selectedAgent = ref<AgentConfig | null>(null)
@@ -89,15 +92,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
       return null
     }
 
-    return `${agent.provider}:${agent.cliPath}`
-  }
-
-  function applyCachedCliInventory(agent: AgentConfig) {
-    const cacheKey = getCliInventoryCacheKey(agent)
-    const cached = cacheKey ? cliInventoryCache.get(cacheKey) : null
-
-    skillsConfigs.value = cached?.skills ?? []
-    pluginsConfigs.value = cached?.plugins ?? []
+    return `${agent.provider}:${agent.cliPath}:${projectStore.currentProject?.path || '__global__'}`
   }
 
   function invalidateCliInventory(agent?: AgentConfig | null) {
@@ -219,13 +214,32 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
         cliPath: agent.cliPath,
         cliType: agent.provider,
       })
+      const scanResult = await invoke<ClaudeConfigScanResult>('scan_cli_config', {
+        cliPath: agent.cliPath,
+        cliType: agent.provider,
+        projectPath: projectStore.currentProject?.path ?? null,
+      })
 
       const mcpServers = config.mcp_servers || config.mcpServers || {}
-      mcpConfigs.value = Object.entries(mcpServers).map(([name, cfg]) =>
+      const globalMcpConfigs = Object.entries(mcpServers).map(([name, cfg]) =>
         transformCliMcpConfig(name, cfg)
       )
+      const projectMcpConfigs = scanResult.mcp_servers
+        .filter(server => server.scope !== 'user')
+        .map(transformScannedCliMcpConfig)
+      mcpConfigs.value = [...globalMcpConfigs, ...projectMcpConfigs]
 
-      applyCachedCliInventory(agent)
+      const nextSkills = scanResult.skills.map(transformCliSkill)
+      const nextPlugins = scanResult.plugins.map(transformCliPlugin)
+      const cacheKey = getCliInventoryCacheKey(agent)
+      if (cacheKey) {
+        cliInventoryCache.set(cacheKey, {
+          skills: nextSkills,
+          plugins: nextPlugins,
+        })
+      }
+      skillsConfigs.value = nextSkills
+      pluginsConfigs.value = nextPlugins
     } catch (error) {
       console.error('Failed to load CLI configs:', error)
       notificationStore.networkError(
@@ -298,6 +312,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
         const scanResult = await invoke<ClaudeConfigScanResult>('scan_cli_config', {
           cliPath: targetAgent.cliPath,
           cliType: targetAgent.provider,
+          projectPath: projectStore.currentProject?.path ?? null,
         })
         const nextSkills = scanResult.skills.map(transformCliSkill)
         const nextPlugins = scanResult.plugins.map(transformCliPlugin)

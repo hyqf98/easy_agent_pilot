@@ -421,10 +421,12 @@ fn sync_skill_items(
     let source_scan = crate::commands::scan::scan_cli_config(
         Some(source_cli_path.to_string()),
         source_cli_type.map(str::to_string),
+        None,
     )?;
     let target_scan = crate::commands::scan::scan_cli_config(
         Some(target_cli_path.to_string()),
         target_cli_type.map(str::to_string),
+        None,
     )?;
     let source_skills_dir = PathBuf::from(&source_paths.config_dir).join("skills");
     let target_skills_dir = PathBuf::from(&target_paths.config_dir).join("skills");
@@ -1070,7 +1072,7 @@ pub fn get_cli_capabilities(
         "opencode" => CliCapabilities {
             supports_mcp: true,
             supports_skills: true,
-            supports_plugins: false,
+            supports_plugins: true,
             mcp_add_command: Some("opencode mcp add".to_string()),
         },
         "qwen" | "qwen-code" => CliCapabilities {

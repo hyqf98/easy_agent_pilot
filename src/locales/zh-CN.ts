@@ -300,7 +300,9 @@ const zhCN = {
       compactDesc: '打开当前会话的压缩弹框',
       compactUsage: '打开压缩/compact 弹框',
       cdDesc: '切换迷你面板当前工作目录',
-      cdUsage: '用法：/cd <路径>'
+      cdUsage: '用法：/cd <路径>',
+      initDesc: '调用架构分析专家初始化当前项目的 AGENTS.md',
+      initUsage: '分析当前项目并让 CLI 自行写入/更新 AGENTS.md'
     },
     emptyWelcome: '欢迎使用 Easy Agent Pilot',
     emptyHint: '在下方输入框中开始与 AI 对话',
@@ -713,6 +715,7 @@ const zhCN = {
         detecting: '检测环境中...',
         noMethodAvailable: '没有可用的安装方式，请先安装 npm 或 Homebrew',
         checkUpdate: '检查更新',
+        checking: '正在检查...',
         upgrade: '升级',
         upgrading: '升级中...',
         newVersion: '新版本',
@@ -851,7 +854,8 @@ const zhCN = {
       migrationProcessing: '迁移中...',
       migrationSuccess: '迁移成功！已迁移 {migrated} 个配置，跳过 {skipped} 个已存在的配置',
       migrationNoNeeded: '无需迁移',
-      migrationError: '迁移失败'
+      migrationError: '迁移失败',
+      updateAvailable: '有新版本 v{version}'
     },
     integration: {
       ...enUS.settings.integration,
@@ -1085,6 +1089,11 @@ const zhCN = {
       agentSelection: 'CLI Agent 会话管理',
       agentLabel: '智能体',
       projectLabel: '项目',
+      updatedRangeLabel: '最新消息更新时间',
+      updatedRangeAll: '全部时间',
+      updatedRange24h: '最近 24 小时',
+      updatedRange7d: '最近 7 天',
+      updatedRange30d: '最近 30 天',
       useCurrentProject: '使用当前项目',
       deleteCurrentProjectSessions: '删除当前项目全部会话',
       scopeLabel: '范围',
@@ -1556,7 +1565,11 @@ const zhCN = {
     installScope: '安装范围',
     scopeGlobal: '全局',
     scopeProject: '当前项目',
-    globalOnly: '当前市场中的 MCP 安装仅写入 Claude/Codex 的全局 CLI 配置。',
+    globalOnly: '全局安装会写入对应 CLI 的全局配置文件。',
+    projectInstallHint: '项目安装会写入你指定项目根目录下的 CLI 项目级配置文件。',
+    projectScopeUnavailable: '当前 CLI 暂不支持项目级 MCP 安装。',
+    projectPath: '项目路径',
+    projectPathPlaceholder: '输入项目根目录路径，例如 /path/to/project',
     globalSkillInstall: '当前市场中的 Skills 会安装到所选 CLI 的原生全局 skills 目录。',
     gitSkillInstallHint: 'Git 技能会安装到所选 CLI 的全局 skills 目录。',
     gitPluginInstallHint: 'Git 插件会安装到所选 CLI 的全局 plugins 目录。',

@@ -2,11 +2,23 @@ import { invoke } from '@tauri-apps/api/core'
 import { inferAgentProvider, type AgentConfig } from '@/stores/agent'
 import type { RecordAgentCliUsageInput } from '@/types/agentCliUsage'
 import type { PlanSplitLogRecord } from '@/types/plan'
+import { normalizeRuntimeUsage, type NormalizeRuntimeUsageOptions } from '@/utils/runtimeUsage'
 
 interface UsageSnapshot {
   modelId?: string
   inputTokens?: number
   outputTokens?: number
+}
+
+function readMetadataNumber(
+  metadata: Record<string, unknown>,
+  camelKey: string,
+  snakeKey: string
+): number | undefined {
+  const candidate = metadata[camelKey] ?? metadata[snakeKey]
+  return typeof candidate === 'number' && Number.isFinite(candidate)
+    ? candidate
+    : undefined
 }
 
 function normalizeModelId(value?: string | null): string {
@@ -91,9 +103,11 @@ function buildUsagePayload(
 }
 
 export function findLatestUsageSnapshot(
-  logs: Pick<PlanSplitLogRecord, 'type' | 'metadata'>[]
+  logs: Pick<PlanSplitLogRecord, 'type' | 'metadata'>[],
+  options: Pick<NormalizeRuntimeUsageOptions, 'provider'> = {}
 ): UsageSnapshot {
   const usageState: UsageSnapshot = {}
+  let usageBaseline: ReturnType<typeof normalizeRuntimeUsage>['nextBaseline'] = null
   let totalInput = 0
   let totalOutput = 0
   let hasAnyUsage = false
@@ -110,19 +124,36 @@ export function findLatestUsageSnapshot(
     try {
       const metadata = JSON.parse(log.metadata) as {
         model?: unknown
-        inputTokens?: unknown
-        outputTokens?: unknown
+        [key: string]: unknown
       }
 
       if (typeof metadata.model === 'string' && metadata.model.trim()) {
         usageState.modelId = metadata.model.trim()
       }
-      if (typeof metadata.inputTokens === 'number') {
-        totalInput += metadata.inputTokens
+
+      const normalizedUsage = normalizeRuntimeUsage({
+        provider: options.provider,
+        inputTokens: readMetadataNumber(metadata, 'inputTokens', 'input_tokens'),
+        outputTokens: readMetadataNumber(metadata, 'outputTokens', 'output_tokens'),
+        rawInputTokens: readMetadataNumber(metadata, 'rawInputTokens', 'raw_input_tokens'),
+        rawOutputTokens: readMetadataNumber(metadata, 'rawOutputTokens', 'raw_output_tokens'),
+        cacheReadInputTokens: readMetadataNumber(metadata, 'cacheReadInputTokens', 'cache_read_input_tokens'),
+        cacheCreationInputTokens: readMetadataNumber(metadata, 'cacheCreationInputTokens', 'cache_creation_input_tokens'),
+        baseline: usageBaseline
+      })
+
+      if (normalizedUsage.nextBaseline) {
+        usageBaseline = normalizedUsage.nextBaseline
+      } else {
+        usageBaseline = null
+      }
+
+      if (typeof normalizedUsage.inputTokens === 'number') {
+        totalInput += normalizedUsage.inputTokens
         hasAnyUsage = true
       }
-      if (typeof metadata.outputTokens === 'number') {
-        totalOutput += metadata.outputTokens
+      if (typeof normalizedUsage.outputTokens === 'number') {
+        totalOutput += normalizedUsage.outputTokens
         hasAnyUsage = true
       }
     } catch {

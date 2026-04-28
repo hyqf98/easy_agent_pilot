@@ -14,6 +14,7 @@ const {
   PAGE_SIZE,
   addingToolName,
   agentStore,
+  cliInstallerStore,
   currentPage,
   searchQuery,
   showModal,
@@ -241,6 +242,7 @@ const {
       :page-numbers="pageNumbers"
       :page-size="PAGE_SIZE"
       :testing-agent-id="agentStore.testingAgentId"
+      :version-info-map="cliInstallerStore.versionInfoMap"
       @test="handleTest"
       @manage-models="handleOpenModelManage"
       @edit="handleEdit"
@@ -498,6 +500,8 @@ const {
 .modal-container--lg {
   width: 720px;
   max-height: 85vh;
+  display: flex;
+  flex-direction: column;
 }
 
 /* 动画 */

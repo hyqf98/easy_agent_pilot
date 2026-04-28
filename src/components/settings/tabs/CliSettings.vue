@@ -1,12 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useAgentStore } from '@/stores/agent'
 import { EaIcon } from '@/components/common'
 import CliInstallerSection from '@/components/settings/cli/CliInstallerSection.vue'
-import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
-import type { CliInstallerInfo, InstallLogEvent, VersionInfo } from '@/components/settings/cli/types'
+import { useCliInstallerStore, type CliName } from '@/stores/cliInstaller'
 
 withDefaults(defineProps<{
   embedded?: boolean
@@ -15,168 +12,22 @@ withDefaults(defineProps<{
 })
 
 const { t } = useI18n()
-const agentStore = useAgentStore()
-
-const installLogs = ref<InstallLogEvent[]>([])
-const isInstalling = ref(false)
-const currentInstallingCli = ref<string | null>(null)
-
-const isCheckingUpdate = ref<string | null>(null)
-const isUpgrading = ref<string | null>(null)
-const claudeVersionInfo = ref<VersionInfo | null>(null)
-const codexVersionInfo = ref<VersionInfo | null>(null)
-const opencodeVersionInfo = ref<VersionInfo | null>(null)
-
-const claudeInstallInfo = ref<CliInstallerInfo | null>(null)
-const codexInstallInfo = ref<CliInstallerInfo | null>(null)
-const opencodeInstallInfo = ref<CliInstallerInfo | null>(null)
-
-let unlistenLog: (() => void) | null = null
-let unlistenComplete: (() => void) | null = null
-
-const installerCards = computed(() => [
-  {
-    key: 'claude',
-    label: 'Claude CLI',
-    info: claudeInstallInfo.value,
-    versionInfo: claudeVersionInfo.value
-  },
-  {
-    key: 'codex',
-    label: 'Codex CLI',
-    info: codexInstallInfo.value,
-    versionInfo: codexVersionInfo.value
-  },
-  {
-    key: 'opencode',
-    label: 'OpenCode CLI',
-    info: opencodeInstallInfo.value,
-    versionInfo: opencodeVersionInfo.value
-  }
-])
-
-async function loadInstallOptions() {
-  try {
-    claudeInstallInfo.value = await invoke<CliInstallerInfo>('get_cli_install_options', { cliName: 'claude' })
-    codexInstallInfo.value = await invoke<CliInstallerInfo>('get_cli_install_options', { cliName: 'codex' })
-    opencodeInstallInfo.value = await invoke<CliInstallerInfo>('get_cli_install_options', { cliName: 'opencode' })
-  } catch (error) {
-    console.error('Failed to load install options:', error)
-  }
-}
-
-async function checkAllUpdates() {
-  if (claudeInstallInfo.value?.installed) {
-    try {
-      claudeVersionInfo.value = await invoke<VersionInfo>('check_cli_update', { cliName: 'claude' })
-    } catch (error) {
-      console.error('Failed to check claude update:', error)
-    }
-  }
-
-  if (codexInstallInfo.value?.installed) {
-    try {
-      codexVersionInfo.value = await invoke<VersionInfo>('check_cli_update', { cliName: 'codex' })
-    } catch (error) {
-      console.error('Failed to check codex update:', error)
-    }
-  }
-
-  if (opencodeInstallInfo.value?.installed) {
-    try {
-      opencodeVersionInfo.value = await invoke<VersionInfo>('check_cli_update', { cliName: 'opencode' })
-    } catch (error) {
-      console.error('Failed to check opencode update:', error)
-    }
-  }
-}
+const cliInstallerStore = useCliInstallerStore()
 
 async function handleCheckUpdate(cliName: string) {
-  isCheckingUpdate.value = cliName
-  try {
-    const info = await invoke<VersionInfo>('check_cli_update', { cliName })
-    if (cliName === 'claude') {
-      claudeVersionInfo.value = info
-    } else if (cliName === 'codex') {
-      codexVersionInfo.value = info
-    } else {
-      opencodeVersionInfo.value = info
-    }
-  } finally {
-    isCheckingUpdate.value = null
-  }
+  await cliInstallerStore.checkUpdate(cliName as CliName)
 }
 
 async function handleInstall(cliName: string, method: string) {
-  if (isInstalling.value) {
-    return
-  }
-
-  isInstalling.value = true
-  currentInstallingCli.value = cliName
-  installLogs.value = []
-
-  try {
-    await invoke('install_cli', { cliName, method })
-  } catch (error) {
-    console.error('Install failed:', error)
-  }
+  await cliInstallerStore.installCli(cliName as CliName, method)
 }
 
 async function handleUpgrade(cliName: string) {
-  if (isUpgrading.value) {
-    return
-  }
-
-  isUpgrading.value = cliName
-  installLogs.value = []
-
-  try {
-    await invoke('upgrade_cli', { cliName })
-  } catch (error) {
-    console.error('Upgrade failed:', error)
-  }
+  await cliInstallerStore.upgradeCli(cliName as CliName)
 }
 
 onMounted(async () => {
-  await loadInstallOptions()
-  await checkAllUpdates()
-
-  unlistenLog = await listen('cli-install-log', (event) => {
-    const log = event.payload as InstallLogEvent
-    installLogs.value.push(log)
-    nextTick(() => {
-      const container = document.querySelector('.install-logs__content')
-      if (container) {
-        container.scrollTop = container.scrollHeight
-      }
-    })
-  })
-
-  unlistenComplete = await listen('cli-install-complete', async (event) => {
-    const result = event.payload as { cli_name: string; success: boolean }
-    isInstalling.value = false
-    isUpgrading.value = null
-    currentInstallingCli.value = null
-
-    if (result.success) {
-      await Promise.all([
-        agentStore.scanCliTools({ force: true }),
-        loadInstallOptions(),
-        checkAllUpdates()
-      ])
-    }
-  })
-})
-
-onUnmounted(() => {
-  if (unlistenLog) {
-    unlistenLog()
-  }
-
-  if (unlistenComplete) {
-    unlistenComplete()
-  }
+  await cliInstallerStore.ensureReady()
 })
 </script>
 
@@ -203,16 +54,17 @@ onUnmounted(() => {
     </div>
 
     <CliInstallerSection
-      :cards="installerCards"
-      :install-logs="installLogs"
-      :is-installing="isInstalling"
-      :current-installing-cli="currentInstallingCli"
-      :is-checking-update="isCheckingUpdate"
-      :is-upgrading="isUpgrading"
+      :cards="cliInstallerStore.installerCards"
+      :install-logs="cliInstallerStore.installLogs"
+      :active-operations="cliInstallerStore.activeOperations"
+      :checking-updates="cliInstallerStore.checkingUpdates"
+      :visible-logs="cliInstallerStore.visibleLogsMap"
+      :loading="!cliInstallerStore.isReady"
       @install="handleInstall"
       @upgrade="handleUpgrade"
       @check-update="handleCheckUpdate"
-      @clear-logs="installLogs = []"
+      @clear-logs="cliInstallerStore.clearLogs"
+      @clear-logs-for-cli="(cliName) => cliInstallerStore.clearLogsForCli(cliName)"
     />
   </div>
 </template>

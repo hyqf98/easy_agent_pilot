@@ -1,30 +1,68 @@
 <script setup lang="ts">
+import { computed, toRefs } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { EaButton } from '@/components/common'
 import type { CliInstallerCard, InstallLogEvent } from './types'
+import type { CliName } from '@/stores/cliInstaller'
 
 interface Props {
   cards: CliInstallerCard[]
   installLogs: InstallLogEvent[]
-  isInstalling: boolean
-  currentInstallingCli: string | null
-  isCheckingUpdate: string | null
-  isUpgrading: string | null
+  activeOperations: Partial<Record<CliName, 'install' | 'upgrade'>>
+  checkingUpdates: Partial<Record<CliName, boolean>>
+  visibleLogs: Partial<Record<CliName, boolean>>
+  loading?: boolean
 }
 
-defineProps<Props>()
+const props = defineProps<Props>()
+const { cards } = toRefs(props)
 
 const emit = defineEmits<{
   install: [cliName: string, method: string]
   upgrade: [cliName: string]
   checkUpdate: [cliName: string]
   clearLogs: []
+  clearLogsForCli: [cliName: CliName]
 }>()
 
 const { t } = useI18n()
 
+const logsByCli = computed(() => {
+  const map = new Map<string, InstallLogEvent[]>()
+  for (const log of props.installLogs) {
+    const list = map.get(log.cli_name) || []
+    list.push(log)
+    map.set(log.cli_name, list)
+  }
+  return map
+})
+
+function getLogsForCli(cliName: string): InstallLogEvent[] {
+  return logsByCli.value.get(cliName) || []
+}
+
 function formatTime(timestamp: string): string {
   return new Date(timestamp).toLocaleTimeString()
+}
+
+function isInstalling(cliName: string): boolean {
+  return props.activeOperations[cliName as CliName] === 'install'
+}
+
+function isUpgrading(cliName: string): boolean {
+  return props.activeOperations[cliName as CliName] === 'upgrade'
+}
+
+function isCheckingUpdate(cliName: string): boolean {
+  return props.checkingUpdates[cliName as CliName] === true
+}
+
+function hasActiveOperation(cliName: string): boolean {
+  return Boolean(props.activeOperations[cliName as CliName])
+}
+
+function shouldShowLogs(cliName: string): boolean {
+  return props.visibleLogs[cliName as CliName] === true
 }
 </script>
 
@@ -34,116 +72,133 @@ function formatTime(timestamp: string): string {
       {{ t('settings.cli.installer.title') }}
     </h4>
 
-    <div
-      v-for="card in cards"
-      :key="card.key"
-      class="install-card"
-    >
-      <div class="install-card__header">
-        <div class="install-card__info">
-          <span class="install-card__name">{{ card.label }}</span>
-          <span
-            class="install-card__status"
-            :class="{ 'is-installed': card.info?.installed }"
-          >
-            {{ card.info?.installed ? t('settings.cli.installer.installed') : t('settings.cli.installer.notInstalled') }}
-          </span>
-        </div>
-
-        <div
-          v-if="card.info?.installed"
-          class="install-card__version"
-        >
-          <span
-            v-if="card.versionInfo"
-            class="install-card__version-text"
-          >
-            v{{ card.versionInfo.current || '?' }}
-            <span
-              v-if="card.versionInfo.has_update"
-              class="install-card__update-badge"
-            >
-              {{ t('settings.cli.installer.newVersion') }}: v{{ card.versionInfo.latest }}
-            </span>
-          </span>
-          <EaButton
-            v-if="card.versionInfo?.has_update"
-            type="primary"
-            size="small"
-            :loading="isUpgrading === card.key"
-            @click="emit('upgrade', card.key)"
-          >
-            {{ t('settings.cli.installer.upgrade') }}
-          </EaButton>
-          <EaButton
-            v-else
-            type="secondary"
-            size="small"
-            :loading="isCheckingUpdate === card.key"
-            @click="emit('checkUpdate', card.key)"
-          >
-            {{ t('settings.cli.installer.checkUpdate') }}
-          </EaButton>
+    <template v-if="loading">
+      <div
+        v-for="i in 3"
+        :key="i"
+        class="install-card install-card--skeleton"
+      >
+        <div class="install-card__header">
+          <div class="skeleton skeleton--text" />
+          <div class="skeleton skeleton--badge" />
         </div>
       </div>
+    </template>
 
+    <template v-else>
       <div
-        v-if="!card.info?.installed"
-        class="install-card__options"
+        v-for="card in cards"
+        :key="card.key"
+        class="install-card"
       >
-        <div
-          v-for="option in card.info?.install_options"
-          :key="option.method"
-          class="install-option"
-          :class="{ 'is-recommended': option.recommended, 'is-unavailable': !option.available }"
-        >
-          <div class="install-option__info">
-            <span class="install-option__method">{{ option.display_name }}</span>
+        <div class="install-card__header">
+          <div class="install-card__info">
+            <span class="install-card__name">{{ card.label }}</span>
             <span
-              v-if="option.recommended"
-              class="install-option__badge"
+              class="install-card__status"
+              :class="{ 'is-installed': card.info?.installed }"
             >
-              {{ t('settings.cli.installer.recommended') }}
+              {{ card.info?.installed ? t('settings.cli.installer.installed') : t('settings.cli.installer.notInstalled') }}
             </span>
           </div>
-          <code class="install-option__command">{{ option.command }}</code>
-          <EaButton
-            type="primary"
-            size="small"
-            :disabled="!option.available || isInstalling"
-            :loading="isInstalling && currentInstallingCli === card.key"
-            @click="emit('install', card.key, option.method)"
-          >
-            {{ t('settings.cli.installer.install') }}
-          </EaButton>
-        </div>
-      </div>
-    </div>
 
-    <div
-      v-if="installLogs.length > 0"
-      class="install-logs"
-    >
-      <div class="install-logs__header">
-        <span>{{ t('settings.cli.installer.logs') }}</span>
-        <button
-          class="install-logs__clear"
-          @click="emit('clearLogs')"
-        >
-          {{ t('settings.cli.installer.clearLogs') }}
-        </button>
-      </div>
-      <div class="install-logs__content">
+          <div
+            v-if="card.info?.installed"
+            class="install-card__version"
+          >
+            <span
+              v-if="card.versionInfo"
+              class="install-card__version-text"
+            >
+              v{{ card.versionInfo.current || '?' }}
+              <span
+                v-if="card.versionInfo.has_update"
+                class="install-card__update-badge"
+              >
+                {{ t('settings.cli.installer.newVersion') }}: v{{ card.versionInfo.latest }}
+              </span>
+            </span>
+            <EaButton
+              v-if="card.versionInfo?.has_update"
+              type="primary"
+              size="small"
+              :loading="isUpgrading(card.key)"
+              :disabled="hasActiveOperation(card.key)"
+              @click="emit('upgrade', card.key)"
+            >
+              {{ t('settings.cli.installer.upgrade') }}
+            </EaButton>
+            <EaButton
+              v-else
+              type="secondary"
+              size="small"
+              :loading="isCheckingUpdate(card.key)"
+              :disabled="hasActiveOperation(card.key)"
+              @click="emit('checkUpdate', card.key)"
+            >
+              {{ isCheckingUpdate(card.key) ? t('settings.cli.installer.checking') : t('settings.cli.installer.checkUpdate') }}
+            </EaButton>
+          </div>
+        </div>
+
         <div
-          v-for="(log, index) in installLogs"
-          :key="index"
-          class="install-logs__item"
+          v-if="!card.info?.installed"
+          class="install-card__options"
         >
-          <span class="install-logs__time">{{ formatTime(log.timestamp) }}</span>
-          <span class="install-logs__message">{{ log.message }}</span>
+          <div
+            v-for="option in card.info?.install_options"
+            :key="option.method"
+            class="install-option"
+            :class="{ 'is-recommended': option.recommended, 'is-unavailable': !option.available }"
+          >
+            <div class="install-option__info">
+              <span class="install-option__method">{{ option.display_name }}</span>
+              <span
+                v-if="option.recommended"
+                class="install-option__badge"
+              >
+                {{ t('settings.cli.installer.recommended') }}
+              </span>
+            </div>
+            <code class="install-option__command">{{ option.command }}</code>
+            <EaButton
+              type="primary"
+              size="small"
+              :disabled="!option.available || hasActiveOperation(card.key)"
+              :loading="isInstalling(card.key)"
+              @click="emit('install', card.key, option.method)"
+            >
+              {{ t('settings.cli.installer.install') }}
+            </EaButton>
+          </div>
+        </div>
+
+        <div
+          v-if="shouldShowLogs(card.key) && getLogsForCli(card.key).length > 0"
+          class="install-logs install-logs--per-card"
+        >
+          <div class="install-logs__header">
+            <span>{{ t('settings.cli.installer.logs') }}</span>
+            <button
+              class="install-logs__clear"
+              @click="emit('clearLogsForCli', card.key as CliName)"
+            >
+              {{ t('settings.cli.installer.clearLogs') }}
+            </button>
+          </div>
+          <div class="install-logs__content">
+            <div
+              v-for="(log, index) in [...getLogsForCli(card.key)].reverse()"
+              :key="index"
+              class="install-logs__item"
+            >
+              <span class="install-logs__time">{{ formatTime(log.timestamp) }}</span>
+              <span class="install-logs__message">{{ log.message }}</span>
+            </div>
+          </div>
         </div>
       </div>
-    </div>
+    </template>
   </div>
 </template>
 
@@ -166,6 +221,33 @@ function formatTime(timestamp: string): string {
   overflow: hidden;
   border-radius: var(--radius-lg);
   background-color: var(--color-bg-secondary);
+}
+
+.install-card--skeleton {
+  pointer-events: none;
+}
+
+.skeleton {
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--color-surface-hover) 25%, var(--color-border) 50%, var(--color-surface-hover) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+}
+
+.skeleton--text {
+  width: 100px;
+  height: 16px;
+}
+
+.skeleton--badge {
+  width: 60px;
+  height: 20px;
+  margin-left: auto;
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }
 
 .install-card__header {
@@ -284,6 +366,12 @@ function formatTime(timestamp: string): string {
   background-color: var(--color-bg-secondary);
 }
 
+.install-logs--per-card {
+  margin-top: 0;
+  border-top: 1px solid var(--color-border);
+  border-radius: 0;
+}
+
 .install-logs__header {
   display: flex;
   align-items: center;
@@ -311,7 +399,7 @@ function formatTime(timestamp: string): string {
 }
 
 .install-logs__content {
-  max-height: 200px;
+  max-height: 360px;
   overflow-y: auto;
   padding: var(--spacing-3) var(--spacing-4);
   font-family: var(--font-family-mono);

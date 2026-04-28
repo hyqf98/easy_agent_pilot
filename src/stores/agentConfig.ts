@@ -74,6 +74,21 @@ export interface AgentModelConfig {
   updatedAt: string
 }
 
+export interface RemoteModelDef {
+  modelId: string
+  displayName: string
+  contextWindow?: number
+  sortOrder?: number
+}
+
+interface RemoteModelsJson {
+  version: number
+  updated: string
+  providers: Record<string, RemoteModelDef[]>
+}
+
+const REMOTE_MODELS_URL = 'https://raw.githubusercontent.com/hyqf98/easy-agent-pilot/main/models.json'
+
 // 后端返回的原始数据结构（snake_case）
 interface RawAgentMcpConfig {
   id: string
@@ -740,6 +755,66 @@ export const useAgentConfigStore = defineStore('agentConfig', () => {
     return modelConfigs.value.get(agentId) || []
   }
 
+  async function syncRemoteModels(agentId: string, provider: string): Promise<AgentModelConfig[]> {
+    const notificationStore = useNotificationStore()
+    try {
+      const response = await fetch(REMOTE_MODELS_URL)
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+      const data: RemoteModelsJson = await response.json()
+      const providerModels = data.providers[provider]
+      if (!providerModels || providerModels.length === 0) {
+        throw new Error(`未找到 ${provider} 的模型定义`)
+      }
+
+      const rawConfigs = await invoke<RawAgentModelConfig[]>('sync_remote_models', {
+        input: {
+          agent_id: agentId,
+          models: providerModels.map(m => ({
+            model_id: m.modelId,
+            display_name: m.displayName,
+            context_window: m.contextWindow,
+            sort_order: m.sortOrder
+          }))
+        }
+      })
+      const configs = rawConfigs.map(transformModelConfig)
+      modelConfigs.value.set(agentId, configs)
+      return configs
+    } catch (error) {
+      console.error('Failed to sync remote models:', error)
+      notificationStore.databaseError(
+        '同步远程模型失败',
+        getErrorMessage(error),
+        async () => { void await syncRemoteModels(agentId, provider) }
+      )
+      throw error
+    }
+  }
+
+  async function syncOpencodeModels(agentId: string): Promise<AgentModelConfig[]> {
+    const notificationStore = useNotificationStore()
+    try {
+      const rawConfigs = await invoke<RawAgentModelConfig[]>('sync_all_opencode_models', {
+        input: {
+          agent_id: agentId
+        }
+      })
+      const configs = rawConfigs.map(transformModelConfig)
+      modelConfigs.value.set(agentId, configs)
+      return configs
+    } catch (error) {
+      console.error('Failed to sync opencode models:', error)
+      notificationStore.databaseError(
+        '同步 OpenCode 模型失败',
+        getErrorMessage(error),
+        async () => { void await syncOpencodeModels(agentId) }
+      )
+      throw error
+    }
+  }
+
   // 加载所有配置
   async function loadAllConfigs(agentId: string) {
     await Promise.all([
@@ -788,6 +863,8 @@ export const useAgentConfigStore = defineStore('agentConfig', () => {
     ensureModelsConfigs,
     createModelConfig,
     initBuiltinModels,
+    syncRemoteModels,
+    syncOpencodeModels,
     updateModelConfig,
     deleteModelConfig,
     getModelsConfigs,

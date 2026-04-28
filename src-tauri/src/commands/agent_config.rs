@@ -110,64 +110,19 @@ const MODELS_SELECT_BY_ID_SQL: &str = r#"
 const CODEX_BUILTIN_MODELS: &[BuiltinModelDef] = &[
     (
         "",
-        "\u{4F7F}\u{7528}\u{9ED8}\u{8BA4}\u{6A21}\u{578B}",
+        "使用默认模型",
         0,
         true,
         Some(400000),
     ),
-    ("gpt-5.3-codex", "GPT-5.3 Codex", 1, false, Some(400000)),
-    ("gpt-5.4", "GPT-5.4", 2, false, Some(1050000)),
 ];
 
 const CLAUDE_BUILTIN_MODELS: &[BuiltinModelDef] = &[
     (
         "",
-        "\u{4F7F}\u{7528}\u{9ED8}\u{8BA4}\u{6A21}\u{578B}",
+        "使用默认模型",
         0,
         true,
-        Some(200000),
-    ),
-    ("claude-opus-4-6", "Claude Opus 4.6", 1, false, Some(200000)),
-    (
-        "claude-opus-4-6[1m]",
-        "Claude Opus 4.6 [1M]",
-        2,
-        false,
-        Some(1000000),
-    ),
-    (
-        "claude-sonnet-4-6",
-        "Claude Sonnet 4.6",
-        3,
-        false,
-        Some(200000),
-    ),
-    (
-        "claude-sonnet-4-6[1m]",
-        "Claude Sonnet 4.6 [1M]",
-        4,
-        false,
-        Some(1000000),
-    ),
-    (
-        "claude-sonnet-4-5",
-        "Claude Sonnet 4.5",
-        5,
-        false,
-        Some(200000),
-    ),
-    (
-        "claude-sonnet-4-5[1m]",
-        "Claude Sonnet 4.5 [1M]",
-        6,
-        false,
-        Some(1000000),
-    ),
-    (
-        "claude-haiku-4-5",
-        "Claude Haiku 4.5",
-        7,
-        false,
         Some(200000),
     ),
 ];
@@ -1127,6 +1082,142 @@ pub fn delete_agent_model(id: String) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RemoteModelDef {
+    pub model_id: String,
+    pub display_name: String,
+    pub context_window: Option<i32>,
+    pub sort_order: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SyncRemoteModelsInput {
+    pub agent_id: String,
+    pub models: Vec<RemoteModelDef>,
+}
+
+#[tauri::command]
+pub fn sync_remote_models(
+    input: SyncRemoteModelsInput,
+) -> Result<Vec<AgentModelConfig>, String> {
+    let mut conn = open_conn()?;
+    let now = now_rfc3339();
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+    tx.execute(
+        "DELETE FROM agent_models WHERE agent_id = ?1 AND model_id != ''",
+        [&input.agent_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    for remote_model in &input.models {
+        let id = uuid::Uuid::new_v4().to_string();
+        let sort_order = remote_model.sort_order.unwrap_or(0);
+
+        tx.execute(
+            "INSERT INTO agent_models (id, agent_id, model_id, display_name, is_builtin, is_default, sort_order, enabled, context_window, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, 0, 0, ?5, 1, ?6, ?7, ?8)",
+            rusqlite::params![
+                &id,
+                &input.agent_id,
+                &remote_model.model_id,
+                &remote_model.display_name,
+                sort_order,
+                remote_model.context_window,
+                &now,
+                &now
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    tx.commit().map_err(|e| e.to_string())?;
+
+    list_models_for_agent(&conn, &input.agent_id)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SyncOpencodeModelsInput {
+    pub agent_id: String,
+    pub provider_name: String,
+}
+
+#[tauri::command]
+pub fn sync_opencode_models(
+    input: SyncOpencodeModelsInput,
+) -> Result<Vec<AgentModelConfig>, String> {
+    if input.provider_name.trim().is_empty() {
+        return Err("未配置 OpenCode Provider，请先在配置切换中设置 Provider".to_string());
+    }
+
+    let cli_path = crate::commands::cli_support::find_cli_executable("opencode", &[])
+        .ok_or_else(|| "未找到 opencode CLI".to_string())?;
+
+    let output = crate::commands::cli_support::run_cli_command(
+        &cli_path,
+        &["models", &input.provider_name],
+    )
+    .map_err(|e| format!("执行 opencode models {} 失败: {}", input.provider_name, e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(format!("查询模型失败: {}", stderr.trim()));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let prefix = format!("{}/", input.provider_name);
+
+    let model_ids: Vec<String> = stdout
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.starts_with(&prefix) {
+                Some(trimmed[prefix.len()..].to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if model_ids.is_empty() {
+        return Err(format!("未从 opencode CLI 获取到 {} 的模型列表", input.provider_name));
+    }
+
+    let mut conn = open_conn()?;
+    let now = now_rfc3339();
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+    tx.execute(
+        "DELETE FROM agent_models WHERE agent_id = ?1 AND model_id != ''",
+        [&input.agent_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    for (idx, model_id) in model_ids.iter().enumerate() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let display_name = model_id.clone();
+
+        tx.execute(
+            "INSERT INTO agent_models (id, agent_id, model_id, display_name, is_builtin, is_default, sort_order, enabled, context_window, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, 0, 0, ?5, 1, NULL, ?6, ?7)",
+            rusqlite::params![
+                &id,
+                &input.agent_id,
+                model_id,
+                &display_name,
+                idx as i32 + 1,
+                &now,
+                &now
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    tx.commit().map_err(|e| e.to_string())?;
+
+    list_models_for_agent(&conn, &input.agent_id)
+}
+
 #[allow(dead_code)]
 #[tauri::command]
 pub fn reset_builtin_models(
@@ -1138,7 +1229,6 @@ pub fn reset_builtin_models(
 
     let tx = conn.transaction().map_err(|e| e.to_string())?;
 
-    // 鍒犻櫎璇ユ櫤鑳戒綋鐨勬墍鏈夋ā�?
     tx.execute(
         "DELETE FROM agent_models WHERE agent_id = ?1",
         [&input.agent_id],
@@ -1155,4 +1245,169 @@ pub fn reset_builtin_models(
     tx.commit().map_err(|e| e.to_string())?;
 
     Ok(configs)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpencodeProviderModels {
+    pub provider: String,
+    pub display_name: String,
+    pub models: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SyncAllOpencodeModelsInput {
+    pub agent_id: String,
+}
+
+#[tauri::command]
+pub fn sync_all_opencode_models(
+    input: SyncAllOpencodeModelsInput,
+) -> Result<Vec<AgentModelConfig>, String> {
+    let cli_path = crate::commands::cli_support::find_cli_executable("opencode", &[])
+        .ok_or_else(|| "未找到 opencode CLI，请确认已安装 opencode".to_string())?;
+
+    let output = crate::commands::cli_support::run_cli_command(&cli_path, &["models"])
+        .map_err(|e| format!("执行 opencode models 失败: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(format!("查询模型列表失败: {}", stderr.trim()));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+
+    let mut provider_map: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(slash_pos) = trimmed.find('/') {
+            let provider = &trimmed[..slash_pos];
+            let model = &trimmed[(slash_pos + 1)..];
+            if !provider.is_empty() && !model.is_empty() {
+                provider_map
+                    .entry(provider.to_string())
+                    .or_default()
+                    .push(model.to_string());
+            }
+        }
+    }
+
+    if provider_map.is_empty() {
+        return Err("未从 opencode CLI 获取到任何模型".to_string());
+    }
+
+    let mut conn = open_conn()?;
+    let now = now_rfc3339();
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+    tx.execute(
+        "DELETE FROM agent_models WHERE agent_id = ?1 AND model_id != ''",
+        [&input.agent_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    let mut sort_order = 1i32;
+    for (provider, model_names) in &provider_map {
+        for model_name in model_names {
+            let id = uuid::Uuid::new_v4().to_string();
+            let model_id = format!("{}/{}", provider, model_name);
+
+            tx.execute(
+                "INSERT INTO agent_models (id, agent_id, model_id, display_name, is_builtin, is_default, sort_order, enabled, context_window, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, 0, 0, ?5, 1, NULL, ?6, ?7)",
+                rusqlite::params![
+                    &id,
+                    &input.agent_id,
+                    &model_id,
+                    &model_id,
+                    sort_order,
+                    &now,
+                    &now
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+
+            sort_order += 1;
+        }
+    }
+
+    tx.commit().map_err(|e| e.to_string())?;
+
+    list_models_for_agent(&conn, &input.agent_id)
+}
+
+#[tauri::command]
+pub fn list_opencode_provider_models() -> Result<Vec<OpencodeProviderModels>, String> {
+    let cli_path = crate::commands::cli_support::find_cli_executable("opencode", &[])
+        .ok_or_else(|| "未找到 opencode CLI".to_string())?;
+
+    let output = crate::commands::cli_support::run_cli_command(&cli_path, &["models"])
+        .map_err(|e| format!("执行 opencode models 失败: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(format!("查询模型列表失败: {}", stderr.trim()));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+
+    let mut provider_map: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(slash_pos) = trimmed.find('/') {
+            let provider = &trimmed[..slash_pos];
+            let model = &trimmed[(slash_pos + 1)..];
+            if !provider.is_empty() && !model.is_empty() {
+                provider_map
+                    .entry(provider.to_string())
+                    .or_default()
+                    .push(model.to_string());
+            }
+        }
+    }
+
+    let result = provider_map
+        .into_iter()
+        .map(|(provider, models)| {
+            let display_name = format_opencode_provider_display_name(&provider);
+            OpencodeProviderModels {
+                provider,
+                display_name,
+                models,
+            }
+        })
+        .collect();
+
+    Ok(result)
+}
+
+fn format_opencode_provider_display_name(id: &str) -> String {
+    let upper_words = [
+        "ai", "api", "sdk", "llm", "cpu", "gpu", "db", "io", "url", "gpt",
+    ];
+
+    id.split(|c: char| c == '-' || c == '.')
+        .filter(|word| *word != "plan")
+        .map(|word| {
+            if upper_words.contains(&word.to_lowercase().as_str()) {
+                word.to_uppercase()
+            } else if word == "opencode" {
+                "OpenCode".to_string()
+            } else {
+                let mut chars = word.chars();
+                match chars.next() {
+                    None => String::new(),
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }

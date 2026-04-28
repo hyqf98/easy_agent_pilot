@@ -10,6 +10,7 @@ import { checkCircularDependency, getAvailableDependencies } from '@/composables
 import { useSafeOutsideClick } from '@/composables/useSafeOutsideClick'
 import { resolveExpertById, resolveExpertRuntime } from '@/services/agentTeams/runtime'
 import type { Task, TaskPriority } from '@/types/plan'
+import { formatAgentModelLabel } from '@/utils/agentModelLabel'
 import { getErrorMessage } from '@/utils/api'
 
 export interface TaskEditModalProps {
@@ -89,7 +90,11 @@ export function useTaskEditModal(props: TaskEditModalProps, emit: TaskEditModalE
       .filter(config => config.enabled)
       .map(config => ({
         value: config.modelId,
-        label: config.displayName || config.modelId
+        label: formatAgentModelLabel({
+          provider: runtime.agent.provider || inferAgentProvider(runtime.agent),
+          modelId: config.modelId,
+          displayName: config.displayName
+        })
       }))
   })
 

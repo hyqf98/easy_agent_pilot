@@ -11,7 +11,7 @@ use crate::commands::mcp_shared::parse_args_string;
 use crate::commands::scan_session_shared::{
     clean_display_text, collect_jsonl_files, delete_cli_session_path,
     extract_jsonl_message_content, extract_jsonl_message_type, extract_jsonl_project_path,
-    extract_jsonl_role,
+    extract_jsonl_role, format_json_value,
 };
 
 /// MCP 传输类型
@@ -43,6 +43,7 @@ pub struct ScannedMcpServer {
     pub env: Option<std::collections::HashMap<String, String>>,
     pub url: Option<String>,
     pub headers: Option<std::collections::HashMap<String, String>>,
+    pub disabled: bool,
 }
 
 /// Skill 子目录信息
@@ -246,6 +247,11 @@ pub(crate) fn parse_mcp_server_config(
     // 解析 headers 字段
     let headers = crate::commands::scan_shared::parse_string_map(config_obj.get("headers"));
 
+    let disabled = config_obj
+        .get("disabled")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+
     // 推断传输类型
     let transport = config_obj
         .get("transport")
@@ -262,19 +268,110 @@ pub(crate) fn parse_mcp_server_config(
         env,
         url,
         headers,
+        disabled,
     })
 }
 
+fn scan_opencode_mcp_source_file(
+    path: &Path,
+    scope: McpConfigScope,
+    servers: &mut Vec<ScannedMcpServer>,
+) {
+    let Some(json) = crate::commands::scan_shared::read_json_file(path) else {
+        return;
+    };
+    let Some(mcp_obj) = json.get("mcp").and_then(|value| value.as_object()) else {
+        return;
+    };
+
+    for (name, config) in mcp_obj {
+        if servers
+            .iter()
+            .any(|server| server.name == *name && server.scope == scope)
+        {
+            continue;
+        }
+
+        let Some(config_obj) = config.as_object() else {
+            continue;
+        };
+
+        let server_type = config_obj
+            .get("type")
+            .and_then(|value| value.as_str())
+            .unwrap_or("local");
+        let enabled = config_obj
+            .get("enabled")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(true);
+
+        if server_type == "remote" {
+            let url = config_obj
+                .get("url")
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string());
+            let transport = infer_transport_from_fields(url.as_ref(), None).unwrap_or(McpTransportType::Http);
+
+            servers.push(ScannedMcpServer {
+                name: name.clone(),
+                transport,
+                scope: scope.clone(),
+                command: None,
+                args: None,
+                env: None,
+                url,
+                headers: crate::commands::scan_shared::parse_string_map(config_obj.get("headers")),
+                disabled: !enabled,
+            });
+            continue;
+        }
+
+        let command_array = config_obj.get("command").and_then(|value| value.as_array());
+        let command = command_array
+            .and_then(|values| values.first())
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string());
+        let args = command_array.map(|values| {
+            values
+                .iter()
+                .skip(1)
+                .filter_map(|value| value.as_str().map(|entry| entry.to_string()))
+                .collect::<Vec<String>>()
+        });
+
+        servers.push(ScannedMcpServer {
+            name: name.clone(),
+            transport: McpTransportType::Stdio,
+            scope: scope.clone(),
+            command,
+            args,
+            env: crate::commands::scan_shared::parse_string_map(config_obj.get("environment")),
+            url: None,
+            headers: None,
+            disabled: !enabled,
+        });
+    }
+}
+
 /// 扫描 MCP 配置
-fn scan_mcp_config(config_dir: &Path, config_file: &Path) -> Result<Vec<ScannedMcpServer>> {
+fn scan_mcp_config(
+    cli_name: &str,
+    config_dir: &Path,
+    config_file: &Path,
+    project_path: Option<&Path>,
+) -> Result<Vec<ScannedMcpServer>> {
     let mut servers = Vec::new();
 
     // 1. 首先尝试从 ~/.claude.json (或对应 CLI 的配置文件) 读取用户级 MCP 配置 (user scope)
-    crate::commands::scan_shared::scan_mcp_source_file(
-        config_file,
-        McpConfigScope::User,
-        &mut servers,
-    );
+    if cli_name == "opencode" {
+        scan_opencode_mcp_source_file(config_file, McpConfigScope::User, &mut servers);
+    } else {
+        crate::commands::scan_shared::scan_mcp_source_file(
+            config_file,
+            McpConfigScope::User,
+            &mut servers,
+        );
+    }
 
     // 2. 尝试从 config_dir/settings.json 读取 MCP 配置 (user scope)
     let settings_path = config_dir.join("settings.json");
@@ -284,13 +381,27 @@ fn scan_mcp_config(config_dir: &Path, config_file: &Path) -> Result<Vec<ScannedM
         &mut servers,
     );
 
-    // 3. 尝试从 .mcp.json 读取项目级配置 (local scope)
-    let mcp_json_path = config_dir.join(".mcp.json");
-    crate::commands::scan_shared::scan_mcp_source_file(
-        &mcp_json_path,
-        McpConfigScope::Local,
-        &mut servers,
-    );
+    if let Some(project_root) = project_path {
+        match cli_name {
+            "claude" => {
+                let mcp_json_path = project_root.join(".mcp.json");
+                crate::commands::scan_shared::scan_mcp_source_file(
+                    &mcp_json_path,
+                    McpConfigScope::Local,
+                    &mut servers,
+                );
+            }
+            "opencode" => {
+                let project_config_path = project_root.join("opencode.json");
+                scan_opencode_mcp_source_file(
+                    &project_config_path,
+                    McpConfigScope::Project,
+                    &mut servers,
+                );
+            }
+            _ => {}
+        }
+    }
 
     Ok(servers)
 }
@@ -417,9 +528,8 @@ fn build_markdown_skill(path: &PathBuf) -> ScannedSkill {
 }
 
 /// 扫描 Skills 目录
-fn scan_skills_directory(claude_dir: &Path) -> Result<Vec<ScannedSkill>> {
+fn scan_skills_directory_at(skills_dir: &Path) -> Result<Vec<ScannedSkill>> {
     let mut skills = Vec::new();
-    let skills_dir = claude_dir.join("skills");
 
     if !skills_dir.exists() {
         return Ok(skills);
@@ -441,6 +551,33 @@ fn scan_skills_directory(claude_dir: &Path) -> Result<Vec<ScannedSkill>> {
 
         if path.extension().is_some_and(|extension| extension == "md") {
             skills.push(build_markdown_skill(&path));
+        }
+    }
+
+    Ok(skills)
+}
+
+fn scan_skills_directory(
+    config_dir: &Path,
+    cli_name: &str,
+    project_path: Option<&Path>,
+) -> Result<Vec<ScannedSkill>> {
+    let mut skills = scan_skills_directory_at(&config_dir.join("skills"))?;
+
+    if let Some(project_root) = project_path {
+        let project_skills_dir = match cli_name {
+            "claude" => Some(project_root.join(".claude").join("skills")),
+            "opencode" => Some(project_root.join(".opencode").join("skills")),
+            _ => None,
+        };
+
+        if let Some(skills_dir) = project_skills_dir {
+            for skill in scan_skills_directory_at(&skills_dir)? {
+                if skills.iter().any(|existing| existing.path == skill.path) {
+                    continue;
+                }
+                skills.push(skill);
+            }
         }
     }
 
@@ -605,9 +742,7 @@ fn scan_plugin_directories(plugins_dir: &Path, cli_name: &str) -> Result<Vec<Sca
 }
 
 /// 扫描 Plugins 目录
-fn scan_plugins_directory(config_dir: &Path, cli_name: &str) -> Result<Vec<ScannedPlugin>> {
-    let plugins_dir = config_dir.join("plugins");
-
+fn scan_plugins_directory_at(plugins_dir: &Path, cli_name: &str) -> Result<Vec<ScannedPlugin>> {
     if !plugins_dir.exists() {
         return Ok(Vec::new());
     }
@@ -620,11 +755,38 @@ fn scan_plugins_directory(config_dir: &Path, cli_name: &str) -> Result<Vec<Scann
     Ok(plugins)
 }
 
+fn scan_plugins_directory(
+    config_dir: &Path,
+    cli_name: &str,
+    project_path: Option<&Path>,
+) -> Result<Vec<ScannedPlugin>> {
+    let mut plugins = scan_plugins_directory_at(&config_dir.join("plugins"), cli_name)?;
+
+    if let Some(project_root) = project_path {
+        let project_plugins_dir = match cli_name {
+            "opencode" => Some(project_root.join(".opencode").join("plugins")),
+            _ => None,
+        };
+
+        if let Some(plugins_dir) = project_plugins_dir {
+            for plugin in scan_plugins_directory_at(&plugins_dir, cli_name)? {
+                if plugins.iter().any(|existing| existing.path == plugin.path) {
+                    continue;
+                }
+                plugins.push(plugin);
+            }
+        }
+    }
+
+    Ok(plugins)
+}
+
 /// 扫描 CLI 配置 (Tauri 命令)
 #[tauri::command]
 pub fn scan_cli_config(
     cli_path: Option<String>,
     cli_type: Option<String>,
+    project_path: Option<String>,
 ) -> Result<ClaudeConfigScanResult, String> {
     let (config_dir, config_file, cli_name) =
         match get_cli_config_dir(cli_path.as_deref(), cli_type.as_deref()) {
@@ -646,9 +808,19 @@ pub fn scan_cli_config(
         ));
     }
 
-    let mcp_servers = scan_mcp_config(&config_dir, &config_file).unwrap_or_default();
-    let skills = scan_skills_directory(&config_dir).unwrap_or_default();
-    let plugins = scan_plugins_directory(&config_dir, &cli_name).unwrap_or_default();
+    let project_root = project_path
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.exists() && path.is_dir());
+
+    let mcp_servers =
+        scan_mcp_config(&cli_name, &config_dir, &config_file, project_root.as_deref())
+            .unwrap_or_default();
+    let skills =
+        scan_skills_directory(&config_dir, &cli_name, project_root.as_deref()).unwrap_or_default();
+    let plugins = scan_plugins_directory(&config_dir, &cli_name, project_root.as_deref())
+        .unwrap_or_default();
 
     Ok(build_cli_config_scan_result(
         config_dir_str,
@@ -695,6 +867,7 @@ pub fn scan_claude_mcp_list() -> Result<Vec<ScannedMcpServer>, String> {
                                 env: None,
                                 url: None,
                                 headers: None,
+                                disabled: false,
                             });
                         }
                     }
@@ -996,6 +1169,11 @@ fn list_cli_session_project_paths(cli_name: &str, config_dir: &Path) -> Vec<Stri
                 }
             }
         }
+        "opencode" => {
+            if let Ok(paths) = list_opencode_session_project_paths(config_dir) {
+                project_paths.extend(paths);
+            }
+        }
         _ => {}
     }
 
@@ -1167,6 +1345,10 @@ fn read_cli_session_detail_impl(
     _agent_id: String,
     session_path: String,
 ) -> Result<CliSessionDetail, String> {
+    if is_opencode_session_path(&session_path) {
+        return read_opencode_session_detail(&session_path);
+    }
+
     let path = PathBuf::from(&session_path);
 
     if !path.exists() {
@@ -1263,10 +1445,14 @@ fn read_cli_session_detail_impl(
 /// 删除 CLI 会话 (Tauri 命令)
 #[tauri::command]
 pub fn delete_cli_session(
-    _agent_id: String,
+    agent_id: String,
     session_path: String,
     cleanup_empty_dirs: bool,
 ) -> Result<(), String> {
+    if is_opencode_session_path(&session_path) {
+        return delete_opencode_session(&agent_id, &session_path);
+    }
+
     let path = PathBuf::from(&session_path);
     delete_cli_session_path(&path, cleanup_empty_dirs)
 }
@@ -1279,7 +1465,7 @@ pub struct DeleteCliSessionsResult {
 
 #[tauri::command]
 pub async fn delete_cli_sessions(
-    _agent_id: String,
+    agent_id: String,
     session_paths: Vec<String>,
     cleanup_empty_dirs: bool,
 ) -> Result<DeleteCliSessionsResult, String> {
@@ -1292,6 +1478,16 @@ pub async fn delete_cli_sessions(
         let mut failed_paths = Vec::new();
 
         for session_path in session_paths {
+            if is_opencode_session_path(&session_path) {
+                match delete_opencode_session(&agent_id, &session_path) {
+                    Ok(()) => deleted_count += 1,
+                    Err(error) => {
+                        failed_paths.push(format!("{}: {}", session_path, error));
+                    }
+                }
+                continue;
+            }
+
             let path = PathBuf::from(&session_path);
             match delete_cli_session_path(&path, cleanup_empty_dirs) {
                 Ok(()) => deleted_count += 1,
@@ -1308,6 +1504,436 @@ pub async fn delete_cli_sessions(
     })
     .await
     .map_err(|e| format!("批量删除会话失败: {}", e))?
+}
+
+const OPENCODE_SESSION_PATH_PREFIX: &str = "opencode://session/";
+
+fn opencode_data_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".local").join("share").join("opencode"))
+}
+
+fn opencode_db_path() -> Option<PathBuf> {
+    opencode_data_dir().map(|d| d.join("opencode.db"))
+}
+
+fn is_opencode_session_path(session_path: &str) -> bool {
+    session_path.starts_with(OPENCODE_SESSION_PATH_PREFIX)
+}
+
+fn extract_opencode_session_id(session_path: &str) -> Option<&str> {
+    session_path
+        .strip_prefix(OPENCODE_SESSION_PATH_PREFIX)
+        .filter(|s| !s.is_empty())
+}
+
+fn list_opencode_session_project_paths(config_dir: &Path) -> Result<Vec<String>, String> {
+    let db_path = if config_dir.join("opencode.db").exists() {
+        config_dir.join("opencode.db")
+    } else {
+        opencode_db_path().ok_or_else(|| "无法确定 OpenCode 数据目录".to_string())?
+    };
+
+    if !db_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let conn = Connection::open(&db_path)
+        .map_err(|e| format!("无法打开 OpenCode 数据库: {}", e))?;
+
+    let mut stmt = conn
+        .prepare("SELECT DISTINCT directory FROM session ORDER BY directory")
+        .map_err(|e| format!("查询 OpenCode 会话项目失败: {}", e))?;
+
+    let paths = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("读取 OpenCode 项目列表失败: {}", e))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(paths)
+}
+
+fn scan_opencode_sessions(
+    config_dir: &Path,
+    project_filter: Option<&str>,
+) -> Vec<ScannedCliSession> {
+    let db_path = if config_dir.join("opencode.db").exists() {
+        config_dir.join("opencode.db")
+    } else {
+        match opencode_db_path() {
+            Some(p) if p.exists() => p,
+            _ => return Vec::new(),
+        }
+    };
+
+    let conn = match Connection::open(&db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("无法打开 OpenCode 数据库: {}", e);
+            return Vec::new();
+        }
+    };
+
+    let sql = match project_filter {
+        Some(_) => "SELECT id, directory, title, time_created, time_updated FROM session WHERE directory = ?1 ORDER BY time_updated DESC",
+        None => "SELECT id, directory, title, time_created, time_updated FROM session ORDER BY time_updated DESC",
+    };
+
+    let mut sessions = Vec::new();
+
+    let rows_result: Result<Vec<(String, String, Option<String>, i64, i64)>, rusqlite::Error> =
+        if let Some(filter) = project_filter {
+            let mut stmt = match conn.prepare(sql) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("OpenCode 会话查询失败: {}", e);
+                    return Vec::new();
+                }
+            };
+            stmt.query_map([filter], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            })
+            .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        } else {
+            let mut stmt = match conn.prepare(sql) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("OpenCode 会话查询失败: {}", e);
+                    return Vec::new();
+                }
+            };
+            stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            })
+            .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        };
+
+    let rows = match rows_result {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("OpenCode 会话查询失败: {}", e);
+            return Vec::new();
+        }
+    };
+
+    for (session_id, directory, title, time_created, time_updated) in rows {
+        let created_at = format_unix_timestamp_ms(time_created);
+        let updated_at = format_unix_timestamp_ms(time_updated);
+
+        let message_count = match conn.query_row(
+            "SELECT count(*) FROM message WHERE session_id = ?1 AND json_extract(data, '$.role') IN ('user', 'assistant')",
+            [&session_id],
+            |r| r.get::<_, i32>(0),
+        ) {
+            Ok(c) => c,
+            Err(_) => 0,
+        };
+
+        let first_message = title.unwrap_or_default();
+
+        sessions.push(ScannedCliSession {
+            session_id: session_id.clone(),
+            session_path: format!("{}{}", OPENCODE_SESSION_PATH_PREFIX, session_id),
+            project_path: Some(directory),
+            first_message: if first_message.is_empty() { None } else { Some(first_message) },
+            message_count,
+            created_at,
+            updated_at,
+        });
+    }
+
+    sessions
+}
+
+fn format_unix_timestamp_ms(ts_ms: i64) -> String {
+    let secs = ts_ms / 1000;
+    chrono::DateTime::from_timestamp(secs, 0)
+        .unwrap_or_default()
+        .to_rfc3339()
+}
+
+fn read_opencode_session_detail(session_path: &str) -> Result<CliSessionDetail, String> {
+    let session_id = extract_opencode_session_id(session_path)
+        .ok_or_else(|| "无效的 OpenCode 会话路径".to_string())?;
+
+    let db_path = opencode_db_path()
+        .filter(|p| p.exists())
+        .ok_or_else(|| "无法找到 OpenCode 数据库".to_string())?;
+
+    let conn = Connection::open(&db_path)
+        .map_err(|e| format!("无法打开 OpenCode 数据库: {}", e))?;
+
+    let (directory, title, time_created, time_updated) = conn
+        .query_row(
+            "SELECT directory, title, time_created, time_updated FROM session WHERE id = ?1",
+            [session_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        )
+        .map_err(|e| format!("查询会话失败: {}", e))?;
+
+    let created_at = format_unix_timestamp_ms(time_created);
+    let updated_at = format_unix_timestamp_ms(time_updated);
+
+    let first_message = title.filter(|t| !t.is_empty());
+
+    let mut messages = Vec::new();
+    let mut msg_count = 0;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, data FROM message WHERE session_id = ?1 ORDER BY time_created",
+        )
+        .map_err(|e| format!("查询消息失败: {}", e))?;
+
+    let rows = stmt
+        .query_map([session_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+            ))
+        })
+        .map_err(|e| format!("读取消息失败: {}", e))?;
+
+    for row in rows {
+        let (msg_id, data_str) = match row {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        let data: serde_json::Value = match serde_json::from_str(&data_str) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let role = data
+            .get("role")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        if role == "user" || role == "assistant" {
+            msg_count += 1;
+        }
+
+        let timestamp = data
+            .get("time")
+            .and_then(|t| t.get("created"))
+            .and_then(|v| v.as_i64())
+            .map(|ts| format_unix_timestamp_ms(ts));
+
+        let extraction = extract_opencode_message_content(&conn, &msg_id, &data);
+        let msg_type = match role.as_str() {
+            "user" => "user".to_string(),
+            "assistant" => extraction
+                .preferred_message_type
+                .clone()
+                .unwrap_or_else(|| "assistant".to_string()),
+            _ => extraction
+                .preferred_message_type
+                .clone()
+                .unwrap_or_else(|| "system".to_string()),
+        };
+
+        messages.push(CliSessionMessage {
+            line_no: messages.len() as i32 + 1,
+            message_type: msg_type,
+            role: Some(role),
+            timestamp,
+            content: extraction.content,
+            raw_json: data_str,
+        });
+    }
+
+    Ok(CliSessionDetail {
+        session_id: session_id.to_string(),
+        session_path: session_path.to_string(),
+        project_path: Some(directory),
+        first_message,
+        message_count: msg_count,
+        created_at,
+        updated_at,
+        messages,
+    })
+}
+
+#[derive(Default)]
+struct OpenCodeMessageExtraction {
+    content: Option<String>,
+    preferred_message_type: Option<String>,
+}
+
+fn extract_opencode_tool_part_content(part: &serde_json::Value) -> Option<String> {
+    let tool_name = part
+        .get("tool")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let status = part
+        .get("state")
+        .and_then(|state| state.get("status"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let input = part
+        .get("state")
+        .and_then(|state| state.get("input"))
+        .and_then(format_json_value);
+    let output = part
+        .get("state")
+        .and_then(|state| state.get("output"))
+        .and_then(format_json_value);
+
+    if let Some(output_text) = output.filter(|text| !text.trim().is_empty()) {
+        return Some(format!("[Tool Result] {}\n{}", tool_name, output_text));
+    }
+
+    if let Some(input_text) = input.filter(|text| !text.trim().is_empty()) {
+        return Some(format!("[Tool Use] {}\n{}", tool_name, input_text));
+    }
+
+    if status.is_empty() {
+        Some(format!("[Tool Use] {}", tool_name))
+    } else {
+        Some(format!("[Tool Use] {} ({})", tool_name, status))
+    }
+}
+
+fn extract_opencode_message_content(
+    conn: &Connection,
+    msg_id: &str,
+    message_data: &serde_json::Value,
+) -> OpenCodeMessageExtraction {
+    let mut stmt = conn
+        .prepare("SELECT data FROM part WHERE message_id = ?1 ORDER BY time_created")
+        .ok();
+
+    let mut parts = Vec::new();
+    let mut has_assistant_text = false;
+    let mut has_tool_activity = false;
+    let mut has_step_text = false;
+
+    if let Some(stmt) = stmt.as_mut() {
+        if let Ok(rows) = stmt.query_map([msg_id], |row| row.get::<_, String>(0)) {
+            for row in rows {
+                let Ok(result) = row else {
+                    continue;
+                };
+
+                let Ok(data) = serde_json::from_str::<serde_json::Value>(&result) else {
+                    continue;
+                };
+
+                let part_type = data.get("type").and_then(|v| v.as_str()).unwrap_or_default();
+                let text = match part_type {
+                    "text" => {
+                        has_assistant_text = true;
+                        data.get("text").and_then(|v| v.as_str()).and_then(clean_display_text)
+                    }
+                    "reasoning" => {
+                        has_assistant_text = true;
+                        data.get("text")
+                            .and_then(|v| v.as_str())
+                            .and_then(clean_display_text)
+                            .map(|value| format!("[Thinking]\n{}", value))
+                    }
+                    "step-start" => data
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .and_then(clean_display_text)
+                        .map(|value| {
+                            has_step_text = true;
+                            format!("[Step]\n{}", value)
+                        }),
+                    "tool" => {
+                        has_tool_activity = true;
+                        extract_opencode_tool_part_content(&data)
+                    }
+                    _ => data
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .and_then(clean_display_text),
+                };
+
+                if let Some(value) = text {
+                    parts.push(value);
+                }
+            }
+        }
+    }
+
+    let content = if !parts.is_empty() {
+        Some(parts.join("\n\n"))
+    } else {
+        message_data
+        .get("error")
+        .and_then(|error| error.get("data"))
+        .and_then(|data| data.get("message"))
+        .and_then(|v| v.as_str())
+        .and_then(clean_display_text)
+        .map(|value| format!("[Error]\n{}", value))
+        .or_else(|| {
+            message_data
+                .get("summary")
+                .and_then(format_json_value)
+        })
+    };
+
+    let preferred_message_type = if has_assistant_text {
+        Some("assistant".to_string())
+    } else if has_tool_activity {
+        Some("tool_use".to_string())
+    } else if has_step_text {
+        Some("system".to_string())
+    } else if content.is_some() {
+        Some("assistant".to_string())
+    } else {
+        None
+    };
+
+    OpenCodeMessageExtraction {
+        content,
+        preferred_message_type,
+    }
+}
+
+fn delete_opencode_session(_agent_id: &str, session_path: &str) -> Result<(), String> {
+    let session_id = extract_opencode_session_id(session_path)
+        .ok_or_else(|| "无效的 OpenCode 会话路径".to_string())?;
+
+    let db_path = opencode_db_path()
+        .filter(|p| p.exists())
+        .ok_or_else(|| "无法找到 OpenCode 数据库".to_string())?;
+
+    let conn = Connection::open(&db_path)
+        .map_err(|e| format!("无法打开 OpenCode 数据库: {}", e))?;
+
+    conn.execute("DELETE FROM part WHERE session_id = ?1", [session_id])
+        .map_err(|e| format!("删除会话 part 失败: {}", e))?;
+
+    conn.execute("DELETE FROM message WHERE session_id = ?1", [session_id])
+        .map_err(|e| format!("删除会话 message 失败: {}", e))?;
+
+    conn.execute("DELETE FROM session WHERE id = ?1", [session_id])
+        .map_err(|e| format!("删除会话记录失败: {}", e))?;
+
+    Ok(())
 }
 
 /// 扫描智能体会话历史 (Tauri 命令)
@@ -1359,6 +1985,7 @@ fn scan_cli_sessions_internal(
             }
             collect_cli_sessions_from_files(session_files, prefer_fast_scan, project_filter)
         }
+        "opencode" => scan_opencode_sessions(&config_dir, project_filter),
         "qwen" | "qwen-code" => Vec::new(),
         _ => Vec::new(),
     };
@@ -1460,6 +2087,24 @@ mod tests {
             extract_jsonl_message_content(&json).as_deref(),
             Some("会话详情恢复正常")
         );
+    }
+
+    #[test]
+    fn unwraps_claude_wrapped_user_prompt() {
+        let json = json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": "system:\n内部说明\n\ndeveloper:\n开发说明\n\nuser:\n请修复会话详情显示"
+            }
+        });
+
+        assert_eq!(extract_jsonl_message_type(&json), "user");
+        assert_eq!(
+            extract_jsonl_message_content(&json).as_deref(),
+            Some("请修复会话详情显示")
+        );
+        assert_eq!(extract_jsonl_role(&json).as_deref(), Some("user"));
     }
 
     #[test]

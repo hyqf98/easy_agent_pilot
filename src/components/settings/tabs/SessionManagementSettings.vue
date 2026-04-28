@@ -25,6 +25,7 @@ const notificationStore = useNotificationStore()
 
 const selectedAgentId = ref('')
 const selectedProjectPath = ref('')
+const selectedUpdatedRange = ref<'all' | '24h' | '7d' | '30d'>('all')
 
 const sessions = ref<ScannedCliSession[]>([])
 const cliName = ref('')
@@ -49,17 +50,45 @@ const isPreparingCurrentProjectDelete = ref(false)
 
 let projectListRequestId = 0
 let sessionLoadRequestId = 0
+let suppressProjectPathWatch = false
 
 const cliAgents = computed(() => agentStore.agents.filter(agent => agent.type === 'cli'))
 const hasCliAgents = computed(() => cliAgents.value.length > 0)
 const currentProjectPath = computed(() => projectStore.currentProject?.path ?? '')
 const selectedSessionPathSet = computed(() => new Set(selectedSessionPaths.value))
+const updatedRangeOptions = computed(() => [
+  { value: 'all', label: t('settings.sessionManager.updatedRangeAll') },
+  { value: '24h', label: t('settings.sessionManager.updatedRange24h') },
+  { value: '7d', label: t('settings.sessionManager.updatedRange7d') },
+  { value: '30d', label: t('settings.sessionManager.updatedRange30d') }
+])
+
+const getUpdatedRangeCutoff = (range: 'all' | '24h' | '7d' | '30d') => {
+  if (range === 'all') return null
+
+  const now = Date.now()
+  const hours = range === '24h' ? 24 : range === '7d' ? 24 * 7 : 24 * 30
+  return now - hours * 60 * 60 * 1000
+}
+
+const filteredSessions = computed(() => {
+  const cutoff = getUpdatedRangeCutoff(selectedUpdatedRange.value)
+  if (cutoff === null) {
+    return sessions.value
+  }
+
+  return sessions.value.filter(session => {
+    const updatedAt = new Date(session.updated_at).getTime()
+    return Number.isFinite(updatedAt) && updatedAt >= cutoff
+  })
+})
+
 const selectedSessions = computed(() =>
-  sessions.value.filter(session => selectedSessionPathSet.value.has(session.session_path))
+  filteredSessions.value.filter(session => selectedSessionPathSet.value.has(session.session_path))
 )
 const selectedCount = computed(() => selectedSessions.value.length)
 const allVisibleSelected = computed(() =>
-  sessions.value.length > 0 && selectedCount.value === sessions.value.length
+  filteredSessions.value.length > 0 && selectedCount.value === filteredSessions.value.length
 )
 const sessionListLoading = computed(() => isLoadingProjects.value || isLoadingSessions.value)
 
@@ -96,7 +125,7 @@ const projectOptions = computed(() => {
 const groupedSessions = computed(() => {
   const groups: Record<string, ScannedCliSession[]> = {}
 
-  for (const session of sessions.value) {
+  for (const session of filteredSessions.value) {
     const key = session.project_path || t('settings.sessionManager.noProject')
     if (!groups[key]) {
       groups[key] = []
@@ -125,6 +154,10 @@ const resolveNextProjectPath = (projectPaths: string[], preferredProjectPath?: s
     (projectPaths.includes(selectedProjectPath.value) || selectedProjectPath.value === currentProjectPath.value)
   ) {
     return selectedProjectPath.value
+  }
+
+  if (currentProjectPath.value && projectPaths.includes(currentProjectPath.value)) {
+    return currentProjectPath.value
   }
 
   return projectPaths[0] || ''
@@ -223,10 +256,14 @@ const handleRefresh = async () => {
   if (!selectedAgentId.value) return
 
   const preserveSelection = selectedProjectPath.value || null
-  const selectionChanged = await loadProjectPaths(preserveSelection)
-
-  if (!selectionChanged) {
-    await loadSessions()
+  suppressProjectPathWatch = true
+  try {
+    const selectionChanged = await loadProjectPaths(preserveSelection)
+    if (!selectionChanged) {
+      await loadSessions()
+    }
+  } finally {
+    suppressProjectPathWatch = false
   }
 }
 
@@ -260,17 +297,6 @@ const requestDeleteSelected = () => {
   pendingDeleteSessions.value = [...selectedSessions.value]
   deleteError.value = ''
   showDeleteModal.value = true
-}
-
-const selectCurrentProject = async () => {
-  if (!currentProjectPath.value) return
-
-  if (selectedProjectPath.value === currentProjectPath.value) {
-    await loadSessions()
-    return
-  }
-
-  selectedProjectPath.value = currentProjectPath.value
 }
 
 const requestDeleteCurrentProjectSessions = async () => {
@@ -332,7 +358,7 @@ const toggleSelectAllSessions = () => {
     return
   }
 
-  selectedSessionPaths.value = sessions.value.map(session => session.session_path)
+  selectedSessionPaths.value = filteredSessions.value.map(session => session.session_path)
 }
 
 const buildDeleteErrorMessage = (failedPaths: string[]) =>
@@ -409,16 +435,31 @@ watch(selectedAgentId, async () => {
     return
   }
 
-  await loadProjectPaths()
+  suppressProjectPathWatch = true
+  try {
+    await loadProjectPaths()
+    await loadSessions()
+  } finally {
+    suppressProjectPathWatch = false
+  }
 })
 
 watch(selectedProjectPath, async (next, prev) => {
-  if (!selectedAgentId.value || next === prev) {
+  if (suppressProjectPathWatch || !selectedAgentId.value || next === prev) {
     return
   }
 
   await loadSessions()
 })
+
+watch(filteredSessions, nextSessions => {
+  if (selectedSessionPaths.value.length === 0) {
+    return
+  }
+
+  const visiblePaths = new Set(nextSessions.map(session => session.session_path))
+  selectedSessionPaths.value = selectedSessionPaths.value.filter(path => visiblePaths.has(path))
+}, { deep: true })
 
 onMounted(async () => {
   if (!agentStore.agents.length) {
@@ -427,6 +468,11 @@ onMounted(async () => {
 
   if (cliAgents.value.length && !selectedAgentId.value) {
     selectedAgentId.value = cliAgents.value[0].id
+    return
+  }
+
+  if (selectedAgentId.value) {
+    await handleRefresh()
   }
 })
 </script>
@@ -462,16 +508,15 @@ onMounted(async () => {
           />
         </div>
 
-        <div class="toolbar__actions">
-          <EaButton
-            type="secondary"
-            size="small"
-            :disabled="!currentProjectPath"
-            @click="selectCurrentProject"
-          >
-            {{ t('settings.sessionManager.useCurrentProject') }}
-          </EaButton>
+        <div class="toolbar__item">
+          <label class="toolbar__label">{{ t('settings.sessionManager.updatedRangeLabel') }}</label>
+          <EaSelect
+            v-model="selectedUpdatedRange"
+            :options="updatedRangeOptions"
+          />
+        </div>
 
+        <div class="toolbar__actions">
           <EaButton
             type="danger"
             size="small"
@@ -514,7 +559,7 @@ onMounted(async () => {
       v-if="hasCliAgents"
       :cli-name="cliName"
       :session-root="sessionRoot"
-      :sessions="sessions"
+      :sessions="filteredSessions"
       :grouped-sessions="groupedSessions"
       :is-loading-sessions="sessionListLoading"
       :sessions-error="sessionsError"

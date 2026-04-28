@@ -76,6 +76,229 @@ fn build_installed_mcp_config(
     }
 }
 
+fn resolve_project_root(project_path: Option<&str>) -> Result<PathBuf, String> {
+    let raw_path = project_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "项目级安装需要指定项目路径".to_string())?;
+    let path = PathBuf::from(raw_path);
+
+    if !path.exists() {
+        return Err(format!("项目路径不存在: {}", raw_path));
+    }
+    if !path.is_dir() {
+        return Err(format!("项目路径不是目录: {}", raw_path));
+    }
+
+    Ok(path)
+}
+
+fn resolve_project_mcp_config_path(cli_type: &str, project_root: &Path) -> Result<PathBuf, String> {
+    match cli_type {
+        "claude" => Ok(project_root.join(".mcp.json")),
+        "opencode" => Ok(project_root.join("opencode.json")),
+        "codex" => Err("Codex CLI 当前没有可用的官方项目级 MCP 配置文件，暂仅支持全局安装".to_string()),
+        other => Err(format!("当前 CLI 暂不支持项目级 MCP 安装: {}", other)),
+    }
+}
+
+fn read_json_mcp_config(config_path: &Path) -> Result<crate::commands::cli_config::ClaudeCliConfig, String> {
+    if !config_path.exists() {
+        return Ok(crate::commands::cli_config::ClaudeCliConfig::default());
+    }
+
+    let content =
+        fs::read_to_string(config_path).map_err(|e| format!("Failed to read config file: {}", e))?;
+    serde_json::from_str(&content).map_err(|e| format!("Failed to parse JSON: {}", e))
+}
+
+fn write_json_mcp_config(
+    config_path: &Path,
+    config: crate::commands::cli_config::ClaudeCliConfig,
+) -> Result<(), String> {
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    }
+
+    let content = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
+    fs::write(config_path, content).map_err(|e| format!("Failed to write config file: {}", e))
+}
+
+fn read_opencode_project_mcp_config(
+    config_path: &Path,
+) -> Result<crate::commands::cli_config::ClaudeCliConfig, String> {
+    if !config_path.exists() {
+        return Ok(crate::commands::cli_config::ClaudeCliConfig::default());
+    }
+
+    let content = fs::read_to_string(config_path)
+        .map_err(|e| format!("Failed to read opencode config: {}", e))?;
+    let json: serde_json::Value = serde_json::from_str(&content).unwrap_or(serde_json::json!({}));
+
+    let mut mcp_servers = HashMap::new();
+    if let Some(mcp_obj) = json.get("mcp").and_then(|value| value.as_object()) {
+        for (name, value) in mcp_obj {
+            let server_type = value.get("type").and_then(|item| item.as_str()).unwrap_or("local");
+
+            let (command, args, env, url, headers, disabled) = if server_type == "remote" {
+                let url = value
+                    .get("url")
+                    .and_then(|item| item.as_str())
+                    .map(|item| item.to_string());
+                let headers = value.get("headers").and_then(|item| item.as_object()).map(|object| {
+                    object
+                        .iter()
+                        .filter_map(|(key, item)| item.as_str().map(|entry| (key.clone(), entry.to_string())))
+                        .collect()
+                });
+                (None, None, None, url, headers, !value.get("enabled").and_then(|item| item.as_bool()).unwrap_or(true))
+            } else {
+                let command_array = value.get("command").and_then(|item| item.as_array());
+                let command = command_array
+                    .and_then(|items| items.first())
+                    .and_then(|item| item.as_str())
+                    .map(|item| item.to_string());
+                let args = command_array.map(|items| {
+                    items
+                        .iter()
+                        .skip(1)
+                        .filter_map(|item| item.as_str().map(|entry| entry.to_string()))
+                        .collect()
+                });
+                let env = value
+                    .get("environment")
+                    .and_then(|item| item.as_object())
+                    .map(|object| {
+                        object
+                            .iter()
+                            .filter_map(|(key, item)| item.as_str().map(|entry| (key.clone(), entry.to_string())))
+                            .collect()
+                    });
+                (
+                    command,
+                    args,
+                    env,
+                    None,
+                    None,
+                    !value.get("enabled").and_then(|item| item.as_bool()).unwrap_or(true),
+                )
+            };
+
+            mcp_servers.insert(
+                name.clone(),
+                McpServerConfig {
+                    command,
+                    args,
+                    env,
+                    url,
+                    headers,
+                    disabled,
+                },
+            );
+        }
+    }
+
+    let mut other = std::collections::BTreeMap::new();
+    if let Some(object) = json.as_object() {
+        for (key, value) in object {
+            if key != "mcp" {
+                other.insert(key.clone(), value.clone());
+            }
+        }
+    }
+
+    Ok(crate::commands::cli_config::ClaudeCliConfig {
+        mcpServers: (!mcp_servers.is_empty()).then_some(mcp_servers),
+        other,
+    })
+}
+
+fn write_opencode_project_mcp_config(
+    config_path: &Path,
+    config: crate::commands::cli_config::ClaudeCliConfig,
+) -> Result<(), String> {
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    }
+
+    let mut json = if config_path.exists() {
+        let content = fs::read_to_string(config_path)
+            .map_err(|e| format!("Failed to read opencode config: {}", e))?;
+        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    let mcp_servers = config.mcpServers.unwrap_or_default();
+    if !mcp_servers.is_empty() {
+        let mut mcp_obj = serde_json::Map::new();
+        for (name, server) in &mcp_servers {
+            let mut entry = serde_json::Map::new();
+            if let Some(url) = &server.url {
+                entry.insert("type".to_string(), serde_json::json!("remote"));
+                entry.insert("url".to_string(), serde_json::json!(url));
+                if let Some(headers) = &server.headers {
+                    entry.insert("headers".to_string(), serde_json::json!(headers));
+                }
+            } else {
+                entry.insert("type".to_string(), serde_json::json!("local"));
+                let mut command = Vec::new();
+                if let Some(binary) = &server.command {
+                    command.push(serde_json::json!(binary));
+                }
+                if let Some(args) = &server.args {
+                    for arg in args {
+                        command.push(serde_json::json!(arg));
+                    }
+                }
+                entry.insert("command".to_string(), serde_json::json!(command));
+                if let Some(env) = &server.env {
+                    entry.insert("environment".to_string(), serde_json::json!(env));
+                }
+            }
+            entry.insert("enabled".to_string(), serde_json::json!(!server.disabled));
+            mcp_obj.insert(name.clone(), serde_json::Value::Object(entry));
+        }
+        if let Some(object) = json.as_object_mut() {
+            object.insert("mcp".to_string(), serde_json::Value::Object(mcp_obj));
+        }
+    } else if let Some(object) = json.as_object_mut() {
+        object.remove("mcp");
+    }
+
+    let content = serde_json::to_string_pretty(&json)
+        .map_err(|e| format!("Failed to serialize opencode config: {}", e))?;
+    fs::write(config_path, content).map_err(|e| format!("Failed to write opencode config: {}", e))
+}
+
+fn read_project_mcp_config(
+    cli_type: &str,
+    config_path: &Path,
+) -> Result<crate::commands::cli_config::ClaudeCliConfig, String> {
+    match cli_type {
+        "claude" => read_json_mcp_config(config_path),
+        "opencode" => read_opencode_project_mcp_config(config_path),
+        "codex" => Err("Codex CLI 当前没有可用的官方项目级 MCP 配置文件，暂仅支持全局安装".to_string()),
+        other => Err(format!("当前 CLI 暂不支持项目级 MCP 安装: {}", other)),
+    }
+}
+
+fn write_project_mcp_config(
+    cli_type: &str,
+    config_path: &Path,
+    config: crate::commands::cli_config::ClaudeCliConfig,
+) -> Result<(), String> {
+    match cli_type {
+        "claude" => write_json_mcp_config(config_path, config),
+        "opencode" => write_opencode_project_mcp_config(config_path, config),
+        "codex" => Err("Codex CLI 当前没有可用的官方项目级 MCP 配置文件，暂仅支持全局安装".to_string()),
+        other => Err(format!("当前 CLI 暂不支持项目级 MCP 安装: {}", other)),
+    }
+}
+
 fn perform_rollback(settings_path: &Path, backup_path: &Option<String>) -> (bool, String) {
     if let Some(backup) = backup_path {
         let backup = PathBuf::from(backup);
@@ -157,15 +380,20 @@ pub struct McpInstallResult {
 /// Install MCP to Claude/Codex CLI config.
 #[tauri::command]
 pub async fn install_mcp_to_cli(input: McpInstallInput) -> Result<McpInstallResult, String> {
-    if input.scope == "project" {
-        return Err("当前版本的市场安装仅支持全局 MCP 配置".to_string());
-    }
-
     let paths = get_cli_config_paths_internal(&input.cli_path, None)?;
-    let config_path = PathBuf::from(&paths.config_file);
+    let config_path = if input.scope == "project" {
+        let project_root = resolve_project_root(input.project_path.as_deref())?;
+        resolve_project_mcp_config_path(&paths.cli_type, &project_root)?
+    } else {
+        PathBuf::from(&paths.config_file)
+    };
     let backup_path = create_config_backup(&config_path)?;
 
-    let mut config = read_cli_config(input.cli_path.clone(), None)?;
+    let mut config = if input.scope == "project" {
+        read_project_mcp_config(&paths.cli_type, &config_path)?
+    } else {
+        read_cli_config(input.cli_path.clone(), None)?
+    };
     if config.mcpServers.is_none() {
         config.mcpServers = Some(HashMap::new());
     }
@@ -181,7 +409,13 @@ pub async fn install_mcp_to_cli(input: McpInstallInput) -> Result<McpInstallResu
         );
     }
 
-    if let Err(error) = write_cli_config(input.cli_path.clone(), None, config) {
+    let write_result = if input.scope == "project" {
+        write_project_mcp_config(&paths.cli_type, &config_path, config)
+    } else {
+        write_cli_config(input.cli_path.clone(), None, config)
+    };
+
+    if let Err(error) = write_result {
         let (rollback_success, rollback_message) = perform_rollback(&config_path, &backup_path);
         return Ok(McpInstallResult {
             success: false,

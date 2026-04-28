@@ -147,7 +147,9 @@ export function buildSoloCoordinatorSystemPrompt(
       '如果当前问题超出最大调度层数，禁止继续拆细，必须 block_run 说明原因。',
       '如果最近一步专家已经明确了下一步改动范围、目标文件或验证动作，优先直接派发该动作，不要再次安排盘点现状。',
       '如果信息已经足够，就继续执行；如果信息不足，只收集继续推进所必需的最小信息。',
-      '直接输出一个 JSON 对象，不要输出解释、Markdown、代码块或任何额外文本。'
+      '直接输出一个 JSON 对象，不要输出解释、Markdown、代码块或任何额外文本。',
+      '禁止空回复；如果拿不准，也必须返回合法 JSON，并优先使用 block_run 请求最小必要信息。',
+      '输出前自行检查：整段内容必须可被 JSON.parse 直接解析，且顶层必须包含 type。'
     ].join('\n'),
     expertCatalogPrompt
   ])
@@ -227,6 +229,8 @@ export function buildSoloControlPrompt(input: {
   lines.push('- 返回 dispatch_step 时，请直接在顶层返回 stepRef、depth、title、description、executionPrompt、doneWhen，不要嵌套 step 对象。')
   lines.push('- 严禁调用 StructuredOutput、Skill、Read、Bash 或任何工具。')
   lines.push('- 你不需要阅读仓库；此回合只做调度决策。')
+  lines.push('- 禁止空回复；如果无法继续推进，也必须返回合法的 block_run JSON，不要留空。')
+  lines.push('- 输出前再次自检：只能返回 JSON，对象顶层必须有 type，且不能带 Markdown 代码块或额外解释。')
   lines.push('')
   lines.push('合法示例:')
   lines.push('{"type":"dispatch_step","stepRef":"inspect-current-solo-ui","depth":1,"title":"检查当前 SOLO 页面链路","description":"确认现有 SOLO 页面、状态与日志结构，识别下一步实现边界。","selectedExpertId":"expert-id","executionPrompt":"检查当前 SOLO 页面和相关状态管理实现，归纳现状与缺口。","doneWhen":["明确页面入口与状态流转","确认日志与步骤展示方式","产出下一步实现建议"]}')
@@ -374,13 +378,9 @@ export function buildSoloInputRequest(
 }
 
 export function parseSoloCoordinatorDecision(content: string): SoloCoordinatorDecision {
-  const candidate = extractJsonCandidate(content)
-  if (!candidate) {
-    throw new Error('协调 AI 未返回可解析的 JSON 结果')
-  }
-
-  const rawParsed = safeJsonParse<Record<string, unknown>>(candidate)
-  if (!rawParsed || typeof rawParsed !== 'object') {
+  const candidate = extractJsonCandidate(content) || '{}'
+  const rawParsed = safeJsonParse<Record<string, unknown>>(candidate) || {}
+  if (typeof rawParsed !== 'object') {
     throw new Error('协调 AI 返回结果缺少 type 字段')
   }
 

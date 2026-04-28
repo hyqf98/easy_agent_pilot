@@ -3,10 +3,10 @@
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{LazyLock, Mutex};
 use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
@@ -15,8 +15,9 @@ use tauri::{AppHandle, Emitter};
 use crate::commands::cli_support::configure_windows_std_command;
 use crate::commands::cli_support::{find_cli_executable, get_cli_version};
 
-/// 安装进行中标�?
-static INSTALLING: AtomicBool = AtomicBool::new(false);
+/// 当前正在执行安装或升级的 CLI。
+static ACTIVE_CLI_OPERATIONS: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 
 fn create_command(program: &str) -> Command {
     #[cfg(target_os = "windows")]
@@ -328,6 +329,55 @@ fn get_brew_package(cli_name: &str) -> &'static str {
     }
 }
 
+fn extract_version_token(value: &str) -> Option<String> {
+    let mut started = false;
+    let mut token = String::new();
+
+    for ch in value.chars() {
+        if ch.is_ascii_digit() {
+            started = true;
+            token.push(ch);
+            continue;
+        }
+
+        if started && ch == '.' {
+            token.push(ch);
+            continue;
+        }
+
+        if started {
+            break;
+        }
+    }
+
+    let normalized = token.trim_matches('.').to_string();
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn normalize_version_identity(value: Option<String>) -> Option<String> {
+    value.and_then(|raw| extract_version_token(&raw).or(Some(raw)))
+}
+
+fn resolve_version_state(current_raw: Option<String>, latest_raw: Option<String>) -> VersionInfo {
+    let current = normalize_version_identity(current_raw);
+    let latest = normalize_version_identity(latest_raw);
+    let has_update = match (&current, &latest) {
+        (Some(curr), Some(lat)) => curr != lat,
+        _ => false,
+    };
+
+    VersionInfo {
+        current,
+        latest,
+        has_update,
+        release_notes: None,
+    }
+}
+
 fn emit_log_event(app: &AppHandle, cli_name: &str, message: &str) {
     let _ = app.emit(
         "cli-install-log",
@@ -339,13 +389,28 @@ fn emit_log_event(app: &AppHandle, cli_name: &str, message: &str) {
     );
 }
 
+fn begin_cli_operation(cli_name: &str) -> Result<(), String> {
+    let mut operations = ACTIVE_CLI_OPERATIONS
+        .lock()
+        .map_err(|_| "CLI operation state lock poisoned".to_string())?;
+
+    if operations.contains(cli_name) {
+        return Err(format!("{} 正在执行安装或升级，请稍后再试", cli_name));
+    }
+
+    operations.insert(cli_name.to_string());
+    Ok(())
+}
+
+fn finish_cli_operation(cli_name: &str) {
+    if let Ok(mut operations) = ACTIVE_CLI_OPERATIONS.lock() {
+        operations.remove(cli_name);
+    }
+}
+
 #[tauri::command]
 pub async fn install_cli(cli_name: String, method: String, app: AppHandle) -> Result<(), String> {
-    // 防止重复安装
-    if INSTALLING.load(Ordering::SeqCst) {
-        return Err("An installation is already in progress".to_string());
-    }
-    INSTALLING.store(true, Ordering::SeqCst);
+    begin_cli_operation(&cli_name)?;
 
     emit_log_event(
         &app,
@@ -353,31 +418,30 @@ pub async fn install_cli(cli_name: String, method: String, app: AppHandle) -> Re
         &format!("🚀 Starting installation of {}...", cli_name),
     );
 
-    // 获取安装选项
-    let options = get_cli_install_options(cli_name.clone())?;
-    let option = options
-        .install_options
-        .iter()
-        .find(|o| o.method == method)
-        .ok_or("Installation method not found")?;
+    let result = (|| -> Result<(), String> {
+        let options = get_cli_install_options(cli_name.clone())?;
+        let option = options
+            .install_options
+            .iter()
+            .find(|o| o.method == method)
+            .ok_or("Installation method not found")?;
 
-    if !option.available {
-        INSTALLING.store(false, Ordering::SeqCst);
-        return Err(format!(
-            "Required package manager for '{}' method is not available",
-            method
-        ));
-    }
+        if !option.available {
+            return Err(format!(
+                "Required package manager for '{}' method is not available",
+                method
+            ));
+        }
 
-    emit_log_event(
-        &app,
-        &cli_name,
-        &format!("📝 Executing: {}", option.command),
-    );
+        emit_log_event(
+            &app,
+            &cli_name,
+            &format!("📝 Executing: {}", option.command),
+        );
 
-    let result = execute_install_command(&app, &cli_name, &method, &option.command);
-
-    INSTALLING.store(false, Ordering::SeqCst);
+        execute_install_command(&app, &cli_name, &method, &option.command)
+    })();
+    finish_cli_operation(&cli_name);
 
     match result {
         Ok(_) => {
@@ -424,6 +488,7 @@ fn execute_install_command(
                 create_command("bash")
                     .arg("-c")
                     .arg(_command)
+                    .stdin(Stdio::null())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
                     .spawn()
@@ -433,6 +498,7 @@ fn execute_install_command(
                 create_command("powershell")
                     .arg("-Command")
                     .arg(_command)
+                    .stdin(Stdio::null())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
                     .spawn()
@@ -502,36 +568,20 @@ fn execute_install_command(
 
 #[tauri::command]
 pub async fn check_cli_update(cli_name: String) -> Result<VersionInfo, String> {
-    let (_, current) = detect_cli_installed(&cli_name);
-
-    if current.is_none() {
-        return Ok(VersionInfo {
-            current: None,
-            latest: None,
-            has_update: false,
-            release_notes: None,
-        });
+    let (_, current_raw) = detect_cli_installed(&cli_name);
+    if current_raw.is_none() {
+        return Ok(resolve_version_state(None, None));
     }
 
-    let latest = fetch_npm_version(cli_name.as_str()).await;
-
-    let has_update = match (&current, &latest) {
-        (Some(curr), Some(lat)) => curr != lat,
-        _ => false,
-    };
-
-    Ok(VersionInfo {
-        current,
-        latest,
-        has_update,
-        release_notes: None,
-    })
+    let latest_raw = fetch_npm_version(cli_name.as_str()).await;
+    Ok(resolve_version_state(current_raw, latest_raw))
 }
 
 async fn fetch_npm_version(cli_name: &str) -> Option<String> {
     let url = match cli_name {
         "claude" => "https://registry.npmjs.org/@anthropic-ai/claude-code/latest",
         "codex" => "https://registry.npmjs.org/@openai/codex/latest",
+        "opencode" => "https://registry.npmjs.org/opencode-ai/latest",
         _ => return None,
     };
 
@@ -552,14 +602,150 @@ async fn fetch_npm_version(cli_name: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// 升级 CLI
+fn detect_install_method(cli_name: &str) -> Option<String> {
+    let scan_paths = crate::commands::cli::get_scan_paths_public();
+    let cli_path = find_cli_executable(cli_name, &scan_paths)?;
+
+    let resolved = std::fs::canonicalize(&cli_path).unwrap_or(cli_path);
+    let path_str = resolved.to_string_lossy();
+
+    // Homebrew: Cellar (formula) / Caskroom (cask) under homebrew/linuxbrew prefix
+    if path_str.contains("/homebrew/")
+        || path_str.contains("/linuxbrew/")
+        || path_str.contains("/Cellar/")
+        || path_str.contains("/Caskroom/")
+        || path_str.contains("\\homebrew\\")
+    {
+        return Some("homebrew".to_string());
+    }
+
+    // npm: resolved path lands under node_modules
+    if path_str.contains("/node_modules/") || path_str.contains("\\node_modules\\") {
+        return Some("npm".to_string());
+    }
+
+    // npm: <prefix>/bin/<cmd> with sibling <prefix>/lib/node_modules/
+    if let Some(parent) = resolved.parent() {
+        if let Some(name) = parent.file_name() {
+            if name == "bin" || name == "sbin" {
+                if let Some(prefix) = parent.parent() {
+                    if prefix.join("lib").join("node_modules").exists() {
+                        return Some("npm".to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // Windows: npm global bin is %APPDATA%\npm\
+    #[cfg(windows)]
+    {
+        if let Ok(app_data) = std::env::var("APPDATA") {
+            let npm_dir = std::path::Path::new(&app_data).join("npm");
+            if resolved.starts_with(&npm_dir) {
+                return Some("npm".to_string());
+            }
+        }
+    }
+
+    // Last resort: ask the package managers themselves
+    if verify_npm_owns(cli_name) {
+        return Some("npm".to_string());
+    }
+
+    #[cfg(unix)]
+    if verify_brew_owns(cli_name) {
+        return Some("homebrew".to_string());
+    }
+
+    None
+}
+
+fn verify_npm_owns(cli_name: &str) -> bool {
+    let package = get_npm_package(cli_name);
+    if package.is_empty() {
+        return false;
+    }
+    create_command("npm")
+        .args(["list", "-g", package, "--depth=0"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+#[cfg(unix)]
+fn verify_brew_owns(cli_name: &str) -> bool {
+    let package = get_brew_package(cli_name);
+    if package.is_empty() {
+        return false;
+    }
+    // Check cask first (claude-code etc.), then formula
+    create_command("brew")
+        .args(["list", "--cask", package])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+        || create_command("brew")
+            .args(["list", "--formula", package])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+}
+
+fn build_upgrade_method_order(cli_name: &str, install_info: &CliInstallerInfo) -> Vec<String> {
+    let detected = detect_install_method(cli_name);
+    let mut methods = Vec::new();
+
+    if let Some(ref m) = detected {
+        methods.push(m.clone());
+    }
+
+    for option in &install_info.install_options {
+        if option.available && !methods.contains(&option.method) {
+            methods.push(option.method.clone());
+        }
+    }
+
+    methods
+}
+
+async fn execute_upgrade_by_method(
+    app: &AppHandle,
+    cli_name: &str,
+    method: &str,
+    install_info: &CliInstallerInfo,
+) -> Result<(), String> {
+    match method {
+        "npm" => {
+            let package = get_npm_package(cli_name);
+            execute_upgrade_command(app, cli_name, "npm", &["install", "-g", package]).await
+        }
+        "homebrew" => {
+            let package = get_brew_package(cli_name);
+            execute_upgrade_command(app, cli_name, "brew", &["upgrade", package]).await
+        }
+        _ => {
+            emit_log_event(app, cli_name, "📝 Re-running native installer...");
+            let option = install_info
+                .install_options
+                .iter()
+                .find(|o| o.method == method)
+                .ok_or("Install option not found")?;
+            execute_install_command(app, cli_name, method, &option.command)
+        }
+    }
+}
+
+/// 升级 CLI（自动检测安装来源，失败后依次尝试其他可用方式）
 #[tauri::command]
 pub async fn upgrade_cli(cli_name: String, app: AppHandle) -> Result<(), String> {
-    // 防止重复操作
-    if INSTALLING.load(Ordering::SeqCst) {
-        return Err("An installation is already in progress".to_string());
-    }
-    INSTALLING.store(true, Ordering::SeqCst);
+    begin_cli_operation(&cli_name)?;
 
     emit_log_event(
         &app,
@@ -567,45 +753,61 @@ pub async fn upgrade_cli(cli_name: String, app: AppHandle) -> Result<(), String>
         &format!("🔄 Starting upgrade of {}...", cli_name),
     );
 
-    // 获取安装信息
-    let install_info = get_cli_install_options(cli_name.clone())?;
+    let result = async {
+        let install_info = get_cli_install_options(cli_name.clone())?;
+        let methods = build_upgrade_method_order(&cli_name, &install_info);
 
-    let method = install_info
-        .install_options
-        .iter()
-        .filter(|o| o.available)
-        .max_by_key(|o| o.recommended as i32)
-        .map(|o| o.method.clone())
-        .ok_or("No available upgrade method")?;
+        if methods.is_empty() {
+            return Err("No available upgrade method".to_string());
+        }
 
-    let result = match method.as_str() {
-        "npm" => {
-            let package = get_npm_package(&cli_name);
-            execute_upgrade_command(&app, &cli_name, "npm", &["update", "-g", package]).await
-        }
-        "homebrew" => {
-            let package = get_brew_package(&cli_name);
-            execute_upgrade_command(&app, &cli_name, "brew", &["upgrade", package]).await
-        }
-        _ => {
-            emit_log_event(&app, &cli_name, "📝 Re-running native installer...");
-            let option = install_info
-                .install_options
-                .iter()
-                .find(|o| o.method == method)
-                .unwrap();
-            execute_install_command(&app, &cli_name, &method, &option.command)
-        }
-    };
+        let mut last_error = String::new();
+        for method in &methods {
+            emit_log_event(
+                &app,
+                &cli_name,
+                &format!("📦 Trying upgrade method: {}", method),
+            );
 
-    INSTALLING.store(false, Ordering::SeqCst);
+            match execute_upgrade_by_method(&app, &cli_name, method, &install_info).await {
+                Ok(_) => {
+                    let version_state = check_cli_update(cli_name.clone()).await?;
+                    if !version_state.has_update {
+                        return Ok(());
+                    }
+
+                    let current = version_state.current.unwrap_or_else(|| "unknown".to_string());
+                    let latest = version_state.latest.unwrap_or_else(|| "unknown".to_string());
+                    let stale_error = format!(
+                        "upgrade command completed but current version is still v{} (latest v{})",
+                        current, latest
+                    );
+                    emit_log_event(&app, &cli_name, &format!("⚠️ {}", stale_error));
+                    last_error = stale_error;
+                }
+                Err(e) => {
+                    emit_log_event(
+                        &app,
+                        &cli_name,
+                        &format!("⚠️ Method '{}' failed: {}", method, e),
+                    );
+                    last_error = e;
+                }
+            }
+        }
+
+        Err(last_error)
+    }
+    .await;
+
+    finish_cli_operation(&cli_name);
 
     match result {
         Ok(_) => {
             emit_log_event(
                 &app,
                 &cli_name,
-                &format!("�?{} upgraded successfully!", cli_name),
+                &format!("✅ {} upgraded successfully!", cli_name),
             );
             let _ = app.emit(
                 "cli-install-complete",
@@ -618,7 +820,11 @@ pub async fn upgrade_cli(cli_name: String, app: AppHandle) -> Result<(), String>
             Ok(())
         }
         Err(e) => {
-            emit_log_event(&app, &cli_name, &format!("�?Upgrade failed: {}", e));
+            emit_log_event(
+                &app,
+                &cli_name,
+                &format!("❌ All upgrade methods failed: {}", e),
+            );
             let _ = app.emit(
                 "cli-install-complete",
                 InstallCompleteEvent {
@@ -696,6 +902,8 @@ async fn execute_upgrade_command(
 
 #[tauri::command]
 pub fn cancel_install() -> Result<(), String> {
-    INSTALLING.store(false, Ordering::SeqCst);
+    if let Ok(mut operations) = ACTIVE_CLI_OPERATIONS.lock() {
+        operations.clear();
+    }
     Ok(())
 }
