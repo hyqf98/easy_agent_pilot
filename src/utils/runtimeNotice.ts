@@ -49,6 +49,7 @@ interface UsageSnapshot {
   model?: string
   inputTokens?: number
   outputTokens?: number
+  contextWindowOccupancy?: number
 }
 
 interface RuntimeNoticeDescriptor {
@@ -458,9 +459,12 @@ export function getUsageNoticeSummary(notice: RuntimeNotice): UsageNoticeSummary
 }
 
 export function buildUsageNotice(usage: UsageSnapshot): RuntimeNotice | null {
-  const inputTokens = typeof usage.inputTokens === 'number' ? usage.inputTokens : undefined
   const outputTokens = typeof usage.outputTokens === 'number' ? usage.outputTokens : undefined
   const model = usage.model?.trim()
+  const occupancy = typeof usage.contextWindowOccupancy === 'number' && usage.contextWindowOccupancy > 0
+    ? usage.contextWindowOccupancy
+    : usage.inputTokens
+  const inputTokens = typeof occupancy === 'number' ? occupancy : undefined
 
   if (!model && inputTokens === undefined && outputTokens === undefined) {
     return null

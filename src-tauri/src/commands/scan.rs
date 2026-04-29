@@ -214,6 +214,17 @@ fn infer_transport_from_fields(
     command.map(|_| McpTransportType::Stdio)
 }
 
+fn parse_disabled_flag(config_obj: &serde_json::Map<String, serde_json::Value>) -> bool {
+    if let Some(enabled) = config_obj.get("enabled").and_then(|value| value.as_bool()) {
+        return !enabled;
+    }
+
+    config_obj
+        .get("disabled")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
 pub(crate) fn parse_mcp_server_config(
     name: &str,
     config_obj: &serde_json::Map<String, serde_json::Value>,
@@ -245,12 +256,13 @@ pub(crate) fn parse_mcp_server_config(
     let env = crate::commands::scan_shared::parse_string_map(config_obj.get("env"));
 
     // 解析 headers 字段
-    let headers = crate::commands::scan_shared::parse_string_map(config_obj.get("headers"));
+    let headers = crate::commands::scan_shared::parse_string_map(
+        config_obj
+            .get("http_headers")
+            .or_else(|| config_obj.get("headers")),
+    );
 
-    let disabled = config_obj
-        .get("disabled")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false);
+    let disabled = parse_disabled_flag(config_obj);
 
     // 推断传输类型
     let transport = config_obj
@@ -270,6 +282,103 @@ pub(crate) fn parse_mcp_server_config(
         headers,
         disabled,
     })
+}
+
+fn normalize_project_config_key(raw: &str) -> String {
+    let normalized = raw.trim().replace('\\', "/");
+    let trimmed = normalized.trim_end_matches('/').to_string();
+    let bytes = trimmed.as_bytes();
+
+    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        return trimmed.to_lowercase();
+    }
+
+    trimmed
+}
+
+fn scan_claude_project_mcp_from_main_config(
+    config_file: &Path,
+    project_root: &Path,
+    servers: &mut Vec<ScannedMcpServer>,
+) {
+    let Some(json) = crate::commands::scan_shared::read_json_file(config_file) else {
+        return;
+    };
+    let global_mcp_servers = json.get("mcpServers").and_then(|value| value.as_object());
+    let Some(projects) = json.get("projects").and_then(|value| value.as_object()) else {
+        return;
+    };
+
+    let mut lookup_keys = vec![normalize_project_config_key(
+        project_root.to_string_lossy().as_ref(),
+    )];
+
+    if let Ok(canonical_path) = project_root.canonicalize() {
+        lookup_keys.push(normalize_project_config_key(
+            canonical_path.to_string_lossy().as_ref(),
+        ));
+    }
+
+    lookup_keys.sort();
+    lookup_keys.dedup();
+
+    let project_entry = projects.iter().find_map(|(project_key, value)| {
+        let normalized_key = normalize_project_config_key(project_key);
+        if lookup_keys.iter().any(|candidate| candidate == &normalized_key) {
+            value.as_object()
+        } else {
+            None
+        }
+    });
+
+    let Some(project_obj) = project_entry else {
+        return;
+    };
+    let Some(mcp_servers) = project_obj
+        .get("mcpServers")
+        .or_else(|| project_obj.get("mcp_servers"))
+        .and_then(|value| value.as_object())
+    else {
+        return;
+    };
+
+    for (name, config) in mcp_servers {
+        if servers
+            .iter()
+            .any(|server| server.name == *name && server.scope == McpConfigScope::Project)
+        {
+            continue;
+        }
+
+        let Some(config_obj) = config.as_object() else {
+            continue;
+        };
+
+        if let Some(server) = parse_mcp_server_config(name, config_obj, McpConfigScope::Project) {
+            servers.push(server);
+            continue;
+        }
+
+        let Some(global_config_obj) = global_mcp_servers
+            .and_then(|items| items.get(name))
+            .and_then(|value| value.as_object())
+        else {
+            continue;
+        };
+
+        let mut merged_config = global_config_obj.clone();
+        for (key, value) in config_obj {
+            merged_config.insert(key.clone(), value.clone());
+        }
+
+        if let Some(server) = parse_mcp_server_config(
+            name,
+            &merged_config,
+            McpConfigScope::Project,
+        ) {
+            servers.push(server);
+        }
+    }
 }
 
 fn scan_opencode_mcp_source_file(
@@ -390,6 +499,7 @@ fn scan_mcp_config(
                     McpConfigScope::Local,
                     &mut servers,
                 );
+                scan_claude_project_mcp_from_main_config(config_file, project_root, &mut servers);
             }
             "opencode" => {
                 let project_config_path = project_root.join("opencode.json");
@@ -2263,5 +2373,87 @@ mod tests {
 
         assert_eq!(result.sessions[0].session_id, "newer");
         assert_eq!(result.sessions[1].session_id, "older");
+    }
+
+    #[test]
+    fn scans_claude_project_level_mcp_from_main_config_projects_map() {
+        let temp_dir = TestDir::new("scan-claude-project-mcp");
+        let config_file = temp_dir.path().join(".claude.json");
+        let project_root = temp_dir.path().join("demo-project");
+
+        fs::create_dir_all(&project_root).unwrap();
+        fs::write(
+            &config_file,
+            format!(
+                r#"{{
+  "projects": {{
+    "{}": {{
+      "mcpServers": {{
+        "laya_mcp_server": {{
+          "command": "npx",
+          "args": ["-y", "@acme/laya-mcp"]
+        }}
+      }}
+    }}
+  }}
+}}"#,
+                project_root.to_string_lossy()
+            ),
+        )
+        .unwrap();
+
+        let servers = scan_mcp_config("claude", temp_dir.path(), &config_file, Some(&project_root))
+            .expect("scan mcp config");
+
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].name, "laya_mcp_server");
+        assert_eq!(servers[0].scope, McpConfigScope::Project);
+        assert_eq!(servers[0].command.as_deref(), Some("npx"));
+    }
+
+    #[test]
+    fn scans_claude_project_level_mcp_reference_from_main_config_projects_map() {
+        let temp_dir = TestDir::new("scan-claude-project-mcp-ref");
+        let config_file = temp_dir.path().join(".claude.json");
+        let project_root = temp_dir.path().join("demo-project");
+
+        fs::create_dir_all(&project_root).unwrap();
+        fs::write(
+            &config_file,
+            format!(
+                r#"{{
+  "mcpServers": {{
+    "laya_mcp_server": {{
+      "command": "npx",
+      "args": ["-y", "@acme/laya-mcp"]
+    }}
+  }},
+  "projects": {{
+    "{}": {{
+      "mcpServers": {{
+        "laya_mcp_server": {{}}
+      }}
+    }}
+  }}
+}}"#,
+                project_root.to_string_lossy()
+            ),
+        )
+        .unwrap();
+
+        let servers = scan_mcp_config("claude", temp_dir.path(), &config_file, Some(&project_root))
+            .expect("scan mcp config");
+
+        assert_eq!(servers.len(), 2);
+        let project_server = servers
+            .iter()
+            .find(|server| server.scope == McpConfigScope::Project)
+            .expect("project server");
+        assert_eq!(project_server.name, "laya_mcp_server");
+        assert_eq!(project_server.command.as_deref(), Some("npx"));
+        assert_eq!(
+            project_server.args.as_ref(),
+            Some(&vec!["-y".to_string(), "@acme/laya-mcp".to_string()])
+        );
     }
 }

@@ -783,6 +783,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                 let reader = tokio::io::BufReader::new(stdout);
                 let mut lines = reader.lines();
                 let mut outcome = StdoutReadOutcome::none();
+                let mut last_assistant_raw_input: Option<u32> = None;
 
                 while let Ok(Some(line)) = lines.next_line().await {
                     if should_abort(&session_id_clone).await {
@@ -791,7 +792,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
 
                     match serde_json::from_str::<serde_json::Value>(&line) {
                         Ok(json_value) => {
-                            let event = parse_claude_json_output(&session_id_clone, &json_value)
+                            let event = parse_claude_json_output(&session_id_clone, &json_value, &mut last_assistant_raw_input)
                                 .map(|event| {
                                     hydrate_tool_use_usage_from_transcript(
                                         event,
@@ -1299,38 +1300,59 @@ fn extract_result_model_name(json: &serde_json::Value) -> Option<String> {
 }
 
 /// 解析 `--output-format stream-json` 的每行 JSON 输出
-fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Option<CliStreamEvent> {
+fn parse_claude_json_output(
+    session_id: &str,
+    json: &serde_json::Value,
+    last_assistant_raw_input: &mut Option<u32>,
+) -> Option<CliStreamEvent> {
     let event_type = json
         .get("type")
         .and_then(|t| t.as_str())
         .unwrap_or("unknown");
 
-    let event = match event_type {
+     let event = match event_type {
         "system" => {
-            let notice_event = extract_runtime_system_notice(json)
-                .map(|content| build_system_event(session_id, content));
+            let subtype = json.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
 
-            if notice_event.is_some() {
-                notice_event
+            if subtype == "compact_boundary" {
+                let trigger = json
+                    .pointer("/compactMetadata/trigger")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("auto");
+                let pre_tokens = json
+                    .pointer("/compactMetadata/preTokens")
+                    .and_then(|v| v.as_u64());
+                let mut content = format!("### CLI Context Compaction\nTrigger: {}", trigger);
+                if let Some(tokens) = pre_tokens {
+                    content = format!("{}\nPre-compaction tokens: {}", content, tokens);
+                }
+                Some(build_system_event(session_id, content))
             } else {
-                extract_external_session_id(json).map(|sid| CliStreamEvent {
-                    event_type: "system".to_string(),
-                    session_id: session_id.to_string(),
-                    content: None,
-                    tool_name: None,
-                    tool_call_id: None,
-                    tool_input: None,
-                    tool_result: None,
-                    error: None,
-                    input_tokens: None,
-                    output_tokens: None,
-                    model: None,
-                    external_session_id: Some(sid),
-                raw_input_tokens: None,
-                raw_output_tokens: None,
-                cache_read_input_tokens: None,
-                cache_creation_input_tokens: None,
-                })
+                let notice_event = extract_runtime_system_notice(json)
+                    .map(|content| build_system_event(session_id, content));
+
+                if notice_event.is_some() {
+                    notice_event
+                } else {
+                    extract_external_session_id(json).map(|sid| CliStreamEvent {
+                        event_type: "system".to_string(),
+                        session_id: session_id.to_string(),
+                        content: None,
+                        tool_name: None,
+                        tool_call_id: None,
+                        tool_input: None,
+                        tool_result: None,
+                        error: None,
+                        input_tokens: None,
+                        output_tokens: None,
+                        model: None,
+                        external_session_id: Some(sid),
+                    raw_input_tokens: None,
+                    raw_output_tokens: None,
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
+                    })
+                }
             }
         }
         "content_block_delta" => {
@@ -1440,10 +1462,14 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
             let external_session_id = extract_external_session_id(json);
             let usage = extract_usage_counts(json.get("usage"));
 
+            let context_window_input = (*last_assistant_raw_input)
+                .or(usage.raw_input_tokens);
+            let output_tokens = usage.output_tokens;
+
             if model.is_some()
                 || external_session_id.is_some()
-                || usage.input_tokens.is_some()
-                || usage.output_tokens.is_some()
+                || context_window_input.is_some()
+                || output_tokens.is_some()
             {
                 Some(CliStreamEvent {
                     event_type: "usage".to_string(),
@@ -1454,14 +1480,14 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                     tool_input: None,
                     tool_result: None,
                     error: None,
-                    input_tokens: usage.input_tokens,
-                    output_tokens: usage.output_tokens,
+                    input_tokens: context_window_input,
+                    output_tokens,
                     model,
                     external_session_id,
-                    raw_input_tokens: usage.raw_input_tokens,
+                    raw_input_tokens: context_window_input,
                     raw_output_tokens: usage.raw_output_tokens,
-                    cache_read_input_tokens: usage.cache_read_input_tokens,
-                    cache_creation_input_tokens: usage.cache_creation_input_tokens,
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
                 })
             } else {
                 None
@@ -1541,6 +1567,10 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                 .map(|m| m.to_string());
             let usage = extract_usage_counts(message.get("usage"));
 
+            if usage.raw_input_tokens.is_some() {
+                *last_assistant_raw_input = usage.raw_input_tokens;
+            }
+
             // Claude CLI 在一次 agentic 执行中会输出多条 assistant 事件，
             // 同一 message/turn 的 usage 可能被重复附带在多条事件里。
             // 对标准 Claude，最终 result.usage 仍然是 canonical 来源；
@@ -1548,6 +1578,10 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
             // 这里仅透传 raw usage，交给前端按 runtime 归一化，避免重复累计。
             let input_tokens = None;
             let output_tokens = None;
+            let _assistant_raw_input = usage.raw_input_tokens;
+            let _assistant_raw_output = usage.raw_output_tokens;
+            let _assistant_cache_read = usage.cache_read_input_tokens;
+            let _assistant_cache_create = usage.cache_creation_input_tokens;
 
             // 遍历所有 content items，找到第一个有效的并返回
             // 优先级：thinking > text > tool_use
@@ -1574,10 +1608,10 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                                 output_tokens,
                                 model: model.clone(),
                                 external_session_id: extract_external_session_id(json),
-                                raw_input_tokens: usage.raw_input_tokens,
-                                raw_output_tokens: usage.raw_output_tokens,
-                                cache_read_input_tokens: usage.cache_read_input_tokens,
-                                cache_creation_input_tokens: usage.cache_creation_input_tokens,
+                                raw_input_tokens: None,
+                                raw_output_tokens: None,
+                                cache_read_input_tokens: None,
+                                cache_creation_input_tokens: None,
                                 ..build_thinking_event(session_id, thinking_text)
                             });
                         }
@@ -1602,10 +1636,10 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                             output_tokens,
                             model: model.clone(),
                             external_session_id: extract_external_session_id(json),
-                        raw_input_tokens: usage.raw_input_tokens,
-                        raw_output_tokens: usage.raw_output_tokens,
-                        cache_read_input_tokens: usage.cache_read_input_tokens,
-                        cache_creation_input_tokens: usage.cache_creation_input_tokens,
+                        raw_input_tokens: None,
+                        raw_output_tokens: None,
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                         });
                     }
                     "tool_use" => {
@@ -1628,10 +1662,10 @@ fn parse_claude_json_output(session_id: &str, json: &serde_json::Value) -> Optio
                             output_tokens,
                             model: model.clone(),
                             external_session_id: extract_external_session_id(json),
-                        raw_input_tokens: usage.raw_input_tokens,
-                        raw_output_tokens: usage.raw_output_tokens,
-                        cache_read_input_tokens: usage.cache_read_input_tokens,
-                        cache_creation_input_tokens: usage.cache_creation_input_tokens,
+                        raw_input_tokens: None,
+                        raw_output_tokens: None,
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                         });
                     }
                     _ => {
@@ -1793,22 +1827,24 @@ mod tests {
             "uuid": "5bf1cbc1-af5e-4f1f-b47f-ff8e02337520"
         });
 
+        let mut state: Option<u32> = None;
         let event =
-            parse_claude_json_output("session-1", &json).expect("expected assistant event");
+            parse_claude_json_output("session-1", &json, &mut state).expect("expected assistant event");
 
         assert_eq!(event.event_type, "content");
         assert_eq!(event.content.as_deref(), Some("ok"));
         assert_eq!(event.input_tokens, None);
         assert_eq!(event.output_tokens, None);
-        assert_eq!(event.raw_input_tokens, Some(10140));
-        assert_eq!(event.raw_output_tokens, Some(0));
-        assert_eq!(event.cache_read_input_tokens, Some(0));
-        assert_eq!(event.cache_creation_input_tokens, Some(0));
+        assert_eq!(event.raw_input_tokens, None);
+        assert_eq!(event.raw_output_tokens, None);
+        assert_eq!(event.cache_read_input_tokens, None);
+        assert_eq!(event.cache_creation_input_tokens, None);
         assert_eq!(event.model.as_deref(), Some("glm-5.1"));
         assert_eq!(
             event.external_session_id.as_deref(),
             Some("f942ab3e-be1a-4684-8bee-e88f444e1a0e")
         );
+        assert_eq!(state, Some(10140));
     }
 
     #[test]
@@ -1837,15 +1873,16 @@ mod tests {
             }
         });
 
-        let event = parse_claude_json_output("session-1", &json).expect("expected usage event");
+        let mut state: Option<u32> = None;
+        let event = parse_claude_json_output("session-1", &json, &mut state).expect("expected usage event");
 
         assert_eq!(event.event_type, "usage");
-        assert_eq!(event.input_tokens, Some(65310));
+        assert_eq!(event.input_tokens, Some(65630));
         assert_eq!(event.output_tokens, Some(3));
         assert_eq!(event.raw_input_tokens, Some(65630));
         assert_eq!(event.raw_output_tokens, Some(3));
-        assert_eq!(event.cache_read_input_tokens, Some(320));
-        assert_eq!(event.cache_creation_input_tokens, Some(0));
+        assert_eq!(event.cache_read_input_tokens, None);
+        assert_eq!(event.cache_creation_input_tokens, None);
         assert_eq!(event.model.as_deref(), Some("glm-5.1"));
         assert_eq!(
             event.external_session_id.as_deref(),
@@ -1881,7 +1918,8 @@ mod tests {
             "sessionId": "camel-session-id"
         });
 
-        let event = parse_claude_json_output("session-1", &json).expect("expected tool_use event");
+        let mut state: Option<u32> = None;
+        let event = parse_claude_json_output("session-1", &json, &mut state).expect("expected tool_use event");
 
         assert_eq!(event.event_type, "tool_use");
         assert_eq!(event.external_session_id.as_deref(), Some("camel-session-id"));

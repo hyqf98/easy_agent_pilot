@@ -6,9 +6,11 @@ import { useSoloModePanel } from './useSoloModePanel'
 
 const {
   canCreate,
+  canEditCurrentRun,
   closeCreateDialog,
   compactSoloSummary,
   completedCount,
+  dialogMode,
   coordinatorExpertOptions,
   createDialogModelOptions,
   createForm,
@@ -34,6 +36,7 @@ const {
   handleResume,
   handleStart,
   handleStop,
+  openEditDialog,
   openCreateDialog,
   participantExpertOptions,
   runStatusLabel,
@@ -45,6 +48,7 @@ const {
   showCreateDialog,
   soloRunStore,
   stepStatusLabel,
+  saveRunEdits,
   updateCreateForm
 } = useSoloModePanel()
 </script>
@@ -97,6 +101,13 @@ const {
               @click="handleStop"
             >
               停止
+            </button>
+            <button
+              v-if="canEditCurrentRun"
+              class="solo-run-header__button solo-run-header__button--ghost"
+              @click="openEditDialog"
+            >
+              编辑
             </button>
             <button
               class="solo-run-header__button solo-run-header__button--ghost"
@@ -323,6 +334,7 @@ const {
 
     <SoloRunCreateDialog
       :visible="showCreateDialog"
+      :mode="dialogMode"
       :form="createForm"
       :coordinator-options="coordinatorExpertOptions"
       :expert-options="participantExpertOptions"
@@ -332,6 +344,7 @@ const {
       @close="closeCreateDialog"
       @create-draft="createRun(false)"
       @create-and-start="createRun(true)"
+      @save="saveRunEdits"
       @update:form="updateCreateForm"
     />
   </div>

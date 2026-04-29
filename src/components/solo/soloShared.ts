@@ -10,6 +10,8 @@ export interface SoloModelOption {
   isDefault: boolean
 }
 
+export type SoloRunFormMode = 'create' | 'edit'
+
 export interface SoloCreateFormState {
   projectId: string
   executionPath: string

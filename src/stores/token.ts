@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import { useAgentConfigStore } from './agentConfig'
 import { useAgentStore } from './agent'
 import { useMessageStore } from './message'
@@ -26,11 +27,7 @@ export interface RealtimeTokenData {
   inputTokens: number
   outputTokens: number
   model?: string
-}
-
-function hasMeaningfulRealtimeUsage(data: Pick<RealtimeTokenData, 'inputTokens' | 'outputTokens'> | null | undefined): boolean {
-  if (!data) return false
-  return data.inputTokens > 0 || data.outputTokens > 0
+  contextWindowOccupancy?: number
 }
 
 export type CompressionStrategy = 'simple' | 'smart' | 'summary'
@@ -113,6 +110,7 @@ export function formatTokenCount(count: number): string {
 export const useTokenStore = defineStore('token', () => {
   const sessionTokenCaches = ref<Map<string, SessionTokenCache>>(loadPersistedSessionTokenCaches())
   const realtimeTokens = ref<Map<string, RealtimeTokenData>>(new Map())
+  const hydratedSessionIds = new Set<string>()
 
   function persistSessionTokenCaches() {
     if (typeof window === 'undefined') {
@@ -126,6 +124,35 @@ export const useTokenStore = defineStore('token', () => {
       )
     } catch {
       // ignore persistence failures; runtime cache still works
+    }
+  }
+
+  async function hydrateSessionTokenFromDb(sessionId: string) {
+    if (hydratedSessionIds.has(sessionId)) {
+      return
+    }
+    hydratedSessionIds.add(sessionId)
+
+    if (sessionTokenCaches.value.has(sessionId) || realtimeTokens.value.has(sessionId)) {
+      return
+    }
+
+    try {
+      const result = await invoke<{ total_input_tokens: number; total_output_tokens: number }>(
+        'get_session_usage_summary',
+        { sessionId }
+      )
+      const total = result.total_input_tokens + result.total_output_tokens
+      if (total > 0) {
+        sessionTokenCaches.value = replaceMapEntry(sessionTokenCaches.value, sessionId, {
+          sessionId,
+          totalTokens: total,
+          lastUpdated: Date.now()
+        })
+        persistSessionTokenCaches()
+      }
+    } catch {
+      // DB query failed, skip hydration
     }
   }
 
@@ -175,11 +202,15 @@ export const useTokenStore = defineStore('token', () => {
       }
     }
 
-    const persistedTotal = sessionTokenCaches.value.get(sessionId)?.totalTokens ?? 0
-    const realtimeTotal = hasMeaningfulRealtimeUsage(realtimeData)
-      ? (realtimeData?.inputTokens ?? 0) + (realtimeData?.outputTokens ?? 0)
-      : 0
-    const usedTokens = persistedTotal + realtimeTotal
+    const persistedOccupancy = sessionTokenCaches.value.get(sessionId)?.totalTokens ?? 0
+    const realtimeOccupancy = realtimeData?.contextWindowOccupancy
+    const usedTokens = realtimeOccupancy && realtimeOccupancy > 0
+      ? realtimeOccupancy
+      : persistedOccupancy
+
+    if (usedTokens === 0 && session.cliSessionId?.trim()) {
+      hydrateSessionTokenFromDb(sessionId)
+    }
     const percentage = contextWindow > 0
       ? Math.min(100, (usedTokens / contextWindow) * 100)
       : 0
@@ -203,9 +234,10 @@ export const useTokenStore = defineStore('token', () => {
     sessionId: string,
     inputTokens: number | undefined,
     outputTokens: number | undefined,
-    model?: string
+    model?: string,
+    contextWindowOccupancy?: number
   ) {
-    if (inputTokens === undefined && outputTokens === undefined && !model) return
+    if (inputTokens === undefined && outputTokens === undefined && !model && contextWindowOccupancy === undefined) return
     const existing = realtimeTokens.value.get(sessionId) || { inputTokens: 0, outputTokens: 0 }
     const incomingHasUsage = (inputTokens ?? 0) > 0 || (outputTokens ?? 0) > 0
     const nextInputTokens = incomingHasUsage
@@ -214,21 +246,23 @@ export const useTokenStore = defineStore('token', () => {
     const nextOutputTokens = incomingHasUsage
       ? accumulateTokenValue(existing.outputTokens, outputTokens)
       : existing.outputTokens
+    const nextOccupancy = contextWindowOccupancy ?? existing.contextWindowOccupancy
 
     realtimeTokens.value = replaceMapEntry(realtimeTokens.value, sessionId, {
       inputTokens: nextInputTokens,
       outputTokens: nextOutputTokens,
-      model: model ?? existing.model
+      model: model ?? existing.model,
+      contextWindowOccupancy: nextOccupancy
     })
   }
 
   function clearRealtimeTokens(sessionId: string) {
     const current = realtimeTokens.value.get(sessionId)
-    if (current && (current.inputTokens > 0 || current.outputTokens > 0)) {
-      const previousTotal = sessionTokenCaches.value.get(sessionId)?.totalTokens ?? 0
+    if (current && (current.inputTokens > 0 || current.outputTokens > 0 || (current.contextWindowOccupancy ?? 0) > 0)) {
+      const occupancy = current.contextWindowOccupancy
       sessionTokenCaches.value = replaceMapEntry(sessionTokenCaches.value, sessionId, {
         sessionId,
-        totalTokens: previousTotal + current.inputTokens + current.outputTokens,
+        totalTokens: occupancy && occupancy > 0 ? occupancy : (sessionTokenCaches.value.get(sessionId)?.totalTokens ?? 0),
         lastUpdated: Date.now()
       })
       persistSessionTokenCaches()

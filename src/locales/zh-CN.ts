@@ -145,7 +145,14 @@ const zhCN = {
     continuationSessionSuffix: '· 压缩续聊',
     sourceSessionMissing: '原会话不存在，无法创建压缩续聊会话',
     expand: '展开',
-    collapse: '收起'
+    collapse: '收起',
+    cliCompactionTitle: 'CLI 上下文压缩',
+    cliCompactionAuto: '自动',
+    cliCompactionManual: '手动',
+    cliCompactionTrigger: '触发',
+    cliCompactionPreTokens: '压缩前 token',
+    cliCompactionTruncationLimit: '截断阈值',
+    cliCompactionResetNotice: 'CLI 运行时已自动压缩上下文，token 计数已重置'
   },
   panel: {
     ...enUS.panel,

@@ -159,17 +159,24 @@ fn parse_mcp_servers_from_toml(
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string()),
                 headers: config_obj
-                    .get("headers")
+                    .get("http_headers")
+                    .or_else(|| config_obj.get("headers"))
                     .and_then(|v| v.as_table())
                     .map(|obj| {
                         obj.iter()
                             .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
                             .collect()
                     }),
-                disabled: config_obj
-                    .get("disabled")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false),
+                disabled: if let Some(enabled) =
+                    config_obj.get("enabled").and_then(|v| v.as_bool())
+                {
+                    !enabled
+                } else {
+                    config_obj
+                        .get("disabled")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                },
             };
             servers.insert(name.clone(), server_config);
         }
@@ -259,10 +266,10 @@ fn build_toml_mcp_servers(
                 .into_iter()
                 .map(|(k, v)| (k, toml::Value::String(v)))
                 .collect();
-            server_table.insert("headers".to_string(), toml::Value::Table(headers_table));
+            server_table.insert("http_headers".to_string(), toml::Value::Table(headers_table));
         }
         if server_config.disabled {
-            server_table.insert("disabled".to_string(), toml::Value::Boolean(true));
+            server_table.insert("enabled".to_string(), toml::Value::Boolean(false));
         }
         mcp_table.insert(name, toml::Value::Table(server_table));
     }
@@ -728,6 +735,7 @@ fn read_opencode_config(config_file: &Path) -> Result<ClaudeCliConfig, String> {
     if let Some(mcp_obj) = json.get("mcp").and_then(|m| m.as_object()) {
         for (name, val) in mcp_obj {
             let server_type = val.get("type").and_then(|t| t.as_str()).unwrap_or("local");
+            let enabled = val.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true);
 
             let (command, args, env, url, headers, disabled) = if server_type == "remote" {
                 let url = val
@@ -739,7 +747,7 @@ fn read_opencode_config(config_file: &Path) -> Result<ClaudeCliConfig, String> {
                         .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
                         .collect()
                 });
-                (None, None, None, url, headers, false)
+                (None, None, None, url, headers, !enabled)
             } else {
                 let cmd_array = val.get("command").and_then(|c| c.as_array());
                 let command = cmd_array
@@ -760,7 +768,6 @@ fn read_opencode_config(config_file: &Path) -> Result<ClaudeCliConfig, String> {
                             .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
                             .collect()
                     });
-                let enabled = val.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true);
                 (command, args, env, None, None, !enabled)
             };
 
@@ -1223,6 +1230,107 @@ mod tests {
         );
 
         config.mcpServers = None;
+    }
+
+    #[test]
+    fn write_cli_config_uses_codex_enabled_and_http_headers_fields() {
+        let _guard = HOME_LOCK.lock().unwrap();
+        let test_home = TestHome::new();
+        let codex_path = "/usr/local/bin/codex".to_string();
+        let config_path = test_home.path(".codex/config.toml");
+
+        let config = ClaudeCliConfig {
+            mcpServers: Some(HashMap::from([(
+                "docs".to_string(),
+                McpServerConfig {
+                    url: Some("https://developers.openai.com/mcp".to_string()),
+                    headers: Some(HashMap::from([(
+                        "Authorization".to_string(),
+                        "Bearer token".to_string(),
+                    )])),
+                    disabled: true,
+                    ..Default::default()
+                },
+            )])),
+            other: BTreeMap::new(),
+        };
+
+        write_cli_config_internal(&codex_path, Some("codex"), config).expect("write codex config");
+
+        let content = fs::read_to_string(config_path).expect("read codex config");
+        assert!(content.contains("enabled = false"));
+        assert!(content.contains("[mcp_servers.docs.http_headers]"));
+        assert!(!content.contains("disabled = true"));
+    }
+
+    #[test]
+    fn read_cli_config_supports_codex_enabled_and_http_headers_fields() {
+        let _guard = HOME_LOCK.lock().unwrap();
+        let test_home = TestHome::new();
+        let codex_path = "/usr/local/bin/codex".to_string();
+        let config_path = test_home.path(".codex/config.toml");
+
+        fs::create_dir_all(test_home.path(".codex")).expect("create codex dir");
+        fs::write(
+            &config_path,
+            r#"[mcp_servers.docs]
+url = "https://developers.openai.com/mcp"
+enabled = false
+
+[mcp_servers.docs.http_headers]
+Authorization = "Bearer token"
+"#,
+        )
+        .expect("write codex config");
+
+        let config =
+            read_cli_config_internal(&codex_path, Some("codex")).expect("read codex config");
+        let server = config
+            .mcpServers
+            .as_ref()
+            .and_then(|servers| servers.get("docs"))
+            .expect("docs server");
+
+        assert!(server.disabled);
+        assert_eq!(
+            server
+                .headers
+                .as_ref()
+                .and_then(|headers| headers.get("Authorization"))
+                .map(String::as_str),
+            Some("Bearer token")
+        );
+    }
+
+    #[test]
+    fn read_opencode_config_preserves_remote_enabled_flag() {
+        let _guard = HOME_LOCK.lock().unwrap();
+        let test_home = TestHome::new();
+        let config_path = test_home.path(".config/opencode/opencode.json");
+
+        fs::create_dir_all(test_home.path(".config/opencode")).expect("create opencode dir");
+        fs::write(
+            &config_path,
+            r#"{
+  "mcp": {
+    "remote-docs": {
+      "type": "remote",
+      "url": "https://example.com/mcp",
+      "enabled": false
+    }
+  }
+}"#,
+        )
+        .expect("write opencode config");
+
+        let config = read_opencode_config(&config_path).expect("read opencode config");
+        let server = config
+            .mcpServers
+            .as_ref()
+            .and_then(|servers| servers.get("remote-docs"))
+            .expect("remote docs server");
+
+        assert!(server.disabled);
     }
 
     #[test]

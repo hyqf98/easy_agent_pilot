@@ -1342,7 +1342,7 @@ fn parse_opencode_event_msg(session_id: &str, json: &serde_json::Value) -> Optio
         )
         .map(|text| build_thinking_cli_event(session_id, text)),
         "token_count" => {
-            let (input_tokens, output_tokens) = extract_usage_counts(Some(payload));
+            let counts = extract_usage_counts(Some(payload));
             Some(CliStreamEvent {
                 event_type: "usage".to_string(),
                 session_id: session_id.to_string(),
@@ -1352,14 +1352,14 @@ fn parse_opencode_event_msg(session_id: &str, json: &serde_json::Value) -> Optio
                 tool_input: None,
                 tool_result: None,
                 error: None,
-                input_tokens,
-                output_tokens,
+                input_tokens: counts.input_tokens,
+                output_tokens: counts.output_tokens,
                 model: None,
                 external_session_id: None,
-            raw_input_tokens: None,
-            raw_output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
+                raw_input_tokens: counts.raw_input_tokens,
+                raw_output_tokens: counts.raw_output_tokens,
+                cache_read_input_tokens: counts.cache_read_input_tokens,
+                cache_creation_input_tokens: counts.cache_creation_input_tokens,
             })
         }
         "task_started" => stringify_json_value(
@@ -1370,6 +1370,14 @@ fn parse_opencode_event_msg(session_id: &str, json: &serde_json::Value) -> Optio
         )
         .map(|text| build_system_event(session_id, text))
         .or_else(|| Some(build_system_event(session_id, "任务已开始".to_string()))),
+        "compaction" => {
+            let auto = payload.get("auto").and_then(|v| v.as_bool()).unwrap_or(false);
+            let trigger = if auto { "auto" } else { "manual" };
+            Some(build_system_event(
+                session_id,
+                format!("### CLI Context Compaction\nTrigger: {}", trigger),
+            ))
+        }
         _ => None,
     }
 }
@@ -1891,16 +1899,36 @@ fn parse_opencode_json_output(
         }
         // turn / session / step 元信息
         "turn.completed" | "result" | "step_finish" => {
-            let usage = if event_type == "step_finish" {
+            let is_step_finish = event_type == "step_finish";
+            let usage = if is_step_finish {
                 json.pointer("/part/tokens")
             } else {
                 json.get("usage")
             };
-            let (input_tokens, output_tokens) = extract_usage_counts(usage);
+            let counts = extract_usage_counts(usage);
+
+            let cumulative_total = if is_step_finish {
+                usage.and_then(|u| u.get("total")).and_then(|t| t.as_u64()).map(|t| t as u32)
+            } else {
+                None
+            };
+
             let model = extract_opencode_model_name(json, requested_model);
             let external_session_id = extract_external_session_id(json);
 
-            if input_tokens.is_some() || output_tokens.is_some() || model.is_some() || external_session_id.is_some() {
+            let has_any_data = counts.input_tokens.is_some()
+                || counts.output_tokens.is_some()
+                || cumulative_total.is_some()
+                || model.is_some()
+                || external_session_id.is_some();
+
+            if has_any_data {
+                let raw_input = cumulative_total.or(counts.raw_input_tokens);
+                let raw_output = if is_step_finish {
+                    usage.and_then(|u| u.get("output")).and_then(|t| t.as_u64()).map(|t| t as u32)
+                } else {
+                    counts.raw_output_tokens
+                };
                 Some(CliStreamEvent {
                     event_type: "usage".to_string(),
                     session_id: session_id.to_string(),
@@ -1910,18 +1938,28 @@ fn parse_opencode_json_output(
                     tool_input: None,
                     tool_result: None,
                     error: None,
-                    input_tokens,
-                    output_tokens,
+                    input_tokens: counts.input_tokens,
+                    output_tokens: counts.output_tokens,
                     model,
                     external_session_id,
-                    raw_input_tokens: None,
-                    raw_output_tokens: None,
-                    cache_read_input_tokens: None,
-                    cache_creation_input_tokens: None,
+                    raw_input_tokens: raw_input,
+                    raw_output_tokens: raw_output,
+                    cache_read_input_tokens: counts.cache_read_input_tokens,
+                    cache_creation_input_tokens: counts.cache_creation_input_tokens,
                 })
             } else {
                 None
             }
+        }
+        // OpenCode compaction 事件（上下文压缩信号）
+        "compaction" => {
+            let payload = json.get("data").or_else(|| json.get("part")).or_else(|| json.get("payload")).unwrap_or(json);
+            let auto = payload.get("auto").and_then(|v| v.as_bool()).unwrap_or(false);
+            let trigger = if auto { "auto" } else { "manual" };
+            Some(build_system_event(
+                session_id,
+                format!("### CLI Context Compaction\nTrigger: {}", trigger),
+            ))
         }
         // 未知事件：尝试提取文本内容，否则跳过
         _ => {
@@ -2063,7 +2101,29 @@ fn parse_opencode_json_output(
     event.map(|event| attach_external_session_id(event, json))
 }
 
-fn extract_usage_counts(usage: Option<&serde_json::Value>) -> (Option<u32>, Option<u32>) {
+struct OpenCodeUsageCounts {
+    input_tokens: Option<u32>,
+    output_tokens: Option<u32>,
+    raw_input_tokens: Option<u32>,
+    raw_output_tokens: Option<u32>,
+    cache_read_input_tokens: Option<u32>,
+    cache_creation_input_tokens: Option<u32>,
+}
+
+impl Default for OpenCodeUsageCounts {
+    fn default() -> Self {
+        Self {
+            input_tokens: None,
+            output_tokens: None,
+            raw_input_tokens: None,
+            raw_output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+        }
+    }
+}
+
+fn extract_usage_counts(usage: Option<&serde_json::Value>) -> OpenCodeUsageCounts {
     let raw_input_tokens = usage
         .and_then(|u| {
             u.get("input_tokens")
@@ -2105,7 +2165,7 @@ fn extract_usage_counts(usage: Option<&serde_json::Value>) -> (Option<u32>, Opti
     let has_non_zero_usage =
         raw_input_tokens.unwrap_or(0) > 0 || raw_output_tokens.unwrap_or(0) > 0;
     if !has_non_zero_usage {
-        return (None, None);
+        return OpenCodeUsageCounts::default();
     }
 
     let input_tokens = raw_input_tokens
@@ -2114,7 +2174,14 @@ fn extract_usage_counts(usage: Option<&serde_json::Value>) -> (Option<u32>, Opti
                 .saturating_sub(cache_creation.unwrap_or(0))
         });
 
-    (input_tokens, raw_output_tokens)
+    OpenCodeUsageCounts {
+        input_tokens,
+        output_tokens: raw_output_tokens,
+        raw_input_tokens,
+        raw_output_tokens,
+        cache_read_input_tokens: cache_read,
+        cache_creation_input_tokens: cache_creation,
+    }
 }
 
 #[cfg(test)]
@@ -2154,6 +2221,9 @@ mod tests {
         assert_eq!(event.event_type, "usage");
         assert_eq!(event.input_tokens, Some(15198));
         assert_eq!(event.output_tokens, Some(3));
+        assert_eq!(event.raw_input_tokens, Some(50913));
+        assert_eq!(event.raw_output_tokens, Some(3));
+        assert_eq!(event.cache_read_input_tokens, Some(17856));
         assert_eq!(
             event.external_session_id.as_deref(),
             Some("ses_232812fe3ffeEiKsp35xj8vNn2")

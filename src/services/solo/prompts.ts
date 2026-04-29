@@ -34,6 +34,10 @@ function safeJsonParse<T>(raw: string): T | null {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
 function extractJsonCandidate(raw: string): string | null {
   const trimmed = raw.trim()
   if (!trimmed) return null
@@ -46,6 +50,56 @@ function extractJsonCandidate(raw: string): string | null {
   if (firstBrace >= 0 && lastBrace > firstBrace) {
     return trimmed.slice(firstBrace, lastBrace + 1)
   }
+  return null
+}
+
+function unwrapSoloDecisionCandidate(value: unknown): Record<string, unknown> | null {
+  if (!value) {
+    return null
+  }
+
+  if (typeof value === 'string') {
+    const candidate = extractJsonCandidate(value)
+    if (!candidate) {
+      return null
+    }
+
+    return unwrapSoloDecisionCandidate(safeJsonParse<unknown>(candidate))
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const nested = unwrapSoloDecisionCandidate(item)
+      if (nested) {
+        return nested
+      }
+    }
+    return null
+  }
+
+  if (!isRecord(value)) {
+    return null
+  }
+
+  if (typeof value.type === 'string' && ['dispatch_step', 'complete_run', 'block_run'].includes(value.type)) {
+    return value
+  }
+
+  const directKeys = ['structured_output', 'structuredOutput', 'result', 'data', 'value', 'output']
+  for (const key of directKeys) {
+    const nested = unwrapSoloDecisionCandidate(value[key])
+    if (nested) {
+      return nested
+    }
+  }
+
+  for (const nestedValue of Object.values(value)) {
+    const nested = unwrapSoloDecisionCandidate(nestedValue)
+    if (nested) {
+      return nested
+    }
+  }
+
   return null
 }
 
@@ -379,16 +433,12 @@ export function buildSoloInputRequest(
 
 export function parseSoloCoordinatorDecision(content: string): SoloCoordinatorDecision {
   const candidate = extractJsonCandidate(content) || '{}'
-  const rawParsed = safeJsonParse<Record<string, unknown>>(candidate) || {}
-  if (typeof rawParsed !== 'object') {
+  const rawParsed = safeJsonParse<unknown>(candidate)
+  const parsed = unwrapSoloDecisionCandidate(rawParsed)
+
+  if (!parsed) {
     throw new Error('协调 AI 返回结果缺少 type 字段')
   }
-
-  const parsed = rawParsed.type === 'result'
-    && rawParsed.structured_output
-    && typeof rawParsed.structured_output === 'object'
-      ? rawParsed.structured_output as Record<string, unknown>
-      : rawParsed
 
   if (typeof parsed.type !== 'string') {
     throw new Error('协调 AI 返回结果缺少 type 字段')

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import MemoryLibraryPicker from '@/components/memory/MemoryLibraryPicker.vue'
 import {
   useSoloRunCreateDialog,
@@ -19,6 +20,8 @@ const {
   updateField,
   visibleExpertOptions,
 } = useSoloRunCreateDialog(props, emit)
+
+const isEditMode = computed(() => props.mode === 'edit')
 </script>
 
 <template>
@@ -33,9 +36,13 @@ const {
             <p class="solo-create-dialog__eyebrow">
               SOLO Mode
             </p>
-            <h3>创建全程自主规划任务</h3>
+            <h3>{{ isEditMode ? '编辑 SOLO 运行' : '创建全程自主规划任务' }}</h3>
             <p class="solo-create-dialog__subtitle">
-              先指定本次 SOLO 使用的规划智能体与执行路径，再让它持续选择内置专家推进任务。
+              {{
+                isEditMode
+                  ? '仅在非执行状态下允许修改运行配置，保存后可以继续重试或再次启动。'
+                  : '先指定本次 SOLO 使用的规划智能体与执行路径，再让它持续选择内置专家推进任务。'
+              }}
             </p>
           </div>
           <button
@@ -220,19 +227,29 @@ const {
             取消
           </button>
           <button
-            class="solo-create-dialog__button solo-create-dialog__button--secondary"
-            :disabled="!canCreate"
-            @click="emit('createDraft')"
-          >
-            创建草稿
-          </button>
-          <button
+            v-if="isEditMode"
             class="solo-create-dialog__button solo-create-dialog__button--primary"
             :disabled="!canCreate"
-            @click="emit('createAndStart')"
+            @click="emit('save')"
           >
-            创建并启动
+            保存修改
           </button>
+          <template v-else>
+            <button
+              class="solo-create-dialog__button solo-create-dialog__button--secondary"
+              :disabled="!canCreate"
+              @click="emit('createDraft')"
+            >
+              创建草稿
+            </button>
+            <button
+              class="solo-create-dialog__button solo-create-dialog__button--primary"
+              :disabled="!canCreate"
+              @click="emit('createAndStart')"
+            >
+              创建并启动
+            </button>
+          </template>
         </div>
       </div>
     </div>

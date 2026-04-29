@@ -16,7 +16,10 @@ pub(crate) fn collect_mcp_servers_from_json(
 ) {
     if let Some(mcp_servers) = json.get("mcpServers").and_then(|value| value.as_object()) {
         for (name, config) in mcp_servers {
-            if servers.iter().any(|server| server.name == *name) {
+            if servers
+                .iter()
+                .any(|server| server.name == *name && server.scope == scope)
+            {
                 continue;
             }
 

@@ -545,6 +545,7 @@ export class ConversationService {
       }
 
     } catch (error) {
+      tokenStore.clearRealtimeTokens(sessionId)
       this.finalizeSend(sessionId)
       throw error
     }
@@ -850,7 +851,7 @@ export class ConversationService {
     let accumulatedThinking = ''
     const toolCalls: ToolCall[] = []
     const editTraces: FileEditTrace[] = []
-    const usageState: { model?: string, inputTokens?: number, outputTokens?: number } = {
+    const usageState: { model?: string, inputTokens?: number, outputTokens?: number, contextWindowOccupancy?: number } = {
       model: resolveRequestedUsageModel({
         requestedModelId: context.agent.modelId
       })
@@ -1219,6 +1220,7 @@ export class ConversationService {
       markMetric('persistedAt')
       recordTimingSummary()
       recordUsageOnce(new Date().toISOString())
+      tokenStore.clearRealtimeTokens(sessionId)
       this.finalizeSend(sessionId)
     }
 
@@ -1398,11 +1400,50 @@ export class ConversationService {
             if (usage.outputTokens !== undefined) {
               usageState.outputTokens = (usageState.outputTokens ?? 0) + usage.outputTokens
             }
+            if (usage.rawInputTokens !== undefined && usage.rawInputTokens > 0) {
+              usageState.contextWindowOccupancy = usage.rawInputTokens
+            }
 
             syncRealtimeUsageNotice()
           },
           onSystem: (content) => {
             clearRetryPresentationOnRecoveredStream()
+
+            if (content && content.includes('CLI Context Compaction')) {
+              tokenStore.hardClearSessionTokens(sessionId)
+              this.usageBaselines.delete(sessionId)
+              const lines = content.split('\n').slice(1)
+              const detailParts: string[] = []
+              for (const line of lines) {
+                const trimmed = line.trim()
+                if (!trimmed) continue
+                if (trimmed.startsWith('Trigger:')) {
+                  const raw = trimmed.replace('Trigger:', '').trim()
+                  const label = raw === 'auto' ? i18n.global.t('compression.cliCompactionAuto') : raw === 'manual' ? i18n.global.t('compression.cliCompactionManual') : raw
+                  detailParts.push(`${i18n.global.t('compression.cliCompactionTrigger')}: ${label}`)
+                } else if (trimmed.startsWith('Pre-compaction tokens:')) {
+                  const val = trimmed.replace('Pre-compaction tokens:', '').trim()
+                  detailParts.push(`${i18n.global.t('compression.cliCompactionPreTokens')}: ${val}`)
+                } else if (trimmed.startsWith('Truncation limit:')) {
+                  const val = trimmed.replace('Truncation limit:', '').trim()
+                  detailParts.push(`${i18n.global.t('compression.cliCompactionTruncationLimit')}: ${val}`)
+                } else {
+                  detailParts.push(trimmed)
+                }
+              }
+              const compressionNotice: RuntimeNotice = {
+                id: 'cli-context-compression',
+                title: i18n.global.t('compression.cliCompactionTitle'),
+                content: detailParts.length > 0 ? detailParts.join('\n') : i18n.global.t('compression.cliCompactionResetNotice'),
+                tone: 'info'
+              }
+              runtimeNoticesState = upsertRuntimeNotice(runtimeNoticesState, compressionNotice)
+              bufferMessageUpdate({
+                runtimeNotices: runtimeNoticesState
+              })
+              return
+            }
+
             const runtimeNotice = buildRuntimeNoticeFromSystemContent(content)
             if (!runtimeNotice) {
               return
@@ -1455,6 +1496,7 @@ export class ConversationService {
               messageStore.flushBufferedMessageUpdate(aiMessage.id, { notifyOnFailure: true })
             )
             recordUsageOnce(new Date().toISOString())
+            tokenStore.clearRealtimeTokens(sessionId)
           }
         })
       })
@@ -1507,6 +1549,7 @@ export class ConversationService {
         markMetric('persistedAt')
         recordTimingSummary()
         recordUsageOnce(new Date().toISOString())
+        tokenStore.clearRealtimeTokens(sessionId)
         this.finalizeSend(sessionId)
       }
     } catch (error) {
@@ -1565,6 +1608,7 @@ export class ConversationService {
         markMetric('persistedAt')
         recordTimingSummary()
         recordUsageOnce(new Date().toISOString())
+        tokenStore.clearRealtimeTokens(sessionId)
         this.finalizeSend(sessionId)
         return
       }
@@ -1694,7 +1738,7 @@ export class ConversationService {
       onToolInputDelta: (toolCallId: string | undefined, toolInput: Record<string, unknown> | undefined) => void
       onToolResult: (toolCallId: string, result: string, isError: boolean) => void
       onFileEdit: (trace: FileEditTrace) => void
-      onUsage: (usage: { model?: string, inputTokens?: number, outputTokens?: number }) => void
+      onUsage: (usage: { model?: string, inputTokens?: number, outputTokens?: number, rawInputTokens?: number }) => void
       onSystem: (content: string) => void
       onError: (error: string) => void
       onDone: () => void
@@ -1702,6 +1746,7 @@ export class ConversationService {
   ): void {
     const { onContent, onThinking, onThinkingStart, onToolUse, onToolInputDelta, onToolResult, onFileEdit, onUsage, onSystem, onError, onDone } = handlers
     const tokenStore = useTokenStore()
+    const prevBaseline = this.usageBaselines.get(handlers.sessionId) ?? null
     const normalizedUsage = normalizeRuntimeUsage({
       provider: handlers.runtimeProvider,
       inputTokens: event.inputTokens,
@@ -1710,7 +1755,7 @@ export class ConversationService {
       rawOutputTokens: event.rawOutputTokens,
       cacheReadInputTokens: event.cacheReadInputTokens,
       cacheCreationInputTokens: event.cacheCreationInputTokens,
-      baseline: this.usageBaselines.get(handlers.sessionId) ?? null
+      baseline: prevBaseline
     })
     const normalizedEvent: StreamEvent = {
       ...event,
@@ -1720,8 +1765,6 @@ export class ConversationService {
 
     if (normalizedUsage.nextBaseline) {
       this.usageBaselines.set(handlers.sessionId, normalizedUsage.nextBaseline)
-    } else {
-      this.usageBaselines.delete(handlers.sessionId)
     }
 
     // 处理 token 事件 - 依赖 provider 级 parser 决定哪个事件携带 canonical token。
@@ -1733,7 +1776,8 @@ export class ConversationService {
         resolveRequestedUsageModel({
           requestedModelId: handlers.requestedModelId,
           reportedModelId: normalizedEvent.model
-        })
+        }),
+        normalizedEvent.rawInputTokens
       )
     }
 

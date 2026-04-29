@@ -1,8 +1,9 @@
 import { computed, ref, watch } from 'vue'
-import type { SoloAgentOption, SoloCreateFormState, SoloModelOption } from '../soloShared'
+import type { SoloAgentOption, SoloCreateFormState, SoloModelOption, SoloRunFormMode } from '../soloShared'
 
 export interface SoloRunCreateDialogProps {
   visible: boolean
+  mode: SoloRunFormMode
   form: SoloCreateFormState
   coordinatorOptions: SoloAgentOption[]
   expertOptions: SoloAgentOption[]
@@ -15,6 +16,7 @@ export type SoloRunCreateDialogEmits = {
   (e: 'browseExecutionPath'): void
   (e: 'createDraft'): void
   (e: 'createAndStart'): void
+  (e: 'save'): void
   (e: 'update:form', patch: Partial<SoloCreateFormState>): void
 }
 

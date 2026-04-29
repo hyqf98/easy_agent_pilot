@@ -244,6 +244,91 @@ fn sync_codex_runtime_home(source_root: &Path, target_root: &Path) -> Result<()>
     Ok(())
 }
 
+fn discover_codex_session_id(codex_home: &Path, cutoff: std::time::Instant) -> Option<String> {
+    let sessions_dir = codex_home.join("sessions");
+    if !sessions_dir.exists() {
+        return None;
+    }
+
+    let cutoff_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .saturating_sub(cutoff.elapsed());
+    let mut best_epoch = std::time::Duration::ZERO;
+    let mut best_id: Option<String> = None;
+
+    let Ok(entries) = std::fs::read_dir(&sessions_dir) else {
+        return None;
+    };
+    for year_entry in entries.flatten() {
+        if !year_entry.file_type().ok()?.is_dir() {
+            continue;
+        }
+        let Ok(month_entries) = std::fs::read_dir(year_entry.path()) else {
+            continue;
+        };
+        for month_entry in month_entries.flatten() {
+            if !month_entry.file_type().ok()?.is_dir() {
+                continue;
+            }
+            let Ok(day_entries) = std::fs::read_dir(month_entry.path()) else {
+                continue;
+            };
+            for day_entry in day_entries.flatten() {
+                let path = day_entry.path();
+                let fname = path.file_name()?.to_string_lossy();
+                if !fname.starts_with("rollout-") || !fname.ends_with(".jsonl") {
+                    continue;
+                }
+                let Ok(metadata) = path.metadata() else {
+                    continue;
+                };
+                let modified_epoch = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())?;
+                if modified_epoch < cutoff_epoch {
+                    continue;
+                }
+                if let Some(sid) = extract_codex_session_id_from_file(&path) {
+                    if modified_epoch > best_epoch {
+                        best_epoch = modified_epoch;
+                        best_id = Some(sid);
+                    }
+                }
+            }
+        }
+    }
+
+    best_id
+}
+
+fn extract_codex_session_id_from_file(path: &Path) -> Option<String> {
+    let Ok(file) = std::fs::File::open(path) else {
+        return None;
+    };
+    let reader = std::io::BufReader::new(file);
+    for line in std::io::BufRead::lines(reader).take(10) {
+        let Ok(line) = line else {
+            continue;
+        };
+        let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if obj.get("type").and_then(|v| v.as_str()) == Some("session_meta") {
+            if let Some(id) = obj
+                .pointer("/payload/id")
+                .and_then(|v| v.as_str())
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+            {
+                return Some(id);
+            }
+        }
+    }
+    None
+}
+
 fn prepare_codex_runtime_home() -> Result<PathBuf> {
     let runtime_home = crate::commands::get_persistence_dir_path()?
         .join("cache")
@@ -791,6 +876,14 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         let execution_succeeded = status.success() || should_complete_as_success;
 
         if timeout_error_message.is_none() && detected_failure.is_none() && execution_succeeded {
+            let discovered_session_id = if resume_session_id.is_none() {
+                discover_codex_session_id(&codex_runtime_home, execution_started_at)
+            } else {
+                resume_session_id.clone()
+            };
+            if let Some(ref sid) = discovered_session_id {
+                log_info!("Codex session ID discovered: {}", sid);
+            }
             let done_event = CliStreamEvent {
                 event_type: "done".to_string(),
                 session_id: session_id.clone(),
@@ -803,7 +896,7 @@ impl AgentExecutionStrategy for CodexCliStrategy {
                 input_tokens: None,
                 output_tokens: None,
                 model: None,
-                external_session_id: None,
+                external_session_id: discovered_session_id,
             raw_input_tokens: None,
             raw_output_tokens: None,
             cache_read_input_tokens: None,
@@ -1601,6 +1694,27 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
         "result" => extract_structured_payload(json)
             .or_else(|| extract_text_value(json.get("result")))
             .map(|content| build_content_event(session_id, content)),
+
+        // === Codex 上下文截断事件 ===
+        "turn_context" => {
+            let truncation_mode = json
+                .pointer("/truncation_policy/mode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let summary_mode = json.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+            if truncation_mode == "tokens" && summary_mode == "auto" {
+                let limit = json
+                    .pointer("/truncation_policy/limit")
+                    .and_then(|v| v.as_u64());
+                let mut content = "### CLI Context Compaction\nTrigger: auto".to_string();
+                if let Some(l) = limit {
+                    content = format!("{}\nTruncation limit: {} tokens", content, l);
+                }
+                Some(build_system_event(session_id, content))
+            } else {
+                None
+            }
+        }
 
         // === 默认回退 ===
         _ => {

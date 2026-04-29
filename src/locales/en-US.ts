@@ -217,7 +217,14 @@ export default {
     continuationSessionSuffix: '· Compressed Continuation',
     sourceSessionMissing: 'The source session no longer exists, so a continuation session cannot be created.',
     expand: 'Expand',
-    collapse: 'Collapse'
+    collapse: 'Collapse',
+    cliCompactionTitle: 'CLI Context Compaction',
+    cliCompactionAuto: 'Auto',
+    cliCompactionManual: 'Manual',
+    cliCompactionTrigger: 'Trigger',
+    cliCompactionPreTokens: 'Pre-compaction tokens',
+    cliCompactionTruncationLimit: 'Truncation limit',
+    cliCompactionResetNotice: 'CLI runtime auto-compacted context, token count has been reset'
   },
 
   // Panel titles

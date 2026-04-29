@@ -10,7 +10,7 @@ import { useProjectStore } from '@/stores/project'
 import { useSoloExecutionStore } from '@/stores/soloExecution'
 import { useSoloRunStore } from '@/stores/soloRun'
 import type { SoloRun, SoloStep } from '@/types/solo'
-import type { SoloAgentOption, SoloCreateFormState, SoloModelOption } from '../soloShared'
+import type { SoloAgentOption, SoloCreateFormState, SoloModelOption, SoloRunFormMode } from '../soloShared'
 
 /**
  * 管理 SOLO 面板的运行列表、创建表单和执行时间线状态。
@@ -25,6 +25,8 @@ export function useSoloModePanel() {
   const confirmDialog = useConfirmDialog()
 
   const showCreateDialog = ref(false)
+  const dialogMode = ref<SoloRunFormMode>('create')
+  const editingRunId = ref<string | null>(null)
   const createDialogModelOptions = ref<SoloModelOption[]>([])
   const selectedStepId = ref<string | null>(null)
 
@@ -160,6 +162,9 @@ export function useSoloModePanel() {
       && createForm.participantExpertIds.length > 0
       && createForm.coordinatorExpertId
     )
+  )
+  const canEditCurrentRun = computed(() =>
+    Boolean(currentRun.value && ['draft', 'failed', 'stopped', 'completed'].includes(currentRun.value.status))
   )
 
   function runStatusLabel(status: SoloRun['status']): string {
@@ -322,11 +327,46 @@ export function useSoloModePanel() {
     createForm.participantExpertIds = getDefaultParticipantExpertIds()
     createForm.coordinatorExpertId = getDefaultCoordinatorExpertId()
     await syncCreateDialogModels()
+    dialogMode.value = 'create'
+    editingRunId.value = null
+    showCreateDialog.value = true
+  }
+
+  async function openEditDialog() {
+    if (!currentRun.value || !canEditCurrentRun.value) return
+
+    await Promise.all([
+      projectStore.loadProjects(),
+      agentStore.loadAgents(),
+      agentTeamsStore.loadExperts()
+    ])
+
+    const run = currentRun.value
+    updateCreateForm({
+      projectId: run.projectId,
+      executionPath: run.executionPath,
+      name: run.name,
+      requirement: run.requirement,
+      goal: run.goal,
+      memoryLibraryIds: [...run.memoryLibraryIds],
+      maxDispatchDepth: run.maxDispatchDepth,
+      participantExpertIds: [...run.participantExpertIds],
+      coordinatorExpertId: run.coordinatorExpertId || getDefaultCoordinatorExpertId(),
+      coordinatorModelId: run.coordinatorModelId || ''
+    })
+    createDialogModelOptions.value = await loadCoordinatorModelOptions(createForm.coordinatorExpertId)
+    if (!createForm.coordinatorModelId) {
+      createForm.coordinatorModelId = pickDefaultModel(createDialogModelOptions.value)
+    }
+    dialogMode.value = 'edit'
+    editingRunId.value = run.id
     showCreateDialog.value = true
   }
 
   function closeCreateDialog() {
     showCreateDialog.value = false
+    dialogMode.value = 'create'
+    editingRunId.value = null
     resetCreateForm()
   }
 
@@ -369,6 +409,27 @@ export function useSoloModePanel() {
     if (startImmediately) {
       await soloExecutionStore.startRun(run.id)
     }
+  }
+
+  async function saveRunEdits() {
+    if (dialogMode.value !== 'edit' || !editingRunId.value) {
+      return
+    }
+
+    const run = await soloRunStore.updateRun(editingRunId.value, {
+      executionPath: createForm.executionPath.trim(),
+      name: createForm.name.trim(),
+      requirement: createForm.requirement.trim(),
+      goal: createForm.goal.trim(),
+      memoryLibraryIds: [...createForm.memoryLibraryIds],
+      participantExpertIds: [...createForm.participantExpertIds],
+      coordinatorExpertId: createForm.coordinatorExpertId || null,
+      coordinatorModelId: createForm.coordinatorModelId || null,
+      maxDispatchDepth: Math.max(1, Math.min(100, createForm.maxDispatchDepth))
+    })
+
+    await selectRun(run.id)
+    closeCreateDialog()
   }
 
   async function selectRun(runId: string) {
@@ -545,7 +606,9 @@ export function useSoloModePanel() {
 
   return {
     canCreate,
+    canEditCurrentRun,
     completedCount,
+    dialogMode,
     coordinatorExpertOptions,
     createDialogModelOptions,
     createForm,
@@ -565,6 +628,7 @@ export function useSoloModePanel() {
     getStepLogCount,
     handleBrowseExecutionPath,
     handleDelete,
+    openEditDialog,
     handlePause,
     handleReset,
     handleResume,
@@ -583,6 +647,7 @@ export function useSoloModePanel() {
     stepStatusLabel,
     updateCreateForm,
     createRun,
+    saveRunEdits,
     closeCreateDialog,
     compactSoloSummary
   }

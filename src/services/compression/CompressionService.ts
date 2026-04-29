@@ -10,6 +10,7 @@ import { useTracePreviewStore } from '@/stores/tracePreview'
 import { agentExecutor } from '@/services/conversation/AgentExecutor'
 import { buildConversationMessages } from '@/services/conversation/buildConversationMessages'
 import { loadMountedMemoryPrompt } from '@/services/memory/mountedMemoryPrompt'
+import { shouldAutoCompressByThreshold } from './autoCompression'
 import {
   deleteSessionRuntimeBinding,
   getSessionRuntimeBinding,
@@ -540,24 +541,17 @@ export class CompressionService {
     const tokenStore = useTokenStore()
     const messageStore = useMessageStore()
 
-    if (!settingsStore.settings.autoCompressionEnabled) {
-      return false
-    }
-
     const meaningfulMessages = messageStore
       .messagesBySession(sessionId)
       .filter(message => !message.compressionMetadata)
-
-    if (meaningfulMessages.length < 8) {
-      return false
-    }
-
-    if (!tokenStore.needsCompression(sessionId)) {
-      return false
-    }
-
     const usage = tokenStore.getTokenUsage(sessionId)
-    return usage.used >= 8000
+
+    return shouldAutoCompressByThreshold({
+      autoCompressionEnabled: settingsStore.settings.autoCompressionEnabled,
+      meaningfulMessageCount: meaningfulMessages.length,
+      usagePercentage: usage.percentage,
+      threshold: settingsStore.settings.compressionThreshold
+    })
   }
 
   private resolveAssistantSummary(message?: Message): string {
