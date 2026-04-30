@@ -352,7 +352,8 @@ export function useMessageComposer() {
   }
 
   const handleConfirmCompress = async (strategy: CompressionStrategy) => {
-    if (!currentSessionId.value) return
+    const sessionId = currentSessionId.value
+    if (!sessionId) return
 
     const session = sessionStore.currentSession
     const agentId = resolveSessionAgentId(session, agentStore.agents) || currentAgent.value?.id
@@ -368,7 +369,7 @@ export function useMessageComposer() {
 
     try {
       const result = await compressionService.compressSession(
-        currentSessionId.value,
+        sessionId,
         agentId,
         {
           strategy,
@@ -378,6 +379,7 @@ export function useMessageComposer() {
 
       if (result.success) {
         notificationStore.success(t('compression.success'))
+        await conversationService.drainQueue(sessionId)
       } else {
         notificationStore.error(t('compression.failed'), result.error)
       }

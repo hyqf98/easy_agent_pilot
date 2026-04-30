@@ -47,6 +47,7 @@ const deletingProject = ref<Project | null>(null)
 // 会话相关状态
 const showDeleteSessionConfirm = ref(false)
 const deletingSession = ref<Session | null>(null)
+const deletingSessions = ref<Session[]>([])
 
 // 编辑会话名称状态
 const editingSessionId = ref<string | null>(null)
@@ -215,21 +216,31 @@ const handleTogglePin = (id: string) => {
 }
 
 const handleDeleteSession = (session: Session) => {
+  deletingSessions.value = [session]
   deletingSession.value = session
+  showDeleteSessionConfirm.value = true
+}
+
+const handleDeleteSessions = (sessions: Session[]) => {
+  if (!sessions.length) {
+    return
+  }
+
+  deletingSessions.value = [...sessions]
+  deletingSession.value = sessions.length === 1 ? sessions[0] : null
   showDeleteSessionConfirm.value = true
 }
 
 const closeDeleteSessionConfirm = () => {
   showDeleteSessionConfirm.value = false
   deletingSession.value = null
+  deletingSessions.value = []
 }
 
-const confirmDeleteSession = () => {
-  if (deletingSession.value) {
-    sessionStore.deleteSession(deletingSession.value.id)
-    if (projectStore.currentProjectId) {
-      projectStore.decrementSessionCount(projectStore.currentProjectId)
-    }
+const confirmDeleteSession = async () => {
+  for (const session of deletingSessions.value) {
+    await sessionStore.deleteSession(session.id)
+    projectStore.decrementSessionCount(session.projectId)
   }
   closeDeleteSessionConfirm()
 }
@@ -434,6 +445,7 @@ const handleFileSelect = async (selectedPath: string, project: Project) => {
           @save-edit-session="saveSessionName"
           @cancel-edit-session="cancelEditSessionName"
           @delete-session="handleDeleteSession"
+          @delete-sessions="handleDeleteSessions"
           @update-editing-name="editingSessionName = $event"
           @select-file="handleFileSelect"
         />
@@ -472,8 +484,8 @@ const handleFileSelect = async (selectedPath: string, project: Project) => {
 
     <UnifiedPanelConfirmDialog
       :visible="showDeleteSessionConfirm"
-      :title="t('session.confirmDeleteTitle')"
-      :message="t('session.confirmDeleteMessage', { name: deletingSession?.name })"
+      :title="deletingSessions.length > 1 ? t('session.confirmBatchDeleteTitle') : t('session.confirmDeleteTitle')"
+      :message="deletingSessions.length > 1 ? t('session.confirmBatchDeleteMessage', { count: deletingSessions.length }) : t('session.confirmDeleteMessage', { name: deletingSession?.name })"
       @cancel="closeDeleteSessionConfirm"
       @confirm="confirmDeleteSession"
     />

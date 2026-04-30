@@ -15,12 +15,11 @@ use super::abnormal_completion::{
 };
 use super::cli_common::{
     build_cli_failure_report, build_content_event, build_error_event, build_execution_summary,
-    build_system_event,
-    build_timeout_error_message, describe_timeout_config, detect_cli_timeout, emit_cli_event,
-    extract_error_from_json_blob, extract_result_content_from_json_blob,
+    build_system_event, build_timeout_error_message, describe_timeout_config, detect_cli_timeout,
+    emit_cli_event, extract_error_from_json_blob, extract_result_content_from_json_blob,
     extract_runtime_system_notice, extract_structured_output_from_json_blob,
     parse_json_blob_with_fallback, preview_text, render_cli_message, shell_escape,
-    timeout_config_for_execution_mode, CliExecutionMonitor,
+    timeout_config_for_execution_mode, CliExecutionMonitor, NonImageAttachmentPromptMode,
 };
 use crate::commands::cli_support::{build_cli_launch_error_message, build_tokio_cli_command};
 use crate::commands::conversation::abort::{
@@ -250,10 +249,10 @@ fn build_thinking_event(session_id: &str, content: String) -> CliStreamEvent {
         output_tokens: None,
         model: None,
         external_session_id: None,
-    raw_input_tokens: None,
-    raw_output_tokens: None,
-    cache_read_input_tokens: None,
-    cache_creation_input_tokens: None,
+        raw_input_tokens: None,
+        raw_output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     }
 }
 
@@ -271,10 +270,10 @@ fn build_thinking_start_event(session_id: &str) -> CliStreamEvent {
         output_tokens: None,
         model: None,
         external_session_id: None,
-    raw_input_tokens: None,
-    raw_output_tokens: None,
-    cache_read_input_tokens: None,
-    cache_creation_input_tokens: None,
+        raw_input_tokens: None,
+        raw_output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     }
 }
 
@@ -296,10 +295,10 @@ fn build_tool_input_delta_event(
         output_tokens: None,
         model: None,
         external_session_id: None,
-    raw_input_tokens: None,
-    raw_output_tokens: None,
-    cache_read_input_tokens: None,
-    cache_creation_input_tokens: None,
+        raw_input_tokens: None,
+        raw_output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     }
 }
 
@@ -374,9 +373,7 @@ fn attach_external_session_id(
 }
 
 fn build_claude_project_slug(working_directory: &str) -> String {
-    working_directory
-        .trim()
-        .replace(['/', '\\', ':'], "-")
+    working_directory.trim().replace(['/', '\\', ':'], "-")
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -398,7 +395,9 @@ fn find_claude_session_transcript(
         return None;
     }
 
-    if let Some(working_directory) = working_directory.map(str::trim).filter(|value| !value.is_empty())
+    if let Some(working_directory) = working_directory
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
     {
         let preferred = projects_dir
             .join(build_claude_project_slug(working_directory))
@@ -695,7 +694,7 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
         // 构建输入消息
         let input_text = messages
             .iter()
-            .map(render_cli_message)
+            .map(|message| render_cli_message(message, true, NonImageAttachmentPromptMode::All))
             .collect::<Vec<_>>()
             .join("\n\n");
 
@@ -792,13 +791,17 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
 
                     match serde_json::from_str::<serde_json::Value>(&line) {
                         Ok(json_value) => {
-                            let event = parse_claude_json_output(&session_id_clone, &json_value, &mut last_assistant_raw_input)
-                                .map(|event| {
-                                    hydrate_tool_use_usage_from_transcript(
-                                        event,
-                                        stdout_working_directory.as_deref(),
-                                    )
-                                });
+                            let event = parse_claude_json_output(
+                                &session_id_clone,
+                                &json_value,
+                                &mut last_assistant_raw_input,
+                            )
+                            .map(|event| {
+                                hydrate_tool_use_usage_from_transcript(
+                                    event,
+                                    stdout_working_directory.as_deref(),
+                                )
+                            });
                             if let Some(event) = event {
                                 outcome.emitted_non_error_event |=
                                     is_successful_event_type(&event.event_type);
@@ -1062,10 +1065,10 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                 output_tokens: None,
                 model: None,
                 external_session_id: None,
-            raw_input_tokens: None,
-            raw_output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
             };
             emit_cli_event(&app, &event_name, plan_id.as_ref(), &done_event);
         }
@@ -1239,10 +1242,7 @@ struct UsageCounts {
 
 fn extract_usage_counts(usage: Option<&serde_json::Value>) -> UsageCounts {
     let raw_input_tokens = usage
-        .and_then(|u| {
-            u.get("input_tokens")
-                .or_else(|| u.get("inputTokens"))
-        })
+        .and_then(|u| u.get("input_tokens").or_else(|| u.get("inputTokens")))
         .and_then(|t| t.as_u64())
         .map(|t| t as u32);
     let raw_output_tokens = usage
@@ -1310,7 +1310,7 @@ fn parse_claude_json_output(
         .and_then(|t| t.as_str())
         .unwrap_or("unknown");
 
-     let event = match event_type {
+    let event = match event_type {
         "system" => {
             let subtype = json.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
 
@@ -1347,10 +1347,10 @@ fn parse_claude_json_output(
                         output_tokens: None,
                         model: None,
                         external_session_id: Some(sid),
-                    raw_input_tokens: None,
-                    raw_output_tokens: None,
-                    cache_read_input_tokens: None,
-                    cache_creation_input_tokens: None,
+                        raw_input_tokens: None,
+                        raw_output_tokens: None,
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                     })
                 }
             }
@@ -1428,10 +1428,10 @@ fn parse_claude_json_output(
                         output_tokens: None,
                         model: None,
                         external_session_id: None,
-                    raw_input_tokens: None,
-                    raw_output_tokens: None,
-                    cache_read_input_tokens: None,
-                    cache_creation_input_tokens: None,
+                        raw_input_tokens: None,
+                        raw_output_tokens: None,
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                     })
                 }
                 _ => None,
@@ -1462,8 +1462,7 @@ fn parse_claude_json_output(
             let external_session_id = extract_external_session_id(json);
             let usage = extract_usage_counts(json.get("usage"));
 
-            let context_window_input = (*last_assistant_raw_input)
-                .or(usage.raw_input_tokens);
+            let context_window_input = (*last_assistant_raw_input).or(usage.raw_input_tokens);
             let output_tokens = usage.output_tokens;
 
             if model.is_some()
@@ -1520,10 +1519,10 @@ fn parse_claude_json_output(
                 output_tokens: None,
                 model: None,
                 external_session_id: None,
-            raw_input_tokens: None,
-            raw_output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
             })
         }
         "tool_result" => {
@@ -1543,10 +1542,10 @@ fn parse_claude_json_output(
                 output_tokens: None,
                 model: None,
                 external_session_id: None,
-            raw_input_tokens: None,
-            raw_output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
             })
         }
         "error" => {
@@ -1636,10 +1635,10 @@ fn parse_claude_json_output(
                             output_tokens,
                             model: model.clone(),
                             external_session_id: extract_external_session_id(json),
-                        raw_input_tokens: None,
-                        raw_output_tokens: None,
-                        cache_read_input_tokens: None,
-                        cache_creation_input_tokens: None,
+                            raw_input_tokens: None,
+                            raw_output_tokens: None,
+                            cache_read_input_tokens: None,
+                            cache_creation_input_tokens: None,
                         });
                     }
                     "tool_use" => {
@@ -1662,10 +1661,10 @@ fn parse_claude_json_output(
                             output_tokens,
                             model: model.clone(),
                             external_session_id: extract_external_session_id(json),
-                        raw_input_tokens: None,
-                        raw_output_tokens: None,
-                        cache_read_input_tokens: None,
-                        cache_creation_input_tokens: None,
+                            raw_input_tokens: None,
+                            raw_output_tokens: None,
+                            cache_read_input_tokens: None,
+                            cache_creation_input_tokens: None,
                         });
                     }
                     _ => {
@@ -1714,10 +1713,10 @@ fn parse_claude_json_output(
                             output_tokens: None,
                             model: None,
                             external_session_id: None,
-                        raw_input_tokens: None,
-                        raw_output_tokens: None,
-                        cache_read_input_tokens: None,
-                        cache_creation_input_tokens: None,
+                            raw_input_tokens: None,
+                            raw_output_tokens: None,
+                            cache_read_input_tokens: None,
+                            cache_creation_input_tokens: None,
                         })
                     }
                     _ => {
@@ -1744,8 +1743,8 @@ mod tests {
 
     use super::{
         hydrate_tool_use_usage_from_transcript, parse_claude_json_output,
-        should_ignore_stderr_line,
-        should_treat_process_failure_as_success, StderrReadOutcome, StdoutReadOutcome,
+        should_ignore_stderr_line, should_treat_process_failure_as_success, StderrReadOutcome,
+        StdoutReadOutcome,
     };
 
     #[test]
@@ -1828,8 +1827,8 @@ mod tests {
         });
 
         let mut state: Option<u32> = None;
-        let event =
-            parse_claude_json_output("session-1", &json, &mut state).expect("expected assistant event");
+        let event = parse_claude_json_output("session-1", &json, &mut state)
+            .expect("expected assistant event");
 
         assert_eq!(event.event_type, "content");
         assert_eq!(event.content.as_deref(), Some("ok"));
@@ -1874,7 +1873,8 @@ mod tests {
         });
 
         let mut state: Option<u32> = None;
-        let event = parse_claude_json_output("session-1", &json, &mut state).expect("expected usage event");
+        let event =
+            parse_claude_json_output("session-1", &json, &mut state).expect("expected usage event");
 
         assert_eq!(event.event_type, "usage");
         assert_eq!(event.input_tokens, Some(65630));
@@ -1919,10 +1919,14 @@ mod tests {
         });
 
         let mut state: Option<u32> = None;
-        let event = parse_claude_json_output("session-1", &json, &mut state).expect("expected tool_use event");
+        let event = parse_claude_json_output("session-1", &json, &mut state)
+            .expect("expected tool_use event");
 
         assert_eq!(event.event_type, "tool_use");
-        assert_eq!(event.external_session_id.as_deref(), Some("camel-session-id"));
+        assert_eq!(
+            event.external_session_id.as_deref(),
+            Some("camel-session-id")
+        );
     }
 
     #[test]

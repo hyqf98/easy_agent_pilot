@@ -17,9 +17,12 @@ export interface ExecutionLogMetadata {
   retryCount?: number
   maxRetries?: number
   retryDelaySeconds?: number
+  errorMessage?: string
+  failureKind?: string
   model?: string
   inputTokens?: number
   outputTokens?: number
+  contextWindowOccupancy?: number
   strategy?: string
   runtime?: string
   expert?: string
@@ -37,6 +40,7 @@ export interface TaskTokenUsageWindow {
   inputTokens: number
   outputTokens: number
   model?: string
+  contextWindowOccupancy?: number
   resetCount: number
   lastUpdatedAt: string | null
 }

@@ -88,6 +88,14 @@ interface RemoteModelsJson {
 }
 
 const REMOTE_MODELS_URL = 'https://raw.githubusercontent.com/hyqf98/easy-agent-pilot/main/models.json'
+async function loadRemoteModels(): Promise<RemoteModelsJson> {
+  const response = await fetch(REMOTE_MODELS_URL)
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+  }
+
+  return response.json() as Promise<RemoteModelsJson>
+}
 
 // 后端返回的原始数据结构（snake_case）
 interface RawAgentMcpConfig {
@@ -758,11 +766,7 @@ export const useAgentConfigStore = defineStore('agentConfig', () => {
   async function syncRemoteModels(agentId: string, provider: string): Promise<AgentModelConfig[]> {
     const notificationStore = useNotificationStore()
     try {
-      const response = await fetch(REMOTE_MODELS_URL)
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-      }
-      const data: RemoteModelsJson = await response.json()
+      const data = await loadRemoteModels()
       const providerModels = data.providers[provider]
       if (!providerModels || providerModels.length === 0) {
         throw new Error(`未找到 ${provider} 的模型定义`)
@@ -796,9 +800,24 @@ export const useAgentConfigStore = defineStore('agentConfig', () => {
   async function syncOpencodeModels(agentId: string): Promise<AgentModelConfig[]> {
     const notificationStore = useNotificationStore()
     try {
+      let knownModels: RemoteModelDef[] = []
+      try {
+        const data = await loadRemoteModels()
+        knownModels = data.providers.opencode || []
+      } catch (error) {
+        console.warn('Failed to load remote OpenCode model fallback metadata:', error)
+      }
+
+      const contextWindows = Object.fromEntries(
+        knownModels
+          .filter(model => typeof model.contextWindow === 'number' && model.contextWindow > 0)
+          .map(model => [model.modelId.trim().toLowerCase(), model.contextWindow as number])
+      )
+
       const rawConfigs = await invoke<RawAgentModelConfig[]>('sync_all_opencode_models', {
         input: {
-          agent_id: agentId
+          agent_id: agentId,
+          context_windows: contextWindows
         }
       })
       const configs = rawConfigs.map(transformModelConfig)

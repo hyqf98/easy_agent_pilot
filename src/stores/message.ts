@@ -4,10 +4,12 @@ import { invoke } from '@tauri-apps/api/core'
 import { useNotificationStore } from './notification'
 import { useSessionStore } from './session'
 import { useSessionExecutionStore } from './sessionExecution'
+import { useTokenStore, type CompressionStrategy } from './token'
+import { readSessionCliUsageSnapshot } from '@/services/usage/cliSessionUsageSnapshot'
 import { getErrorMessage } from '@/utils/api'
-import type { CompressionStrategy } from './token'
 import type { FileEditTrace } from '@/types/fileTrace'
-import type { RuntimeNotice } from '@/utils/runtimeNotice'
+import { buildUsageNotice, type RuntimeNotice } from '@/utils/runtimeNotice'
+import { mergeFinalUsageSnapshotCounts } from '@/utils/runtimeUsage'
 
 export type MessageRole = 'user' | 'assistant' | 'system' | 'compression'
 export type MessageStatus = 'pending' | 'streaming' | 'completed' | 'error' | 'interrupted'
@@ -137,6 +139,34 @@ function dedupeMessagesById(items: Message[]): Message[] {
   }
 
   return Array.from(map.values())
+}
+
+function parseRuntimeNoticeNumber(notice: RuntimeNotice, labels: string[]): number | null {
+  const lowerLabels = labels.map(label => label.toLowerCase())
+  const lines = notice.content
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+
+  for (const line of lines) {
+    const normalizedLine = line.replace(/^-\s*/, '')
+    const separatorIndex = normalizedLine.indexOf(':')
+    if (separatorIndex < 0) {
+      continue
+    }
+
+    const label = normalizedLine.slice(0, separatorIndex).trim().toLowerCase()
+    if (!lowerLabels.includes(label)) {
+      continue
+    }
+
+    const numeric = Number(normalizedLine.slice(separatorIndex + 1).replace(/[^\d]/g, ''))
+    if (Number.isFinite(numeric) && numeric > 0) {
+      return numeric
+    }
+  }
+
+  return null
 }
 
 const EMPTY_MESSAGES: Message[] = []
@@ -678,6 +708,8 @@ export const useMessageStore = defineStore('message', () => {
   async function loadMessages(sessionId: string) {
     const notificationStore = useNotificationStore()
     const sessionExecutionStore = useSessionExecutionStore()
+    const sessionStore = useSessionStore()
+    const tokenStore = useTokenStore()
     isLoading.value = true
     try {
       const result = await invoke<PaginatedRustMessages>('list_messages', {
@@ -713,8 +745,38 @@ export const useMessageStore = defineStore('message', () => {
         ))
         : nextSessionMessages
 
-      updateGlobalMessagesForSession(sessionId, normalizedSessionMessages)
-      setSessionMessages(sessionId, normalizedSessionMessages)
+      const session = sessionStore.sessions.find(item => item.id === sessionId)
+      const sessionProvider = session?.cliSessionProvider?.trim().toLowerCase()
+      const correctedSessionMessages = sessionProvider
+        ? await reconcilePersistedUsageDisplay(sessionId, normalizedSessionMessages)
+        : normalizedSessionMessages
+
+      const latestAssistantMessage = [...correctedSessionMessages]
+        .reverse()
+        .find(message => message.role === 'assistant')
+      const latestUsageNotice = latestAssistantMessage?.runtimeNotices?.find(notice => notice.id === 'usage')
+      if (latestUsageNotice) {
+        const restoredInputTokens = parseRuntimeNoticeNumber(latestUsageNotice, ['输入 Tokens', 'input tokens'])
+        const restoredOutputTokens = parseRuntimeNoticeNumber(latestUsageNotice, ['输出 Tokens', 'output tokens'])
+        const restoredOccupancy = parseRuntimeNoticeNumber(latestUsageNotice, ['上下文占用 Tokens', 'context occupancy tokens'])
+          ?? (
+            (restoredInputTokens ?? 0) + (restoredOutputTokens ?? 0) > 0
+              ? (restoredInputTokens ?? 0) + (restoredOutputTokens ?? 0)
+              : restoredInputTokens
+          )
+        tokenStore.updateRealtimeTokens(
+          sessionId,
+          restoredInputTokens ?? undefined,
+          restoredOutputTokens ?? undefined,
+          undefined,
+          restoredOccupancy ?? undefined
+        )
+      } else {
+        tokenStore.clearRealtimeTokens(sessionId)
+      }
+
+      updateGlobalMessagesForSession(sessionId, correctedSessionMessages)
+      setSessionMessages(sessionId, correctedSessionMessages)
 
       if (streamingMessagesToReconcile.length > 0) {
         await Promise.allSettled(streamingMessagesToReconcile.map(async message => {
@@ -746,6 +808,98 @@ export const useMessageStore = defineStore('message', () => {
     } finally {
       isLoading.value = false
     }
+  }
+
+  async function reconcilePersistedUsageDisplay(
+    sessionId: string,
+    messages: Message[]
+  ): Promise<Message[]> {
+    const latestAssistantEntry = [...messages]
+      .map((message, index) => ({ message, index }))
+      .reverse()
+      .find(entry => entry.message.role === 'assistant')
+
+    if (!latestAssistantEntry) {
+      return messages
+    }
+
+    const latestAssistantIndex = latestAssistantEntry.index
+    const latestAssistant = latestAssistantEntry.message
+    const sessionStore = useSessionStore()
+    const session = sessionStore.sessions.find(item => item.id === sessionId)
+    if (!session) {
+      return messages
+    }
+    const sessionProvider = session.cliSessionProvider?.trim().toLowerCase()
+
+    const latestUsage = await readSessionCliUsageSnapshot(session)
+    if (!latestUsage) {
+      return messages
+    }
+
+    const usageNotice = latestAssistant.runtimeNotices?.find(notice => notice.id === 'usage')
+    const persistedInputTokens = usageNotice
+      ? parseRuntimeNoticeNumber(usageNotice, ['输入 Tokens', 'input tokens'])
+      : null
+    const persistedOutputTokens = usageNotice
+      ? parseRuntimeNoticeNumber(usageNotice, ['输出 Tokens', 'output tokens'])
+      : null
+    const persistedExplicitOccupancyTokens = usageNotice
+      ? parseRuntimeNoticeNumber(usageNotice, ['上下文占用 Tokens', 'context occupancy tokens'])
+      : null
+    const mergedUsageCounts = mergeFinalUsageSnapshotCounts({
+      inputTokens: persistedInputTokens ?? undefined,
+      outputTokens: persistedOutputTokens ?? undefined
+    }, {
+      inputTokens: latestUsage.inputTokens,
+      outputTokens: latestUsage.outputTokens
+    }, sessionProvider)
+    const resolvedInputTokens = mergedUsageCounts.inputTokens ?? null
+    const resolvedOutputTokens = mergedUsageCounts.outputTokens ?? null
+    const resolvedOccupancy = latestUsage.contextWindowOccupancy
+      ?? persistedExplicitOccupancyTokens
+      ?? (
+        (resolvedInputTokens ?? 0) > 0 || (resolvedOutputTokens ?? 0) > 0
+          ? (resolvedInputTokens ?? 0) + (resolvedOutputTokens ?? 0)
+          : undefined
+      )
+    if (
+      ((resolvedInputTokens ?? 0) <= 0 && (resolvedOutputTokens ?? 0) <= 0)
+      || (
+        persistedInputTokens === resolvedInputTokens
+        && persistedOutputTokens === resolvedOutputTokens
+        && (persistedExplicitOccupancyTokens ?? null) === (resolvedOccupancy ?? null)
+      )
+    ) {
+      return messages
+    }
+
+    const nextUsageNotice = buildUsageNotice({
+      model: latestUsage.model,
+      inputTokens: resolvedInputTokens ?? undefined,
+      outputTokens: resolvedOutputTokens ?? undefined,
+      contextWindowOccupancy: resolvedOccupancy
+    })
+    if (!nextUsageNotice) {
+      return messages
+    }
+
+    return messages.map((message, index) => {
+      if (index !== latestAssistantIndex) {
+        return message
+      }
+
+      const runtimeNotices = usageNotice
+        ? (message.runtimeNotices ?? []).map(notice =>
+          notice.id === 'usage' ? nextUsageNotice : notice
+        )
+        : [...(message.runtimeNotices ?? []), nextUsageNotice]
+
+      return {
+        ...message,
+        runtimeNotices
+      }
+    })
   }
 
   // 加载更多历史消息

@@ -156,6 +156,27 @@
   outline-offset: -2px;
 }
 
+.session-batch-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+  padding: 0 var(--spacing-2) var(--spacing-2);
+  flex-wrap: wrap;
+}
+
+.session-batch-bar__label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.session-batch-bar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  flex-wrap: wrap;
+}
+
 .session-list {
   flex: 1;
   overflow-y: auto;

@@ -89,21 +89,27 @@ const { t } = useSessionPanelDialogs()
               class="confirm-dialog__icon"
             />
             <h4 class="confirm-dialog__title">
-              {{ t('session.confirmDeleteTitle') }}
+              {{ deletingSessionCount > 1 ? t('session.confirmBatchDeleteTitle') : t('session.confirmDeleteTitle') }}
             </h4>
             <p class="confirm-dialog__message">
-              {{ t('session.confirmDeleteMessage', { name: deletingSession?.name }) }}
+              {{
+                deletingSessionCount > 1
+                  ? t('session.confirmBatchDeleteMessage', { count: deletingSessionCount })
+                  : t('session.confirmDeleteMessage', { name: deletingSession?.name })
+              }}
             </p>
           </div>
           <div class="confirm-dialog__actions">
             <EaButton
               type="secondary"
+              :disabled="isDeletingSessions"
               @click="emit('closeDelete')"
             >
               {{ t('common.cancel') }}
             </EaButton>
             <EaButton
               type="primary"
+              :loading="isDeletingSessions"
               @click="emit('confirmDelete')"
             >
               {{ t('common.confirmDelete') }}

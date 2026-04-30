@@ -8,6 +8,7 @@ const {
   canCreate,
   canEditCurrentRun,
   closeCreateDialog,
+  closeLogPanel,
   compactSoloSummary,
   completedCount,
   dialogMode,
@@ -24,6 +25,7 @@ const {
   currentRunCoordinatorLabel,
   currentRunParticipants,
   currentSteps,
+  timelineSteps,
   failedCount,
   blockedCount,
   formatTime,
@@ -36,6 +38,9 @@ const {
   handleResume,
   handleStart,
   handleStop,
+  isLogPanelOpen,
+  isLogPanelResizing,
+  logPanelWidth,
   openEditDialog,
   openCreateDialog,
   participantExpertOptions,
@@ -50,11 +55,17 @@ const {
   stepStatusLabel,
   saveRunEdits,
   updateCreateForm
+  ,
+  startLogPanelResize
 } = useSoloModePanel()
 </script>
 
 <template>
-  <div class="solo-mode-panel">
+  <div
+    class="solo-mode-panel"
+    :class="{ 'solo-mode-panel--with-log': currentRun && isLogPanelOpen }"
+    :style="currentRun && isLogPanelOpen ? { '--solo-log-panel-width': `${logPanelWidth}px` } : undefined"
+  >
     <div class="solo-mode-panel__list">
       <SoloRunList
         :runs="runs"
@@ -64,7 +75,10 @@ const {
       />
     </div>
 
-    <div class="solo-mode-panel__main">
+    <div
+      class="solo-mode-panel__main"
+      :class="{ 'solo-mode-panel__main--with-log': currentRun && isLogPanelOpen }"
+    >
       <template v-if="currentRun">
         <div class="solo-run-header">
           <div class="solo-run-header__meta">
@@ -230,14 +244,16 @@ const {
           <div class="solo-timeline__header">
             <div>
               <h3>任务过程时间线</h3>
-              <p>点击任一步骤卡片，右侧会切换到该步骤的执行日志流程。</p>
+              <p>点击任一步骤卡片，右侧会展开该步骤的执行日志流程。</p>
             </div>
-            <div
-              v-if="currentExecutionState?.status"
-              class="solo-timeline__runtime"
-            >
-              <span>运行态</span>
-              <strong>{{ currentExecutionState.status }}</strong>
+            <div class="solo-timeline__header-side">
+              <div
+                v-if="currentExecutionState?.status"
+                class="solo-timeline__runtime"
+              >
+                <span>运行态</span>
+                <strong>{{ currentExecutionState.status }}</strong>
+              </div>
             </div>
           </div>
 
@@ -254,7 +270,7 @@ const {
             class="solo-timeline__track"
           >
             <article
-              v-for="step in currentSteps"
+              v-for="step in timelineSteps"
               :key="step.id"
               class="solo-step-card"
               :class="[
@@ -317,15 +333,39 @@ const {
             SOLO Mode
           </p>
           <h2>选择一个运行，或者新建一个统一调度任务。</h2>
-          <span>左侧查看当前项目下的 SOLO 运行，中间查看步骤时间线，右侧查看选中步骤日志。</span>
+          <span>规划智能体会持续协调参与专家，自动推进步骤、回写结果并轮询执行直到达到目标。</span>
         </div>
       </div>
     </div>
 
     <div
-      v-if="currentRun"
+      v-if="currentRun && isLogPanelOpen"
       class="solo-mode-panel__log"
+      :style="{ width: `${logPanelWidth}px` }"
     >
+      <div
+        class="solo-mode-panel__log-resizer"
+        :class="{ 'solo-mode-panel__log-resizer--active': isLogPanelResizing }"
+        @mousedown="startLogPanelResize"
+      />
+      <button
+        class="solo-mode-panel__log-collapse"
+        title="收起日志面板"
+        @click="closeLogPanel"
+      >
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="9 18 15 12 9 6" />
+        </svg>
+      </button>
       <SoloExecutionLogPanel
         :run-id="currentRun.id"
         :step-id="selectedStep?.id ?? null"

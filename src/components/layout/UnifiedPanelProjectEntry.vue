@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { FileTree } from '@/components/fileTree'
 import type { Project } from '@/stores/project'
@@ -36,6 +36,7 @@ const emit = defineEmits<{
   saveEditSession: [session: Session]
   cancelEditSession: []
   deleteSession: [session: Session]
+  deleteSessions: [sessions: Session[]]
   updateEditingName: [value: string]
   selectFile: [path: string, project: Project]
 }>()
@@ -44,9 +45,38 @@ const { t } = useI18n()
 const projectItemRef = ref<HTMLElement | null>(null)
 const isCompactMenuOpen = ref(false)
 const fileTreeActivated = ref(props.currentTab === 'files')
+const selectedSessionIds = ref<string[]>([])
+const selectedSessions = computed(() => props.sessions.filter(session => selectedSessionIds.value.includes(session.id)))
+const selectedSessionCount = computed(() => selectedSessions.value.length)
+const hasSelectedSessions = computed(() => selectedSessionCount.value > 0)
+const allVisibleSessionsSelected = computed(() =>
+  props.sessions.length > 0 && selectedSessionCount.value === props.sessions.length
+)
 
 function handleStartEditSession(session: Session, event: Event) {
   emit('startEditSession', session, event)
+}
+
+function toggleSessionSelection(sessionId: string) {
+  selectedSessionIds.value = selectedSessionIds.value.includes(sessionId)
+    ? selectedSessionIds.value.filter(id => id !== sessionId)
+    : [...selectedSessionIds.value, sessionId]
+}
+
+function clearSelectedSessions() {
+  selectedSessionIds.value = []
+}
+
+function selectAllVisibleSessions() {
+  selectedSessionIds.value = props.sessions.map(session => session.id)
+}
+
+function handleBatchDeleteSessions() {
+  if (!selectedSessions.value.length) {
+    return
+  }
+
+  emit('deleteSessions', selectedSessions.value)
 }
 
 function closeCompactMenu(event: Event) {
@@ -136,6 +166,15 @@ watch(
       fileTreeActivated.value = true
     }
   }
+)
+
+watch(
+  () => props.sessions,
+  (sessions) => {
+    const visibleIds = new Set(sessions.map(session => session.id))
+    selectedSessionIds.value = selectedSessionIds.value.filter(sessionId => visibleIds.has(sessionId))
+  },
+  { deep: true }
 )
 </script>
 
@@ -305,14 +344,50 @@ watch(
 
     <div
       v-show="currentTab === 'sessions'"
-      class="tab-content"
+      class="tab-content tab-content--sessions"
     >
+      <div
+        v-if="sessions.length > 0"
+        class="session-batch-bar"
+      >
+        <span
+          v-if="hasSelectedSessions"
+          class="session-batch-bar__label"
+        >
+          {{ t('session.selectedCount', { count: selectedSessionCount }) }}
+        </span>
+        <div class="session-batch-bar__actions">
+          <button
+            class="session-batch-bar__button"
+            @click="allVisibleSessionsSelected ? clearSelectedSessions() : selectAllVisibleSessions()"
+          >
+            {{ allVisibleSessionsSelected ? t('common.clearSelection') : t('session.selectAllVisible') }}
+          </button>
+          <button
+            class="session-batch-bar__button"
+            :disabled="!hasSelectedSessions"
+            @click="clearSelectedSessions"
+          >
+            {{ t('common.clearSelection') }}
+          </button>
+          <button
+            class="session-batch-bar__button session-batch-bar__button--danger"
+            :disabled="!hasSelectedSessions"
+            @click="handleBatchDeleteSessions"
+          >
+            {{ t('common.batchDelete') }}
+          </button>
+        </div>
+      </div>
+
       <UnifiedPanelSessionList
         :sessions="sessions"
         :current-session-id="currentSessionId"
         :editing-session-id="editingSessionId"
         :editing-session-name="editingSessionName"
+        :selected-session-ids="selectedSessionIds"
         @select="emit('selectSession', $event)"
+        @toggle-select="toggleSessionSelection"
         @toggle-pin="emit('togglePin', $event)"
         @start-edit="handleStartEditSession"
         @save-edit="emit('saveEditSession', $event)"
@@ -692,6 +767,12 @@ watch(
   scrollbar-color: var(--scrollbar-thumb, var(--color-border)) var(--scrollbar-track, transparent);
 }
 
+.tab-content--sessions {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .tab-content::-webkit-scrollbar {
   width: var(--scrollbar-size, 6px);
 }
@@ -717,6 +798,70 @@ watch(
   min-height: 0;
   flex-direction: column;
   padding: var(--spacing-1);
+}
+
+.session-batch-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-surface) 96%, white) 0%,
+      var(--color-surface) 100%
+    );
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.session-batch-bar__label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  font-weight: var(--font-weight-medium);
+}
+
+.session-batch-bar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.session-batch-bar__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  padding: 0 var(--spacing-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: all var(--transition-fast) var(--easing-default);
+}
+
+.session-batch-bar__button:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  background-color: color-mix(in srgb, var(--color-primary) 8%, var(--color-surface));
+  color: var(--color-primary);
+}
+
+.session-batch-bar__button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.session-batch-bar__button--danger:hover:not(:disabled) {
+  border-color: var(--color-error);
+  color: var(--color-error);
+  background-color: var(--color-error-light);
 }
 
 .file-tree__loading {

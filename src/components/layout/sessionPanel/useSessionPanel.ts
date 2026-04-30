@@ -42,6 +42,8 @@ export function useSessionPanelView() {
 
   const showDeleteConfirm = ref(false)
   const deletingSession = ref<Session | null>(null)
+  const pendingDeleteSessionIds = ref<string[]>([])
+  const isDeletingSessions = ref(false)
   const showErrorModal = ref(false)
   const errorSession = ref<Session | null>(null)
   const showSummaryModal = ref(false)
@@ -57,6 +59,7 @@ export function useSessionPanelView() {
   const editingSessionId = ref<string | null>(null)
   const editingSessionName = ref('')
   const selectedProjectId = ref<string | null>(null)
+  const selectedSessionIds = ref<Set<string>>(new Set())
 
   const isNewSessionFormValid = computed(() => newSessionName.value.trim().length > 0)
 
@@ -68,9 +71,19 @@ export function useSessionPanelView() {
   const sessionActionMap = computed(() => new Map(
     currentProjectSessions.value.map(session => [session.id, getSessionActions(session)])
   ))
+  const selectedSessions = computed(() => currentProjectSessions.value.filter(session =>
+    selectedSessionIds.value.has(session.id)
+  ))
+  const selectedSessionCount = computed(() => selectedSessions.value.length)
+  const pendingDeleteSessionCount = computed(() => pendingDeleteSessionIds.value.length)
+  const hasSelectedSessions = computed(() => selectedSessionCount.value > 0)
+  const allVisibleSessionsSelected = computed(() =>
+    currentProjectSessions.value.length > 0 && selectedSessionCount.value === currentProjectSessions.value.length
+  )
 
   const handleProjectChange = (projectId: string) => {
     selectedProjectId.value = projectId
+    selectedSessionIds.value = new Set()
     projectStore.setCurrentProject(projectId)
   }
 
@@ -105,6 +118,7 @@ export function useSessionPanelView() {
   }
 
   watch(() => projectStore.currentProjectId, async (projectId, oldProjectId) => {
+    selectedSessionIds.value = new Set()
     if (oldProjectId !== undefined) {
       sessionStore.setCurrentSession(null)
     }
@@ -142,6 +156,16 @@ export function useSessionPanelView() {
   watch(() => sessionStore.searchQuery, (value) => {
     if (value !== searchInput.value) {
       searchInput.value = value
+    }
+  })
+
+  watch(currentProjectSessions, (sessions) => {
+    const visibleIds = new Set(sessions.map(session => session.id))
+    const nextSelected = new Set(
+      Array.from(selectedSessionIds.value).filter(sessionId => visibleIds.has(sessionId))
+    )
+    if (nextSelected.size !== selectedSessionIds.value.size) {
+      selectedSessionIds.value = nextSelected
     }
   })
 
@@ -197,25 +221,74 @@ export function useSessionPanelView() {
     sessionStore.togglePin(id)
   }
 
+  const toggleSessionSelection = (id: string) => {
+    const next = new Set(selectedSessionIds.value)
+    if (next.has(id)) {
+      next.delete(id)
+    } else {
+      next.add(id)
+    }
+    selectedSessionIds.value = next
+  }
+
+  const clearSelectedSessions = () => {
+    selectedSessionIds.value = new Set()
+  }
+
+  const selectAllVisibleSessions = () => {
+    selectedSessionIds.value = new Set(currentProjectSessions.value.map(session => session.id))
+  }
+
   const handleDeleteSession = (session: Session) => {
+    pendingDeleteSessionIds.value = [session.id]
     deletingSession.value = session
     showDeleteConfirm.value = true
   }
 
-  const confirmDelete = () => {
-    if (deletingSession.value) {
-      sessionStore.deleteSession(deletingSession.value.id)
-      if (projectStore.currentProjectId) {
-        projectStore.decrementSessionCount(projectStore.currentProjectId)
-      }
+  const handleDeleteSelectedSessions = () => {
+    if (!hasSelectedSessions.value) {
+      return
     }
-    showDeleteConfirm.value = false
-    deletingSession.value = null
+
+    pendingDeleteSessionIds.value = selectedSessions.value.map(session => session.id)
+    deletingSession.value = selectedSessionCount.value === 1 ? selectedSessions.value[0] ?? null : null
+    showDeleteConfirm.value = true
+  }
+
+  const confirmDelete = async () => {
+    if (pendingDeleteSessionIds.value.length === 0 || isDeletingSessions.value) {
+      return
+    }
+
+    isDeletingSessions.value = true
+    const sessionIds = [...pendingDeleteSessionIds.value]
+    try {
+      for (const sessionId of sessionIds) {
+        await sessionStore.deleteSession(sessionId)
+        if (projectStore.currentProjectId) {
+          projectStore.decrementSessionCount(projectStore.currentProjectId)
+        }
+      }
+
+      if (sessionIds.length > 1) {
+        notificationStore.success(t('session.batchDeleteSuccess', { count: sessionIds.length }))
+      }
+      clearSelectedSessions()
+      showDeleteConfirm.value = false
+      deletingSession.value = null
+      pendingDeleteSessionIds.value = []
+    } finally {
+      isDeletingSessions.value = false
+    }
   }
 
   const closeDeleteConfirm = () => {
+    if (isDeletingSessions.value) {
+      return
+    }
     showDeleteConfirm.value = false
     deletingSession.value = null
+    pendingDeleteSessionIds.value = []
   }
 
   const handleCreateSession = async (name: string) => {
@@ -458,14 +531,19 @@ export function useSessionPanelView() {
     editingSessionId,
     editingSessionName,
     errorSession,
+    allVisibleSessionsSelected,
+    clearSelectedSessions,
     handleAdd,
     handleCreateSession,
+    handleDeleteSelectedSessions,
     handleProjectChange,
     handleRefreshSessions,
     handleSearchInput,
     handleSelectSession,
+    hasSelectedSessions,
     hasSearchQuery,
     isClearingMessages,
+    isDeletingSessions,
     isNewSessionFormValid,
     newSessionName,
     projectStore,
@@ -473,7 +551,11 @@ export function useSessionPanelView() {
     retryErroredSession,
     saveEditSessionName,
     searchInput,
+    pendingDeleteSessionCount,
+    selectedSessionCount,
+    selectedSessionIds,
     selectedProjectId,
+    selectAllVisibleSessions,
     sessionActionMap,
     sessionStore,
     showClearMessagesConfirm,
@@ -482,6 +564,7 @@ export function useSessionPanelView() {
     showSummaryModal,
     summarySession,
     t,
+    toggleSessionSelection,
     uiStore,
     clearSearch
   }

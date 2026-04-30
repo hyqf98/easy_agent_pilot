@@ -362,7 +362,7 @@ export const useSessionStore = defineStore('session', () => {
 
       useMessageStore().clearSessionMessagesCache(id)
 
-      useTokenStore().clearSessionTokenCache(id)
+      useTokenStore().clearRealtimeTokens(id)
 
       useAiEditTraceStore().resetSession(id)
 
@@ -508,35 +508,103 @@ export const useSessionStore = defineStore('session', () => {
     windowManager.lockSession(sessionId).catch(console.error)
   }
 
+  function finalizeOpenSessionsUpdate(
+    nextOpenSessionIds: string[],
+    preferredCurrentSessionId?: string | null
+  ) {
+    openSessionIds.value = nextOpenSessionIds
+
+    const nextCurrentSessionId = preferredCurrentSessionId && nextOpenSessionIds.includes(preferredCurrentSessionId)
+      ? preferredCurrentSessionId
+      : nextOpenSessionIds[0] ?? null
+
+    currentSessionId.value = nextCurrentSessionId
+
+    const appStateStore = useAppStateStore()
+    appStateStore.setLastSessions([...openSessionIds.value])
+  }
+
+  function releaseSessionResources(sessionId: string) {
+    const windowManager = useWindowManagerStore()
+    windowManager.releaseSession(sessionId).catch(console.error)
+
+    const sessionExecutionStore = useSessionExecutionStore()
+    sessionExecutionStore.clearExecutionState(sessionId)
+  }
+
+  function closeSessionsBatch(
+    sessionIds: string[],
+    options: { preferredCurrentSessionId?: string | null } = {}
+  ) {
+    const closeIdSet = new Set(sessionIds.filter(sessionId => openSessionIds.value.includes(sessionId)))
+    if (closeIdSet.size === 0) {
+      return
+    }
+
+    const nextOpenSessionIds = openSessionIds.value.filter(sessionId => !closeIdSet.has(sessionId))
+    closeIdSet.forEach((sessionId) => {
+      releaseSessionResources(sessionId)
+    })
+
+    finalizeOpenSessionsUpdate(nextOpenSessionIds, options.preferredCurrentSessionId)
+  }
+
   // 关闭会话（从标签栏移除）
   function closeSession(sessionId: string) {
     const index = openSessionIds.value.indexOf(sessionId)
     if (index === -1) return
 
-    openSessionIds.value.splice(index, 1)
-
-    // 释放会话锁定
-    const windowManager = useWindowManagerStore()
-    windowManager.releaseSession(sessionId).catch(console.error)
-
-    // 清理该会话的执行状态
-    const sessionExecutionStore = useSessionExecutionStore()
-    sessionExecutionStore.clearExecutionState(sessionId)
-
-    // 更新应用状态
-    const appStateStore = useAppStateStore()
-    appStateStore.setLastSessions([...openSessionIds.value])
-
-    // 如果关闭的是当前会话，切换到相邻的会话
+    let nextCurrentSessionId = currentSessionId.value
     if (currentSessionId.value === sessionId) {
-      if (openSessionIds.value.length > 0) {
-        // 切换到关闭会话的下一个，如果没有下一个则切换到上一个
-        const newIndex = Math.min(index, openSessionIds.value.length - 1)
-        currentSessionId.value = openSessionIds.value[newIndex]
-      } else {
-        currentSessionId.value = null
-      }
+      const remainingSessionIds = openSessionIds.value.filter(id => id !== sessionId)
+      nextCurrentSessionId = remainingSessionIds.length > 0
+        ? remainingSessionIds[Math.min(index, remainingSessionIds.length - 1)]
+        : null
     }
+
+    closeSessionsBatch([sessionId], {
+      preferredCurrentSessionId: nextCurrentSessionId
+    })
+  }
+
+  function closeAllSessions() {
+    closeSessionsBatch([...openSessionIds.value], {
+      preferredCurrentSessionId: null
+    })
+  }
+
+  function closeOtherSessions(sessionId: string) {
+    const nextOpenSessionIds = openSessionIds.value.filter(id => id === sessionId)
+    if (nextOpenSessionIds.length === openSessionIds.value.length) {
+      return
+    }
+
+    closeSessionsBatch(
+      openSessionIds.value.filter(id => id !== sessionId),
+      { preferredCurrentSessionId: sessionId }
+    )
+  }
+
+  function closeSessionsToLeft(sessionId: string) {
+    const targetIndex = openSessionIds.value.indexOf(sessionId)
+    if (targetIndex <= 0) {
+      return
+    }
+
+    closeSessionsBatch(openSessionIds.value.slice(0, targetIndex), {
+      preferredCurrentSessionId: currentSessionId.value === sessionId ? sessionId : currentSessionId.value
+    })
+  }
+
+  function closeSessionsToRight(sessionId: string) {
+    const targetIndex = openSessionIds.value.indexOf(sessionId)
+    if (targetIndex === -1 || targetIndex >= openSessionIds.value.length - 1) {
+      return
+    }
+
+    closeSessionsBatch(openSessionIds.value.slice(targetIndex + 1), {
+      preferredCurrentSessionId: currentSessionId.value === sessionId ? sessionId : currentSessionId.value
+    })
   }
 
   // 检查会话是否已打开
@@ -573,6 +641,11 @@ export const useSessionStore = defineStore('session', () => {
     saveOpenSessions()
   }, { deep: true })
 
+  watch(currentSessionId, (sessionId) => {
+    const appStateStore = useAppStateStore()
+    appStateStore.setLastActiveSession(sessionId)
+  })
+
   return {
     // State
     sessions,
@@ -601,6 +674,10 @@ export const useSessionStore = defineStore('session', () => {
     // 多会话管理
     openSession,
     closeSession,
+    closeAllSessions,
+    closeOtherSessions,
+    closeSessionsToLeft,
+    closeSessionsToRight,
     isSessionOpen,
     loadOpenSessions,
     saveOpenSessions

@@ -12,10 +12,10 @@ use super::abnormal_completion::{
 };
 use super::cli_common::{
     build_cli_failure_report, build_content_event, build_error_event, build_execution_summary,
-    build_system_event,
-    build_timeout_error_message, describe_timeout_config, detect_cli_timeout, emit_cli_event,
-    extract_image_paths, preview_text, render_cli_message, shell_escape,
-    timeout_config_for_execution_mode, CliExecutionMonitor,
+    build_system_event, build_timeout_error_message, describe_timeout_config, detect_cli_timeout,
+    emit_cli_event, extract_file_paths, extract_image_paths, preview_text, render_cli_message,
+    shell_escape, timeout_config_for_execution_mode, CliExecutionMonitor,
+    NonImageAttachmentPromptMode,
 };
 use crate::commands::cli_support::{build_cli_launch_error_message, build_tokio_cli_command};
 use crate::commands::conversation::abort::{
@@ -291,10 +291,13 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
 
         let input_text = messages
             .iter()
-            .map(render_cli_message)
+            .map(|message| {
+                render_cli_message(message, false, NonImageAttachmentPromptMode::MissingOnly)
+            })
             .collect::<Vec<_>>()
             .join("\n\n");
-        let image_paths = extract_image_paths(&messages);
+        let file_paths = extract_file_paths(&messages);
+        let image_paths = extract_image_paths(&messages).map_err(anyhow::Error::msg)?;
 
         let mut args = vec!["run".to_string()];
         args.push("--format".to_string());
@@ -318,6 +321,14 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
             if !custom_args.is_empty() {
                 args.extend(custom_args.iter().cloned());
             }
+        }
+
+        if !file_paths.is_empty() {
+            for path in &file_paths {
+                args.push("-f".to_string());
+                args.push(path.clone());
+            }
+            log_info!("追加 OpenCode CLI 文件参数: -f x{}", file_paths.len());
         }
 
         if !image_paths.is_empty() {
@@ -642,10 +653,10 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
                 output_tokens: None,
                 model: None,
                 external_session_id: None,
-            raw_input_tokens: None,
-            raw_output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
             };
             emit_cli_event(&app, &event_name, plan_id.as_ref(), &done_event);
         }
@@ -703,8 +714,11 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
                 );
                 return Ok(());
             }
-            let failure_message =
-                format!("OpenCode CLI 执行失败，退出码: {:?}, {}", status.code(), summary);
+            let failure_message = format!(
+                "OpenCode CLI 执行失败，退出码: {:?}, {}",
+                status.code(),
+                summary
+            );
             log_error!(
                 "{}",
                 build_cli_failure_report(
@@ -864,10 +878,10 @@ fn build_thinking_cli_event(session_id: &str, content: String) -> CliStreamEvent
         output_tokens: None,
         model: None,
         external_session_id: None,
-    raw_input_tokens: None,
-    raw_output_tokens: None,
-    cache_read_input_tokens: None,
-    cache_creation_input_tokens: None,
+        raw_input_tokens: None,
+        raw_output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     }
 }
 
@@ -890,10 +904,10 @@ fn build_tool_use_cli_event(
         output_tokens: None,
         model: None,
         external_session_id: None,
-    raw_input_tokens: None,
-    raw_output_tokens: None,
-    cache_read_input_tokens: None,
-    cache_creation_input_tokens: None,
+        raw_input_tokens: None,
+        raw_output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     }
 }
 
@@ -915,10 +929,10 @@ fn build_tool_result_cli_event(
         output_tokens: None,
         model: None,
         external_session_id: None,
-    raw_input_tokens: None,
-    raw_output_tokens: None,
-    cache_read_input_tokens: None,
-    cache_creation_input_tokens: None,
+        raw_input_tokens: None,
+        raw_output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     }
 }
 
@@ -1371,7 +1385,10 @@ fn parse_opencode_event_msg(session_id: &str, json: &serde_json::Value) -> Optio
         .map(|text| build_system_event(session_id, text))
         .or_else(|| Some(build_system_event(session_id, "任务已开始".to_string()))),
         "compaction" => {
-            let auto = payload.get("auto").and_then(|v| v.as_bool()).unwrap_or(false);
+            let auto = payload
+                .get("auto")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let trigger = if auto { "auto" } else { "manual" };
             Some(build_system_event(
                 session_id,
@@ -1439,10 +1456,10 @@ fn parse_opencode_json_output(
                 output_tokens: None,
                 model: None,
                 external_session_id: None,
-            raw_input_tokens: None,
-            raw_output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
             })
         }
         // thinking_start 显式事件（OpenCode 可能单独发送）
@@ -1459,10 +1476,10 @@ fn parse_opencode_json_output(
             output_tokens: None,
             model: None,
             external_session_id: None,
-        raw_input_tokens: None,
-        raw_output_tokens: None,
-        cache_read_input_tokens: None,
-        cache_creation_input_tokens: None,
+            raw_input_tokens: None,
+            raw_output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
         }),
         // 工具调用开始
         "tool_use" | "content_block_start" | "tool_call" => {
@@ -1503,10 +1520,10 @@ fn parse_opencode_json_output(
                 output_tokens: None,
                 model: extract_opencode_model_name(json, requested_model),
                 external_session_id: None,
-            raw_input_tokens: None,
-            raw_output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
             })
         }
         // 工具输入增量
@@ -1533,10 +1550,10 @@ fn parse_opencode_json_output(
                 output_tokens: None,
                 model: None,
                 external_session_id: None,
-            raw_input_tokens: None,
-            raw_output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
             })
         }
         // 工具结果
@@ -1572,10 +1589,10 @@ fn parse_opencode_json_output(
                 output_tokens: None,
                 model: None,
                 external_session_id: None,
-            raw_input_tokens: None,
-            raw_output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
             })
         }
         // 完整 assistant 消息（非流式）/ OpenCode 消息快照
@@ -1704,10 +1721,10 @@ fn parse_opencode_json_output(
                     output_tokens: None,
                     model: None,
                     external_session_id: Some(sid),
-                raw_input_tokens: None,
-                raw_output_tokens: None,
-                cache_read_input_tokens: None,
-                cache_creation_input_tokens: None,
+                    raw_input_tokens: None,
+                    raw_output_tokens: None,
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
                 })
             }
         }
@@ -1769,10 +1786,10 @@ fn parse_opencode_json_output(
                             output_tokens: None,
                             model: None,
                             external_session_id: None,
-                        raw_input_tokens: None,
-                        raw_output_tokens: None,
-                        cache_read_input_tokens: None,
-                        cache_creation_input_tokens: None,
+                            raw_input_tokens: None,
+                            raw_output_tokens: None,
+                            cache_read_input_tokens: None,
+                            cache_creation_input_tokens: None,
                         })
                     } else {
                         None
@@ -1816,10 +1833,10 @@ fn parse_opencode_json_output(
                         output_tokens: None,
                         model: None,
                         external_session_id: None,
-                    raw_input_tokens: None,
-                    raw_output_tokens: None,
-                    cache_read_input_tokens: None,
-                    cache_creation_input_tokens: None,
+                        raw_input_tokens: None,
+                        raw_output_tokens: None,
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                     })
                 }
                 "reasoning" | "thinking" | "reasoning_content" => {
@@ -1843,10 +1860,10 @@ fn parse_opencode_json_output(
                         output_tokens: None,
                         model: None,
                         external_session_id: None,
-                    raw_input_tokens: None,
-                    raw_output_tokens: None,
-                    cache_read_input_tokens: None,
-                    cache_creation_input_tokens: None,
+                        raw_input_tokens: None,
+                        raw_output_tokens: None,
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                     })
                 }
                 "text" | "message" => {
@@ -1886,10 +1903,10 @@ fn parse_opencode_json_output(
                             output_tokens: None,
                             model: None,
                             external_session_id: None,
-                        raw_input_tokens: None,
-                        raw_output_tokens: None,
-                        cache_read_input_tokens: None,
-                        cache_creation_input_tokens: None,
+                            raw_input_tokens: None,
+                            raw_output_tokens: None,
+                            cache_read_input_tokens: None,
+                            cache_creation_input_tokens: None,
                         })
                     } else {
                         None
@@ -1907,28 +1924,15 @@ fn parse_opencode_json_output(
             };
             let counts = extract_usage_counts(usage);
 
-            let cumulative_total = if is_step_finish {
-                usage.and_then(|u| u.get("total")).and_then(|t| t.as_u64()).map(|t| t as u32)
-            } else {
-                None
-            };
-
             let model = extract_opencode_model_name(json, requested_model);
             let external_session_id = extract_external_session_id(json);
 
             let has_any_data = counts.input_tokens.is_some()
                 || counts.output_tokens.is_some()
-                || cumulative_total.is_some()
                 || model.is_some()
                 || external_session_id.is_some();
 
             if has_any_data {
-                let raw_input = cumulative_total.or(counts.raw_input_tokens);
-                let raw_output = if is_step_finish {
-                    usage.and_then(|u| u.get("output")).and_then(|t| t.as_u64()).map(|t| t as u32)
-                } else {
-                    counts.raw_output_tokens
-                };
                 Some(CliStreamEvent {
                     event_type: "usage".to_string(),
                     session_id: session_id.to_string(),
@@ -1942,8 +1946,8 @@ fn parse_opencode_json_output(
                     output_tokens: counts.output_tokens,
                     model,
                     external_session_id,
-                    raw_input_tokens: raw_input,
-                    raw_output_tokens: raw_output,
+                    raw_input_tokens: counts.raw_input_tokens,
+                    raw_output_tokens: counts.raw_output_tokens,
                     cache_read_input_tokens: counts.cache_read_input_tokens,
                     cache_creation_input_tokens: counts.cache_creation_input_tokens,
                 })
@@ -1953,8 +1957,15 @@ fn parse_opencode_json_output(
         }
         // OpenCode compaction 事件（上下文压缩信号）
         "compaction" => {
-            let payload = json.get("data").or_else(|| json.get("part")).or_else(|| json.get("payload")).unwrap_or(json);
-            let auto = payload.get("auto").and_then(|v| v.as_bool()).unwrap_or(false);
+            let payload = json
+                .get("data")
+                .or_else(|| json.get("part"))
+                .or_else(|| json.get("payload"))
+                .unwrap_or(json);
+            let auto = payload
+                .get("auto")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let trigger = if auto { "auto" } else { "manual" };
             Some(build_system_event(
                 session_id,
@@ -2015,10 +2026,10 @@ fn parse_opencode_json_output(
                                             output_tokens: None,
                                             model: None,
                                             external_session_id: None,
-                                        raw_input_tokens: None,
-                                        raw_output_tokens: None,
-                                        cache_read_input_tokens: None,
-                                        cache_creation_input_tokens: None,
+                                            raw_input_tokens: None,
+                                            raw_output_tokens: None,
+                                            cache_read_input_tokens: None,
+                                            cache_creation_input_tokens: None,
                                         });
                                     }
                                 }
@@ -2047,10 +2058,10 @@ fn parse_opencode_json_output(
                                         output_tokens: None,
                                         model: None,
                                         external_session_id: None,
-                                    raw_input_tokens: None,
-                                    raw_output_tokens: None,
-                                    cache_read_input_tokens: None,
-                                    cache_creation_input_tokens: None,
+                                        raw_input_tokens: None,
+                                        raw_output_tokens: None,
+                                        cache_read_input_tokens: None,
+                                        cache_creation_input_tokens: None,
                                     });
                                 }
                             }
@@ -2078,10 +2089,10 @@ fn parse_opencode_json_output(
                                     output_tokens: None,
                                     model: None,
                                     external_session_id: None,
-                                raw_input_tokens: None,
-                                raw_output_tokens: None,
-                                cache_read_input_tokens: None,
-                                cache_creation_input_tokens: None,
+                                    raw_input_tokens: None,
+                                    raw_output_tokens: None,
+                                    cache_read_input_tokens: None,
+                                    cache_creation_input_tokens: None,
                                 });
                             }
                             _ => {}
@@ -2168,14 +2179,8 @@ fn extract_usage_counts(usage: Option<&serde_json::Value>) -> OpenCodeUsageCount
         return OpenCodeUsageCounts::default();
     }
 
-    let input_tokens = raw_input_tokens
-        .map(|raw| {
-            raw.saturating_sub(cache_read.unwrap_or(0))
-                .saturating_sub(cache_creation.unwrap_or(0))
-        });
-
     OpenCodeUsageCounts {
-        input_tokens,
+        input_tokens: raw_input_tokens,
         output_tokens: raw_output_tokens,
         raw_input_tokens,
         raw_output_tokens,
@@ -2219,9 +2224,9 @@ mod tests {
             .expect("expected usage event");
 
         assert_eq!(event.event_type, "usage");
-        assert_eq!(event.input_tokens, Some(15198));
+        assert_eq!(event.input_tokens, Some(33054));
         assert_eq!(event.output_tokens, Some(3));
-        assert_eq!(event.raw_input_tokens, Some(50913));
+        assert_eq!(event.raw_input_tokens, Some(33054));
         assert_eq!(event.raw_output_tokens, Some(3));
         assert_eq!(event.cache_read_input_tokens, Some(17856));
         assert_eq!(

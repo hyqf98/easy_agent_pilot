@@ -1,19 +1,25 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   useAgentConfigStore,
   type AgentModelConfig
 } from '@/stores/agentConfig'
-import { EaButton } from '@/components/common'
+import { EaButton, EaIcon } from '@/components/common'
+import {
+  formatContextWindowCount,
+  parseContextWindowInput
+} from '@/utils/contextWindow'
 
-// 上下文窗口预设选项
 const CONTEXT_WINDOW_PRESETS = [
   { label: '32K', value: 32000 },
+  { label: '64K', value: 64000 },
   { label: '128K (默认)', value: 128000 },
-  { label: '400K', value: 400000 },
   { label: '200K', value: 200000 },
+  { label: '256K', value: 256000 },
+  { label: '400K', value: 400000 },
   { label: '1M', value: 1000000 },
-  { label: '自定义', value: 'custom' }
+  { label: '1.05M', value: 1050000 },
+  { label: '1.28M', value: 1280000 }
 ] as const
 
 const props = defineProps<{
@@ -34,6 +40,8 @@ const emit = defineEmits<{
 const agentConfigStore = useAgentConfigStore()
 
 const isEditMode = computed(() => !!props.model)
+const contextWindowFieldRef = ref<HTMLElement | null>(null)
+const showContextWindowOptions = ref(false)
 
 const providerPlaceholders = computed(() => {
   switch (props.provider) {
@@ -60,31 +68,72 @@ const providerPlaceholders = computed(() => {
 
 // 保存按钮是否可用
 const canSave = computed(() => {
+  const hasValidContextWindow = contextWindow.value !== undefined
   // 内置默认模型只需要 displayName
   if (isBuiltinDefaultModel.value) {
-    return !!formData.value.displayName.trim()
+    return !!formData.value.displayName.trim() && hasValidContextWindow
   }
   // 其他模型需要 modelId 和 displayName
-  return !!formData.value.modelId.trim() && !!formData.value.displayName.trim()
+  return !!formData.value.modelId.trim() && !!formData.value.displayName.trim() && hasValidContextWindow
 })
 
 // 表单
 const formData = ref({
   modelId: '',
   displayName: '',
-  contextWindowPreset: '128000' as string,
-  customContextWindow: 128000
+  contextWindowInput: '128K'
 })
 
-// 是否显示自定义输入框
-const showCustomInput = computed(() => formData.value.contextWindowPreset === 'custom')
-
-// 最终的上下文窗口值
 const contextWindow = computed(() => {
-  if (formData.value.contextWindowPreset === 'custom') {
-    return formData.value.customContextWindow
+  return parseContextWindowInput(formData.value.contextWindowInput)
+})
+
+const contextWindowError = computed(() => {
+  if (!formData.value.contextWindowInput.trim()) {
+    return '请输入上下文窗口大小'
   }
-  return parseInt(formData.value.contextWindowPreset, 10)
+
+  if (contextWindow.value === undefined) {
+    return '支持 1280000、200.4K、1.28M 这类格式'
+  }
+
+  return ''
+})
+
+const contextWindowPreview = computed(() => {
+  if (contextWindow.value === undefined) {
+    return ''
+  }
+
+  return formatContextWindowCount(contextWindow.value)
+})
+
+function applyContextWindowPreset(label: string) {
+  formData.value.contextWindowInput = label
+  showContextWindowOptions.value = false
+}
+
+function toggleContextWindowOptions() {
+  showContextWindowOptions.value = !showContextWindowOptions.value
+}
+
+function handleDocumentPointerDown(event: MouseEvent) {
+  const target = event.target
+  if (!(target instanceof Node)) {
+    return
+  }
+
+  if (!contextWindowFieldRef.value?.contains(target)) {
+    showContextWindowOptions.value = false
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('mousedown', handleDocumentPointerDown)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('mousedown', handleDocumentPointerDown)
 })
 
 // 提交状态
@@ -100,15 +149,13 @@ watch(() => props.model, (model) => {
     formData.value = {
       modelId: model.modelId,
       displayName: model.displayName,
-      contextWindowPreset: matchingPreset ? presetValue! : 'custom',
-      customContextWindow: model.contextWindow || 128000
+      contextWindowInput: matchingPreset?.label || formatContextWindowCount(model.contextWindow || 128000)
     }
   } else {
     formData.value = {
       modelId: '',
       displayName: '',
-      contextWindowPreset: '128000',
-      customContextWindow: 128000
+      contextWindowInput: '128K'
     }
   }
 }, { immediate: true })
@@ -121,6 +168,10 @@ const handleSubmit = async () => {
 
   isSubmitting.value = true
   try {
+    if (contextWindow.value === undefined) {
+      return
+    }
+
     if (isEditMode.value && props.model) {
       await agentConfigStore.updateModelConfig(props.model.id, props.agentId, {
         modelId: formData.value.modelId,
@@ -205,29 +256,56 @@ const handleClose = () => {
 
           <div class="form-group">
             <label class="form-label">上下文窗口</label>
-            <select
-              v-model="formData.contextWindowPreset"
-              class="form-select"
+            <div
+              ref="contextWindowFieldRef"
+              class="context-window-combobox"
             >
-              <option
-                v-for="preset in CONTEXT_WINDOW_PRESETS"
-                :key="preset.value"
-                :value="preset.value.toString()"
+              <input
+                v-model="formData.contextWindowInput"
+                type="text"
+                class="form-input context-window-combobox__input"
+                :class="{ 'form-input--error': !!contextWindowError }"
+                placeholder="例如 1280000、200.4K、1.28M"
               >
-                {{ preset.label }}
-              </option>
-            </select>
-            <input
-              v-if="showCustomInput"
-              v-model.number="formData.customContextWindow"
-              type="number"
-              class="form-input form-input--custom"
-              placeholder="输入自定义大小"
-              min="1000"
-              step="1000"
-            >
+              <button
+                type="button"
+                class="context-window-combobox__toggle"
+                :aria-expanded="showContextWindowOptions"
+                aria-label="展开上下文窗口常用选项"
+                @click="toggleContextWindowOptions"
+              >
+                <EaIcon
+                  name="chevron-down"
+                  :size="16"
+                />
+              </button>
+              <div
+                v-if="showContextWindowOptions"
+                class="context-window-combobox__menu"
+              >
+                <button
+                  v-for="preset in CONTEXT_WINDOW_PRESETS"
+                  :key="preset.value"
+                  type="button"
+                  class="context-window-combobox__option"
+                  @click="applyContextWindowPreset(preset.label)"
+                >
+                  <span>{{ preset.label }}</span>
+                  <span class="context-window-combobox__option-value">{{ preset.value.toLocaleString() }}</span>
+                </button>
+              </div>
+            </div>
             <p class="form-hint">
               模型的最大上下文长度（token 数）
+              <template v-if="contextWindowPreview">
+                ，当前识别为 {{ contextWindowPreview }}
+              </template>
+            </p>
+            <p
+              v-if="contextWindowError"
+              class="form-error"
+            >
+              {{ contextWindowError }}
             </p>
           </div>
         </div>
@@ -344,6 +422,11 @@ const handleClose = () => {
   color: var(--color-text-tertiary);
 }
 
+.form-error {
+  font-size: var(--font-size-xs);
+  color: var(--color-danger, #ef4444);
+}
+
 .form-input {
   width: 100%;
   padding: var(--spacing-2) var(--spacing-3);
@@ -360,6 +443,83 @@ const handleClose = () => {
   border-color: var(--color-primary);
 }
 
+.form-input--error {
+  border-color: var(--color-danger, #ef4444);
+}
+
+.context-window-combobox {
+  position: relative;
+}
+
+.context-window-combobox__input {
+  padding-right: 44px;
+}
+
+.context-window-combobox__toggle {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transform: translateY(-50%);
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.context-window-combobox__toggle:hover {
+  background-color: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+
+.context-window-combobox__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 10;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+}
+
+.context-window-combobox__option {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+  padding: 10px 12px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.context-window-combobox__option:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.context-window-combobox__option-value {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
 .form-input::placeholder {
   color: var(--color-text-tertiary);
 }
@@ -367,33 +527,6 @@ const handleClose = () => {
 .form-input:disabled {
   opacity: 0.6;
   cursor: not-allowed;
-}
-
-.form-input--custom {
-  margin-top: var(--spacing-2);
-}
-
-.form-select {
-  width: 100%;
-  padding: var(--spacing-2) var(--spacing-3);
-  background-color: var(--color-bg-tertiary);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  font-size: var(--font-size-sm);
-  color: var(--color-text-primary);
-  cursor: pointer;
-  transition: border-color var(--transition-fast);
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
-  background-position: right var(--spacing-2) center;
-  background-repeat: no-repeat;
-  background-size: 1.5em 1.5em;
-  padding-right: 2.5rem;
-}
-
-.form-select:focus {
-  outline: none;
-  border-color: var(--color-primary);
 }
 
 .modal-footer {

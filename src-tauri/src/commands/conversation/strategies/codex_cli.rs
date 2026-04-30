@@ -15,12 +15,12 @@ use super::abnormal_completion::{
 };
 use super::cli_common::{
     build_cli_failure_report, build_content_event, build_error_event, build_execution_summary,
-    build_system_event,
-    build_timeout_error_message, describe_timeout_config, detect_cli_timeout, emit_cli_event,
-    extract_error_from_json_blob, extract_image_paths, extract_result_content_from_json_blob,
-    extract_runtime_system_notice, extract_structured_output_from_json_blob,
-    parse_json_blob_with_fallback, preview_text, render_cli_message, shell_escape,
-    timeout_config_for_execution_mode, CliExecutionMonitor,
+    build_system_event, build_timeout_error_message, describe_timeout_config, detect_cli_timeout,
+    emit_cli_event, extract_error_from_json_blob, extract_image_paths,
+    extract_result_content_from_json_blob, extract_runtime_system_notice,
+    extract_structured_output_from_json_blob, parse_json_blob_with_fallback, preview_text,
+    render_cli_message, shell_escape, timeout_config_for_execution_mode, CliExecutionMonitor,
+    NonImageAttachmentPromptMode,
 };
 use crate::commands::cli_support::{build_cli_launch_error_message, build_tokio_cli_command};
 use crate::commands::conversation::abort::{
@@ -490,7 +490,7 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         }
 
         // 添加图片参数
-        let image_paths = extract_image_paths(&messages);
+        let image_paths = extract_image_paths(&messages).map_err(anyhow::Error::msg)?;
         if !image_paths.is_empty() {
             for path in &image_paths {
                 args.push("-i".to_string());
@@ -502,7 +502,7 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         // 构建输入消息
         let input_text = messages
             .iter()
-            .map(render_cli_message)
+            .map(|message| render_cli_message(message, false, NonImageAttachmentPromptMode::All))
             .collect::<Vec<_>>()
             .join("\n\n");
 
@@ -897,10 +897,10 @@ impl AgentExecutionStrategy for CodexCliStrategy {
                 output_tokens: None,
                 model: None,
                 external_session_id: discovered_session_id,
-            raw_input_tokens: None,
-            raw_output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
             };
             emit_cli_event(&app, &event_name, plan_id.as_ref(), &done_event);
         }
@@ -964,8 +964,11 @@ impl AgentExecutionStrategy for CodexCliStrategy {
                 );
                 return Ok(());
             }
-            let failure_message =
-                format!("Codex CLI 执行失败，退出码: {:?}, {}", status.code(), summary);
+            let failure_message = format!(
+                "Codex CLI 执行失败，退出码: {:?}, {}",
+                status.code(),
+                summary
+            );
             log_error!(
                 "{}",
                 build_cli_failure_report(
@@ -1002,10 +1005,10 @@ fn build_thinking_event(session_id: &str, content: String) -> CliStreamEvent {
         output_tokens: None,
         model: None,
         external_session_id: None,
-    raw_input_tokens: None,
-    raw_output_tokens: None,
-    cache_read_input_tokens: None,
-    cache_creation_input_tokens: None,
+        raw_input_tokens: None,
+        raw_output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     }
 }
 
@@ -1023,10 +1026,10 @@ fn build_thinking_start_event(session_id: &str) -> CliStreamEvent {
         output_tokens: None,
         model: None,
         external_session_id: None,
-    raw_input_tokens: None,
-    raw_output_tokens: None,
-    cache_read_input_tokens: None,
-    cache_creation_input_tokens: None,
+        raw_input_tokens: None,
+        raw_output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     }
 }
 
@@ -1048,10 +1051,10 @@ fn build_tool_input_delta_event(
         output_tokens: None,
         model: None,
         external_session_id: None,
-    raw_input_tokens: None,
-    raw_output_tokens: None,
-    cache_read_input_tokens: None,
-    cache_creation_input_tokens: None,
+        raw_input_tokens: None,
+        raw_output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     }
 }
 
@@ -1134,10 +1137,10 @@ fn build_command_execution_tool_use_event(
         output_tokens: None,
         model: None,
         external_session_id: None,
-    raw_input_tokens: None,
-    raw_output_tokens: None,
-    cache_read_input_tokens: None,
-    cache_creation_input_tokens: None,
+        raw_input_tokens: None,
+        raw_output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     })
 }
 
@@ -1193,10 +1196,10 @@ fn build_command_execution_tool_result_event(
         output_tokens: None,
         model: None,
         external_session_id: None,
-    raw_input_tokens: None,
-    raw_output_tokens: None,
-    cache_read_input_tokens: None,
-    cache_creation_input_tokens: None,
+        raw_input_tokens: None,
+        raw_output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     })
 }
 
@@ -1238,10 +1241,10 @@ fn build_todo_list_tool_use_event(
         output_tokens: None,
         model: None,
         external_session_id: None,
-    raw_input_tokens: None,
-    raw_output_tokens: None,
-    cache_read_input_tokens: None,
-    cache_creation_input_tokens: None,
+        raw_input_tokens: None,
+        raw_output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     })
 }
 
@@ -1251,6 +1254,137 @@ fn build_full_codex_command(cli_path: &str, global_args: &[String], args: &[Stri
     cmd_parts.extend(global_args.iter().map(|arg| shell_escape(arg)));
     cmd_parts.extend(args.iter().map(|arg| shell_escape(arg)));
     cmd_parts.join(" ")
+}
+
+fn parse_event_msg_usage_event(
+    session_id: &str,
+    json: &serde_json::Value,
+) -> Option<CliStreamEvent> {
+    let payload = json.get("payload")?;
+    if payload.get("type").and_then(|value| value.as_str()) != Some("token_count") {
+        return None;
+    }
+
+    let info = payload.get("info")?;
+    let usage = info
+        .get("last_token_usage")
+        .or_else(|| info.get("total_token_usage"))?;
+
+    let raw_input_tokens = usage
+        .get("input_tokens")
+        .and_then(|value| value.as_u64())
+        .map(|value| value as u32);
+    let raw_output_tokens = usage
+        .get("output_tokens")
+        .and_then(|value| value.as_u64())
+        .map(|value| value as u32);
+    let cached_input_tokens = usage
+        .get("cached_input_tokens")
+        .and_then(|value| value.as_u64())
+        .map(|value| value as u32);
+    let input_tokens =
+        raw_input_tokens.map(|raw| raw.saturating_sub(cached_input_tokens.unwrap_or(0)));
+
+    if input_tokens.is_none() && raw_output_tokens.is_none() {
+        return None;
+    }
+
+    Some(build_usage_event(
+        session_id,
+        input_tokens,
+        raw_output_tokens,
+        raw_input_tokens,
+        raw_output_tokens,
+        cached_input_tokens,
+    ))
+}
+
+fn parse_response_item_event(session_id: &str, json: &serde_json::Value) -> Option<CliStreamEvent> {
+    let payload = json.get("payload")?;
+    let item_type = payload.get("type").and_then(|value| value.as_str())?;
+
+    match item_type {
+        "reasoning" => Some(build_thinking_start_event(session_id)),
+        "message" => {
+            if payload.get("role").and_then(|value| value.as_str()) != Some("assistant") {
+                return None;
+            }
+
+            let text = extract_response_item_message_text(payload)?;
+            let phase = payload
+                .get("phase")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+
+            if phase == "commentary" {
+                return Some(build_thinking_event(session_id, text));
+            }
+
+            Some(build_content_event(session_id, text))
+        }
+        "function_call" => {
+            let tool_name = payload.get("name").and_then(|value| value.as_str())?;
+            let tool_call_id = payload
+                .get("call_id")
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string());
+            let tool_input = payload
+                .get("arguments")
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string())
+                .or_else(|| payload.get("arguments").map(|value| value.to_string()));
+
+            Some(CliStreamEvent {
+                event_type: "tool_use".to_string(),
+                session_id: session_id.to_string(),
+                content: None,
+                tool_name: Some(tool_name.to_string()),
+                tool_call_id,
+                tool_input,
+                tool_result: None,
+                error: None,
+                input_tokens: None,
+                output_tokens: None,
+                model: None,
+                external_session_id: None,
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
+            })
+        }
+        "function_call_output" => {
+            let tool_call_id = payload
+                .get("call_id")
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string())?;
+            let tool_result = payload
+                .get("output")
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string())
+                .or_else(|| payload.get("output").map(|value| value.to_string()));
+
+            Some(CliStreamEvent {
+                event_type: "tool_result".to_string(),
+                session_id: session_id.to_string(),
+                content: None,
+                tool_name: None,
+                tool_call_id: Some(tool_call_id),
+                tool_input: None,
+                tool_result,
+                error: None,
+                input_tokens: None,
+                output_tokens: None,
+                model: None,
+                external_session_id: None,
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
+            })
+        }
+        _ => None,
+    }
 }
 
 fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option<CliStreamEvent> {
@@ -1274,12 +1408,14 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                 output_tokens: None,
                 model: None,
                 external_session_id: Some(external_session_id),
-            raw_input_tokens: None,
-            raw_output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
             })
         }
+        "event_msg" => parse_event_msg_usage_event(session_id, json),
+        "response_item" => parse_response_item_event(session_id, json),
         "system" => extract_runtime_system_notice(json)
             .map(|content| build_system_event(session_id, content)),
         // === Codex CLI 特有事件类型 ===
@@ -1353,8 +1489,8 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                 .and_then(|t| t.as_u64())
                 .map(|t| t as u32);
 
-            let input_tokens = raw_input_tokens
-                .map(|raw| raw.saturating_sub(cached_input.unwrap_or(0)));
+            let input_tokens =
+                raw_input_tokens.map(|raw| raw.saturating_sub(cached_input.unwrap_or(0)));
 
             if input_tokens.is_some() || raw_output_tokens.is_some() {
                 Some(build_usage_event(
@@ -1449,10 +1585,10 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                         output_tokens: None,
                         model: None,
                         external_session_id: None,
-                    raw_input_tokens: None,
-                    raw_output_tokens: None,
-                    cache_read_input_tokens: None,
-                    cache_creation_input_tokens: None,
+                        raw_input_tokens: None,
+                        raw_output_tokens: None,
+                        cache_read_input_tokens: None,
+                        cache_creation_input_tokens: None,
                     })
                 }
                 "thinking" | "reasoning" => {
@@ -1507,10 +1643,10 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                 output_tokens: None,
                 model: None,
                 external_session_id: None,
-            raw_input_tokens: None,
-            raw_output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
             })
         }
         "tool_result" => {
@@ -1530,10 +1666,10 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                 output_tokens: None,
                 model: None,
                 external_session_id: None,
-            raw_input_tokens: None,
-            raw_output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
+                raw_input_tokens: None,
+                raw_output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
             })
         }
 
@@ -1586,10 +1722,10 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                                 output_tokens: None,
                                 model: None,
                                 external_session_id: None,
-                            raw_input_tokens: None,
-                            raw_output_tokens: None,
-                            cache_read_input_tokens: None,
-                            cache_creation_input_tokens: None,
+                                raw_input_tokens: None,
+                                raw_output_tokens: None,
+                                cache_read_input_tokens: None,
+                                cache_creation_input_tokens: None,
                             });
                         }
                     }
@@ -1622,10 +1758,10 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                             output_tokens: None,
                             model: None,
                             external_session_id: None,
-                        raw_input_tokens: None,
-                        raw_output_tokens: None,
-                        cache_read_input_tokens: None,
-                        cache_creation_input_tokens: None,
+                            raw_input_tokens: None,
+                            raw_output_tokens: None,
+                            cache_read_input_tokens: None,
+                            cache_creation_input_tokens: None,
                         });
                     }
                     _ => {
@@ -1674,10 +1810,10 @@ fn parse_codex_json_output(session_id: &str, json: &serde_json::Value) -> Option
                             output_tokens: None,
                             model: None,
                             external_session_id: None,
-                        raw_input_tokens: None,
-                        raw_output_tokens: None,
-                        cache_read_input_tokens: None,
-                        cache_creation_input_tokens: None,
+                            raw_input_tokens: None,
+                            raw_output_tokens: None,
+                            cache_read_input_tokens: None,
+                            cache_creation_input_tokens: None,
                         })
                     }
                     _ => {
@@ -1738,6 +1874,33 @@ fn extract_item_text(item: &serde_json::Value) -> Option<String> {
         .or_else(|| extract_structured_payload(item))
         .or_else(|| extract_text_value(item.get("content")))
         .or_else(|| extract_text_value(item.get("message")))
+}
+
+fn extract_response_item_message_text(payload: &serde_json::Value) -> Option<String> {
+    let content = payload.get("content")?.as_array()?;
+    let parts = content
+        .iter()
+        .filter_map(|entry| {
+            let entry_type = entry
+                .get("type")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            match entry_type {
+                "output_text" => entry
+                    .get("text")
+                    .and_then(|value| value.as_str())
+                    .map(|value| value.trim().to_string()),
+                _ => None,
+            }
+        })
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    Some(parts.join("\n\n"))
 }
 
 fn extract_structured_payload(value: &serde_json::Value) -> Option<String> {

@@ -9,7 +9,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useSoloRunStore } from './soloRun'
 import { agentExecutor } from '@/services/conversation/AgentExecutor'
 import type { ConversationContext, McpServerConfig, StreamEvent } from '@/services/conversation/strategies/types'
-import { extractFirstFormRequest } from '@/utils/structuredContent'
+import { extractExecutionResult, extractFirstFormRequest } from '@/utils/structuredContent'
 import { parseExecutionResult } from '@/utils/taskExecutionText'
 import { buildToolCallMapFromLogs } from '@/utils/toolCallLog'
 import { mergeToolInputArguments } from '@/utils/toolInput'
@@ -41,8 +41,10 @@ import {
   buildSoloBuiltinCoordinatorPrompt,
   buildSoloControlJsonSchema,
   buildSoloControlPrompt,
+  buildSoloControlRepairPrompt,
   buildSoloCoordinatorSystemPrompt,
   buildSoloExecutionPrompt,
+  buildSoloExecutionRepairPrompt,
   buildSoloExecutionSystemPrompt,
   buildSoloInputRequest,
   buildSoloResumeContext,
@@ -67,9 +69,21 @@ import {
   createCliFailureFragment,
   type CliFailureMatch
 } from '@/utils/cliFailureMonitor'
+import type { DynamicFormSchema } from '@/types/plan'
 
 const SOLO_STOPPED_ERROR = '__SOLO_STOPPED__'
 const SOLO_CLI_FAILURE_RETRY_DELAY_MS = 10_000
+const SOLO_OUTPUT_REPAIR_MAX_ATTEMPTS = 3
+
+class SoloRecoverableOutputError extends Error {
+  rawOutput: string
+
+  constructor(message: string, rawOutput: string) {
+    super(message)
+    this.name = 'SoloRecoverableOutputError'
+    this.rawOutput = rawOutput
+  }
+}
 
 interface RustSoloStep {
   id: string
@@ -116,6 +130,10 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms)
   })
+}
+
+function isSoloRecoverableOutputError(error: unknown): error is SoloRecoverableOutputError {
+  return error instanceof SoloRecoverableOutputError
 }
 
 function transformStep(raw: RustSoloStep): SoloStep {
@@ -494,6 +512,9 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
     const enabledBuiltins = agentTeamsStore.enabledExperts.filter((expert) =>
       expert.isBuiltin && expert.builtinCode !== 'builtin-solo-coordinator'
     )
+    const selectableExperts = agentTeamsStore.enabledExperts.filter((expert) =>
+      expert.builtinCode !== 'builtin-solo-coordinator'
+    )
     const fallbackExperts = enabledBuiltins.length > 0 ? enabledBuiltins : agentTeamsStore.enabledExperts
     const selectedIds = new Set((run.participantExpertIds ?? []).filter(Boolean))
 
@@ -501,7 +522,7 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
       return fallbackExperts
     }
 
-    const selectedExperts = fallbackExperts.filter((expert) => selectedIds.has(expert.id))
+    const selectedExperts = selectableExperts.filter((expert) => selectedIds.has(expert.id))
     return selectedExperts.length > 0 ? selectedExperts : fallbackExperts
   }
 
@@ -795,12 +816,21 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
             errorMessage,
             logStartIndex
           })
+          const shouldFallbackWithoutResume = Boolean(
+            resumeSessionId?.trim()
+            && runtimeBindingKey
+            && isInvalidCliResumeError(errorMessage, resolveRuntimeBindingKey(agent))
+          )
 
           if (errorMessage === SOLO_STOPPED_ERROR || stopRequestedRunIds.value.has(run.id)) {
             throw error
           }
 
-          if (!classifiedFailure || classifiedFailure.kind !== 'retryable' || cliRetryCount >= maxCliRetries) {
+          if (shouldFallbackWithoutResume) {
+            throw error
+          }
+
+          if (cliRetryCount >= maxCliRetries) {
             throw error
           }
 
@@ -810,9 +840,11 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
             retryCount: cliRetryCount,
             maxRetries: maxCliRetries,
             retryDelaySeconds: SOLO_CLI_FAILURE_RETRY_DELAY_MS / 1000,
-            runtime: runtimeFailureLabel
+            runtime: runtimeFailureLabel,
+            errorMessage,
+            failureKind: classifiedFailure?.kind || 'unclassified'
           }
-          const content = `检测到可恢复的 ${runtimeFailureLabel} CLI 异常，10 秒后开始第 ${cliRetryCount}/${maxCliRetries} 次底层重试...`
+          const content = `检测到 ${runtimeFailureLabel} CLI 异常，10 秒后开始第 ${cliRetryCount}/${maxCliRetries} 次底层重试...`
 
           if (cliRetryLogId) {
             const existingLog = state.logs.find((log) => log.id === cliRetryLogId)
@@ -1020,6 +1052,59 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
     }
   }
 
+  function validateCoordinatorDecision(run: SoloRun, content: string): ReturnType<typeof parseSoloCoordinatorDecision> {
+    let decision: ReturnType<typeof parseSoloCoordinatorDecision>
+    try {
+      decision = parseSoloCoordinatorDecision(content)
+    } catch (error) {
+      throw new SoloRecoverableOutputError(
+        error instanceof Error ? error.message : '协调 AI 返回结果无法解析',
+        content
+      )
+    }
+
+    if (decision.type === 'dispatch_step' && decision.step.depth > run.maxDispatchDepth) {
+      throw new SoloRecoverableOutputError(
+        `dispatch_step.depth=${decision.step.depth} 超过最大调度层数 ${run.maxDispatchDepth}`,
+        content
+      )
+    }
+
+    return decision
+  }
+
+  function validateStepTurnOutput(content: string): {
+    kind: 'form_request'
+    formRequest: NonNullable<ReturnType<typeof extractFirstFormRequest>>
+    formSchema: DynamicFormSchema
+  } | {
+    kind: 'result'
+    parsedResult: ReturnType<typeof parseExecutionResult>
+  } {
+    const formRequest = extractFirstFormRequest(content)
+    if (formRequest) {
+      const formSchema = formRequest.formSchema ?? formRequest.forms?.[0]
+      if (!formSchema) {
+        throw new SoloRecoverableOutputError('执行结果请求了表单，但缺少可解析的表单结构', content)
+      }
+
+      return {
+        kind: 'form_request',
+        formRequest,
+        formSchema
+      }
+    }
+
+    if (!extractExecutionResult(content)) {
+      throw new SoloRecoverableOutputError('执行结果缺少合法的 result JSON', content)
+    }
+
+    return {
+      kind: 'result',
+      parsedResult: parseExecutionResult(content)
+    }
+  }
+
   async function executeControlTurn(run: SoloRun, runtime: Awaited<ReturnType<typeof resolveCoordinatorRuntime>>): Promise<ReturnType<typeof parseSoloCoordinatorDecision>> {
     const state = initExecutionState(run.id)
     const steps = getSteps.value(run.id)
@@ -1041,6 +1126,11 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
       runtime.expertPrompt,
       buildExpertCatalogPrompt(participantExperts, useAgentStore().agents)
     )
+    const controlPrompt = buildSoloControlPrompt({
+      run,
+      steps,
+      inputResponse: run.inputResponse
+    })
 
     const response = await executeTurn({
       run,
@@ -1051,11 +1141,7 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
       messages: [
         ...(mountedMemoryPrompt ? [createMessage(run.id, 'system', mountedMemoryPrompt)] : []),
         createMessage(run.id, 'system', systemPrompt),
-        createMessage(run.id, 'user', buildSoloControlPrompt({
-          run,
-          steps,
-          inputResponse: run.inputResponse
-        }))
+        createMessage(run.id, 'user', controlPrompt)
       ],
       responseMode: useSchemaResponse ? 'json_once' : 'stream_text',
       jsonSchema: useSchemaResponse ? buildSoloControlJsonSchema() : undefined,
@@ -1067,8 +1153,59 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
       runtimeBindingKey: null
     })
 
-    await appendUsageNotice(run.id)
-    return parseSoloCoordinatorDecision(response.content)
+    let latestContent = response.content
+    let repairError: unknown = null
+
+    for (let attempt = 0; attempt <= SOLO_OUTPUT_REPAIR_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        const decision = validateCoordinatorDecision(run, latestContent)
+        await appendUsageNotice(run.id)
+        return decision
+      } catch (error) {
+        repairError = error
+        if (!isSoloRecoverableOutputError(error) || attempt >= SOLO_OUTPUT_REPAIR_MAX_ATTEMPTS) {
+          throw error
+        }
+
+        await addLog({
+          runId: run.id,
+          scope: 'coordinator',
+          type: 'system',
+          content: `协调输出格式异常，开始第 ${attempt + 1}/${SOLO_OUTPUT_REPAIR_MAX_ATTEMPTS} 次自修复: ${error.message}`
+        })
+
+        const repaired = await executeTurn({
+          run,
+          state,
+          agent: runtime.agent,
+          workingDirectory: runtime.workingDirectory,
+          mcpServers: undefined,
+          messages: [
+            ...(mountedMemoryPrompt ? [createMessage(run.id, 'system', mountedMemoryPrompt)] : []),
+            createMessage(run.id, 'system', systemPrompt),
+            createMessage(run.id, 'user', controlPrompt),
+            createMessage(run.id, 'assistant', latestContent),
+            createMessage(run.id, 'user', buildSoloControlRepairPrompt({
+              errorMessage: error.message,
+              rawOutput: latestContent,
+              maxDispatchDepth: run.maxDispatchDepth
+            }))
+          ],
+          responseMode: useSchemaResponse ? 'json_once' : 'stream_text',
+          jsonSchema: useSchemaResponse ? buildSoloControlJsonSchema() : undefined,
+          scope: 'coordinator',
+          strategy: 'solo_control_repair',
+          runtimeLabel: inferAgentProvider(runtime.agent)?.toUpperCase() || runtime.agent.type,
+          expertLabel: runtime.expertName,
+          persistContentLogs: false,
+          runtimeBindingKey: null
+        })
+
+        latestContent = repaired.content
+      }
+    }
+
+    throw repairError instanceof Error ? repairError : new Error('协调输出修复失败')
   }
 
   async function executeStepTurn(
@@ -1141,8 +1278,9 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
     })
 
     let response: Awaited<ReturnType<typeof executeTurn>>
+    let activeResumeSessionId = binding?.externalSessionId
     try {
-      response = await invokeStepTurn(binding?.externalSessionId)
+      response = await invokeStepTurn(activeResumeSessionId)
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
       const shouldRetryWithoutResume = Boolean(
@@ -1163,26 +1301,90 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
         content: '检测到无效的专家续接会话，已切换为重新执行当前步骤提示。'
       })
       await deleteSoloRuntimeBinding(run.id, stepRuntime.bindingKey!).catch(() => {})
+      activeResumeSessionId = undefined
       response = await invokeStepTurn(undefined)
+    }
+
+    const repairMessages = [
+      ...(!activeResumeSessionId && mountedMemoryPrompt
+        ? [createMessage(run.id, 'system', mountedMemoryPrompt)]
+        : []),
+      ...(!activeResumeSessionId
+        ? [createMessage(run.id, 'system', buildSoloExecutionSystemPrompt(selectedExpert?.prompt || stepRuntime.expertPrompt))]
+        : []),
+      createMessage(run.id, 'user', userPrompt)
+    ]
+
+    let latestContent = response.content
+    let validatedOutput: ReturnType<typeof validateStepTurnOutput> | null = null
+    let repairError: unknown = null
+
+    for (let attempt = 0; attempt <= SOLO_OUTPUT_REPAIR_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        validatedOutput = validateStepTurnOutput(latestContent)
+        break
+      } catch (error) {
+        repairError = error
+        if (!isSoloRecoverableOutputError(error) || attempt >= SOLO_OUTPUT_REPAIR_MAX_ATTEMPTS) {
+          throw error
+        }
+
+        await addLog({
+          runId: run.id,
+          stepId: step.id,
+          scope: 'step',
+          type: 'system',
+          content: `步骤输出格式异常，开始第 ${attempt + 1}/${SOLO_OUTPUT_REPAIR_MAX_ATTEMPTS} 次自修复: ${error.message}`
+        })
+
+        const repaired = await executeTurn({
+          run,
+          state,
+          agent: stepRuntime.agent,
+          workingDirectory: stepRuntime.workingDirectory,
+          mcpServers: undefined,
+          messages: [
+            ...repairMessages,
+            createMessage(run.id, 'assistant', latestContent),
+            createMessage(run.id, 'user', buildSoloExecutionRepairPrompt({
+              errorMessage: error.message,
+              rawOutput: latestContent
+            }))
+          ],
+          responseMode: 'stream_text',
+          stepId: step.id,
+          scope: 'step',
+          strategy: 'solo_step_output_repair',
+          runtimeLabel: inferAgentProvider(stepRuntime.agent)?.toUpperCase() || stepRuntime.agent.type,
+          expertLabel: selectedExpert?.name || stepRuntime.expertName,
+          persistContentLogs: false,
+          runtimeBindingKey: null
+        })
+
+        latestContent = repaired.content
+      }
+    }
+
+    if (!validatedOutput) {
+      throw repairError instanceof Error ? repairError : new Error('步骤输出修复失败')
     }
 
     await appendUsageNotice(run.id, step.id)
 
-    const formRequest = extractFirstFormRequest(response.content)
-    if (formRequest) {
-      const schema = formRequest.formSchema ?? formRequest.forms?.[0]
-      if (!schema) {
-        throw new Error('SOLO 步骤请求了表单但缺少表单结构')
-      }
-
+    if (validatedOutput.kind === 'form_request') {
       await updateStep(step.id, {
         status: 'blocked',
-        summary: compactSoloSummary(formRequest.question || '等待用户补充输入')
+        summary: compactSoloSummary(validatedOutput.formRequest.question || '等待用户补充输入')
       })
       await useSoloRunStore().updateRun(run.id, {
         status: 'blocked',
         executionStatus: 'blocked',
-        inputRequest: buildSoloInputRequest(schema, formRequest.question, 'execution', step.id),
+        inputRequest: buildSoloInputRequest(
+          validatedOutput.formSchema,
+          validatedOutput.formRequest.question,
+          'execution',
+          step.id
+        ),
         currentStepId: step.id,
         inputResponse: null,
         lastError: null
@@ -1190,7 +1392,7 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
       return
     }
 
-    const parsedResult = parseExecutionResult(response.content)
+    const parsedResult = validatedOutput.parsedResult
     await updateStep(step.id, {
       status: 'completed',
       summary: compactSoloSummary(parsedResult.summary),
@@ -1300,23 +1502,6 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
           inputRequest: decision.formSchema
             ? buildSoloInputRequest(decision.formSchema, decision.question || decision.reason, 'control')
             : null
-        })
-        return
-      }
-
-      if (decision.step.depth > run.maxDispatchDepth) {
-        const message = `协调 AI 返回的步骤层数 ${decision.step.depth} 超过最大调度层数 ${run.maxDispatchDepth}`
-        await addLog({
-          runId,
-          scope: 'coordinator',
-          type: 'error',
-          content: message
-        })
-        state.status = 'blocked'
-        await runStore.updateRun(runId, {
-          status: 'blocked',
-          executionStatus: 'blocked',
-          lastError: message
         })
         return
       }

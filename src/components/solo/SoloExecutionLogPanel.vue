@@ -2,22 +2,33 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import DynamicForm from '@/components/plan/dynamicForm/DynamicForm.vue'
 import ExecutionTimeline from '@/components/message/ExecutionTimeline.vue'
+import { useAgentConfigStore } from '@/stores/agentConfig'
+import { useAgentStore } from '@/stores/agent'
+import { formatTokenCount } from '@/stores/token'
 import { useSoloExecutionStore } from '@/stores/soloExecution'
 import { useSoloRunStore } from '@/stores/soloRun'
 import { useAgentTeamsStore } from '@/stores/agentTeams'
-import type { SoloLogEntry, SoloStep } from '@/types/solo'
+import type { SoloExecutionStatus, SoloLogEntry, SoloRunStatus, SoloStep, SoloStepStatus } from '@/types/solo'
 import type { TimelineEntry } from '@/types/timeline'
 import { buildToolCallMapFromLogs } from '@/utils/toolCallLog'
-import { formatTokenCount } from '@/stores/token'
+import { DEFAULT_CONTEXT_WINDOW, resolveConfiguredContextWindow } from '@/utils/configuredModelContext'
+import { resolveExpertById, resolveExpertRuntime } from '@/services/agentTeams/runtime'
 
 const props = defineProps<{
   runId: string
   stepId?: string | null
 }>()
 
+interface SoloCliRetryState {
+  current: number
+  max: number
+}
+
 const soloExecutionStore = useSoloExecutionStore()
 const soloRunStore = useSoloRunStore()
 const agentTeamsStore = useAgentTeamsStore()
+const agentStore = useAgentStore()
+const agentConfigStore = useAgentConfigStore()
 
 const scrollerRef = ref<HTMLElement | null>(null)
 const autoScroll = ref(true)
@@ -29,11 +40,6 @@ const steps = computed(() => soloExecutionStore.getSteps(props.runId))
 const selectedStep = computed<SoloStep | null>(() =>
   props.stepId ? steps.value.find((step) => step.id === props.stepId) || null : null
 )
-const selectedExpertLabel = computed(() => {
-  const expertId = selectedStep.value?.selectedExpertId
-  if (!expertId) return '未指定'
-  return agentTeamsStore.experts.find((expert) => expert.id === expertId)?.name || expertId
-})
 
 const visibleLogs = computed<SoloLogEntry[]>(() => {
   if (props.stepId) {
@@ -41,6 +47,29 @@ const visibleLogs = computed<SoloLogEntry[]>(() => {
   }
 
   return allLogs.value.filter((log) => !log.stepId && log.scope !== 'step')
+})
+
+const selectedExpert = computed(() =>
+  resolveExpertById(selectedStep.value?.selectedExpertId, agentTeamsStore.experts)
+)
+const coordinatorExpert = computed(() =>
+  resolveExpertById(run.value?.coordinatorExpertId, agentTeamsStore.experts)
+)
+
+const currentRuntime = computed(() => {
+  if (selectedStep.value) {
+    return resolveExpertRuntime(selectedExpert.value, agentStore.agents)
+  }
+
+  return resolveExpertRuntime(coordinatorExpert.value, agentStore.agents, run.value?.coordinatorModelId)
+})
+
+const selectedExpertLabel = computed(() => {
+  if (selectedStep.value) {
+    return selectedExpert.value?.name || selectedStep.value.selectedExpertId || '未指定'
+  }
+
+  return coordinatorExpert.value?.name || run.value?.coordinatorExpertId || '规划智能体'
 })
 
 const tokenUsage = computed(() => state.value?.tokenUsage ?? {
@@ -51,7 +80,51 @@ const tokenUsage = computed(() => state.value?.tokenUsage ?? {
   lastUpdatedAt: null
 })
 
-const tokenTotal = computed(() => tokenUsage.value.inputTokens + tokenUsage.value.outputTokens)
+const tokenUsageTotal = computed(() =>
+  tokenUsage.value.contextWindowOccupancy
+    ?? (tokenUsage.value.inputTokens + tokenUsage.value.outputTokens)
+)
+
+const resolvedModelId = computed(() =>
+  tokenUsage.value.model
+  || currentRuntime.value?.modelId
+  || currentRuntime.value?.agent.modelId
+  || run.value?.coordinatorModelId
+  || ''
+)
+
+const tokenContextLimit = computed(() => {
+  const runtimeAgent = currentRuntime.value?.agent
+  if (!runtimeAgent) {
+    return resolveConfiguredContextWindow([], {
+      runtimeModelId: resolvedModelId.value,
+      fallbackContextWindow: DEFAULT_CONTEXT_WINDOW
+    })
+  }
+
+  return resolveConfiguredContextWindow(agentConfigStore.getModelsConfigs(runtimeAgent.id), {
+    runtimeModelId: tokenUsage.value.model,
+    selectedModelId: currentRuntime.value?.modelId,
+    agentModelId: runtimeAgent.modelId,
+    fallbackContextWindow: DEFAULT_CONTEXT_WINDOW
+  })
+})
+
+const tokenUsagePercentage = computed(() => {
+  if (tokenContextLimit.value <= 0) return 0
+  return Math.min(100, (tokenUsageTotal.value / tokenContextLimit.value) * 100)
+})
+
+const tokenUsageLevel = computed(() => {
+  if (tokenUsagePercentage.value >= 95) return 'critical'
+  if (tokenUsagePercentage.value >= 80) return 'danger'
+  if (tokenUsagePercentage.value >= 60) return 'warning'
+  return 'safe'
+})
+
+const tokenProgressStyle = computed(() => ({
+  width: `${tokenUsagePercentage.value}%`
+}))
 
 const pendingInputVisible = computed(() => {
   if (!run.value?.inputRequest) return false
@@ -59,17 +132,79 @@ const pendingInputVisible = computed(() => {
   return run.value.inputRequest.stepId === props.stepId
 })
 
-const panelTitle = computed(() => selectedStep.value ? '执行日志流程' : '协调日志流程')
+const isScopeRunning = computed(() => {
+  if (selectedStep.value) {
+    return selectedStep.value.status === 'running'
+  }
+
+  return run.value?.executionStatus === 'running'
+})
+
+const headerTitle = computed(() => selectedStep.value?.title || '协调日志流程')
+const headerMetaLabel = computed(() => selectedStep.value ? '执行节点' : '调度节点')
 const panelSubtitle = computed(() => {
   if (selectedStep.value) {
-    return selectedStep.value.title
+    return selectedStep.value.resultSummary
+      || selectedStep.value.summary
+      || selectedStep.value.description
+      || '等待当前步骤的结构化结果与交付摘要。'
   }
-  return '内置协调 AI 的调度决策与状态回写'
+
+  return '展示规划智能体的调度决策、异常与状态回写。'
+})
+
+const activeCliRetryState = computed<SoloCliRetryState | null>(() => {
+  for (let index = visibleLogs.value.length - 1; index >= 0; index -= 1) {
+    const log = visibleLogs.value[index]
+    const metadata = log.metadata
+
+    if (
+      metadata?.retryGroup === 'cli_failure_retry'
+      && typeof metadata.retryCount === 'number'
+      && typeof metadata.maxRetries === 'number'
+    ) {
+      return {
+        current: metadata.retryCount,
+        max: metadata.maxRetries
+      }
+    }
+
+    if (
+      log.type === 'content'
+      || log.type === 'thinking'
+      || log.type === 'thinking_start'
+      || log.type === 'tool_use'
+      || log.type === 'tool_input_delta'
+      || log.type === 'tool_result'
+      || log.type === 'error'
+      || (log.type === 'system' && metadata?.retryGroup !== 'cli_failure_retry')
+    ) {
+      return null
+    }
+  }
+
+  return null
+})
+
+const statusText = computed(() => {
+  if (selectedStep.value) {
+    return getStepStatusLabel(selectedStep.value.status)
+  }
+
+  return getRunStatusLabel(run.value?.executionStatus, run.value?.status)
+})
+
+const statusColor = computed(() => {
+  if (selectedStep.value) {
+    return getStepStatusColor(selectedStep.value.status)
+  }
+
+  return getRunStatusColor(run.value?.executionStatus, run.value?.status)
 })
 
 const timelineEntries = computed<TimelineEntry[]>(() => {
   const toolCallMap = buildToolCallMapFromLogs(visibleLogs.value, {
-    fallbackStatus: run.value?.executionStatus === 'running' ? 'running' : 'success'
+    fallbackStatus: isScopeRunning.value ? 'running' : 'success'
   })
   let lastThinkingEntry: TimelineEntry | null = null
   let lastContentEntry: TimelineEntry | null = null
@@ -85,7 +220,7 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
         type: 'thinking',
         content: '',
         timestamp: log.timestamp,
-        animate: run.value?.executionStatus === 'running'
+        animate: isScopeRunning.value
       }
       entries.push(lastThinkingEntry)
       return entries
@@ -98,7 +233,7 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
           type: 'thinking',
           content: log.content,
           timestamp: log.timestamp,
-          animate: run.value?.executionStatus === 'running'
+          animate: isScopeRunning.value
         }
         entries.push(lastThinkingEntry)
       } else {
@@ -117,7 +252,7 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
           content: log.content,
           timestamp: log.timestamp,
           role: 'assistant',
-          animate: run.value?.executionStatus === 'running'
+          animate: isScopeRunning.value
         }
         entries.push(lastContentEntry)
       } else {
@@ -145,7 +280,18 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
         id: `error-${log.id}`,
         type: 'error',
         content: log.content,
-        timestamp: log.timestamp
+        timestamp: log.timestamp,
+        runtimeFallbackUsage: {
+          model: typeof log.metadata?.model === 'string' && log.metadata.model.trim()
+            ? log.metadata.model.trim()
+            : (resolvedModelId.value || undefined),
+          inputTokens: typeof log.metadata?.inputTokens === 'number'
+            ? log.metadata.inputTokens
+            : undefined,
+          outputTokens: typeof log.metadata?.outputTokens === 'number'
+            ? log.metadata.outputTokens
+            : undefined
+        }
       })
       lastThinkingEntry = null
       lastContentEntry = null
@@ -156,13 +302,73 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
       id: `system-${log.id}`,
       type: 'system',
       content: log.content,
-      timestamp: log.timestamp
+      timestamp: log.timestamp,
+      runtimeFallbackUsage: {
+        model: typeof log.metadata?.model === 'string' && log.metadata.model.trim()
+          ? log.metadata.model.trim()
+          : (resolvedModelId.value || undefined),
+        inputTokens: typeof log.metadata?.inputTokens === 'number'
+          ? log.metadata.inputTokens
+          : undefined,
+        outputTokens: typeof log.metadata?.outputTokens === 'number'
+          ? log.metadata.outputTokens
+          : undefined
+      }
     })
     lastThinkingEntry = null
     lastContentEntry = null
     return entries
   }, [])
 })
+
+function getStepStatusLabel(status: SoloStepStatus): string {
+  switch (status) {
+    case 'pending': return '等待'
+    case 'running': return '执行中'
+    case 'completed': return '完成'
+    case 'failed': return '失败'
+    case 'blocked': return '待输入'
+    case 'skipped': return '跳过'
+    default: return status
+  }
+}
+
+function getRunStatusLabel(executionStatus?: SoloExecutionStatus | null, runStatus?: SoloRunStatus | null): string {
+  switch (executionStatus || runStatus) {
+    case 'running': return '执行中'
+    case 'blocked': return '待输入'
+    case 'paused': return '已暂停'
+    case 'completed': return '已完成'
+    case 'failed':
+    case 'error':
+      return '失败'
+    case 'stopped': return '已停止'
+    case 'draft': return '草稿'
+    default: return '空闲'
+  }
+}
+
+function getStepStatusColor(status: SoloStepStatus): string {
+  switch (status) {
+    case 'running': return 'primary'
+    case 'completed': return 'success'
+    case 'blocked': return 'warning'
+    case 'failed': return 'error'
+    default: return 'gray'
+  }
+}
+
+function getRunStatusColor(executionStatus?: SoloExecutionStatus | null, runStatus?: SoloRunStatus | null): string {
+  switch (executionStatus || runStatus) {
+    case 'running': return 'primary'
+    case 'completed': return 'success'
+    case 'blocked': return 'warning'
+    case 'failed':
+    case 'error':
+      return 'error'
+    default: return 'gray'
+  }
+}
 
 function handleScroll() {
   if (!scrollerRef.value) return
@@ -174,11 +380,28 @@ async function handleSubmit(values: Record<string, unknown>) {
   await soloExecutionStore.submitRunInput(props.runId, values)
 }
 
+async function ensureRuntimeConfigsLoaded() {
+  const runtimeAgent = currentRuntime.value?.agent
+  if (!runtimeAgent) {
+    return
+  }
+
+  await agentConfigStore.ensureModelsConfigs(runtimeAgent.id, runtimeAgent.provider)
+}
+
 watch(
   () => props.runId,
   async (runId) => {
     if (!runId) return
     await soloExecutionStore.loadLogs(runId)
+  },
+  { immediate: true }
+)
+
+watch(
+  () => currentRuntime.value?.agent.id,
+  async () => {
+    await ensureRuntimeConfigsLoaded()
   },
   { immediate: true }
 )
@@ -195,47 +418,59 @@ watch(
 )
 
 onMounted(async () => {
-  await soloExecutionStore.loadLogs(props.runId)
+  await Promise.all([
+    soloExecutionStore.loadLogs(props.runId),
+    agentStore.loadAgents(),
+    agentTeamsStore.loadExperts()
+  ])
 })
 </script>
 
 <template>
-  <div class="solo-log-panel">
-    <div class="solo-log-panel__header">
-      <div>
-        <p class="solo-log-panel__eyebrow">
-          {{ selectedStep ? 'Step Detail' : 'Coordinator Detail' }}
-        </p>
-        <h3>{{ panelTitle }}</h3>
-        <p class="solo-log-panel__subtitle">
-          {{ panelSubtitle }}
-        </p>
+  <div class="task-execution-log solo-execution-log">
+    <div class="log-header">
+      <div class="header-left">
+        <h4
+          class="log-title"
+          :title="headerTitle"
+        >
+          {{ headerTitle }}
+        </h4>
+        <span
+          class="status-badge"
+          :class="statusColor"
+        >
+          {{ statusText }}
+        </span>
       </div>
-      <div class="solo-log-panel__chips">
-        <span class="solo-log-panel__chip">{{ run?.status || 'idle' }}</span>
+      <div class="header-actions">
+        <span class="solo-execution-log__meta-chip">
+          {{ headerMetaLabel }}
+        </span>
         <span
           v-if="selectedStep"
-          class="solo-log-panel__chip solo-log-panel__chip--step"
+          class="solo-execution-log__meta-chip"
         >
-          depth {{ selectedStep.depth }}
+          Depth {{ selectedStep.depth }}
         </span>
       </div>
     </div>
 
-    <div
-      v-if="selectedStep"
-      class="solo-log-panel__summary"
-    >
-      <div class="solo-log-panel__summary-row">
-        <span>专家视角</span>
-        <strong>{{ selectedExpertLabel }}</strong>
-      </div>
-      <p class="solo-log-panel__summary-text">
-        {{ selectedStep.resultSummary || selectedStep.summary || selectedStep.description || '等待本步输出内容。' }}
+    <section class="solo-execution-log__summary">
+      <p class="solo-execution-log__summary-eyebrow">
+        {{ selectedStep ? 'Execution Summary' : 'Coordinator Summary' }}
       </p>
+      <p class="solo-execution-log__summary-text">
+        {{ panelSubtitle }}
+      </p>
+      <div class="solo-execution-log__summary-meta">
+        <span>专家：{{ selectedExpertLabel }}</span>
+        <span>{{ visibleLogs.length }} 条日志</span>
+        <span v-if="selectedStep">更新时间：{{ new Date(selectedStep.updatedAt).toLocaleString('zh-CN') }}</span>
+      </div>
       <div
-        v-if="selectedStep.resultFiles.length > 0"
-        class="solo-log-panel__files"
+        v-if="selectedStep?.resultFiles.length"
+        class="solo-execution-log__summary-files"
       >
         <span
           v-for="file in selectedStep.resultFiles"
@@ -244,34 +479,50 @@ onMounted(async () => {
           {{ file }}
         </span>
       </div>
-    </div>
+    </section>
 
-    <div class="solo-log-panel__usage">
-      <div class="solo-log-panel__usage-main">
-        <span class="solo-log-panel__usage-label">Model</span>
-        <strong>{{ tokenUsage.model || run?.coordinatorModelId || 'default' }}</strong>
+    <div
+      v-if="tokenUsageTotal > 0 || resolvedModelId"
+      class="token-usage-panel"
+    >
+      <div class="token-usage-panel__meta">
+        <div class="token-usage-panel__title">
+          <span>Token Usage</span>
+          <span
+            v-if="resolvedModelId"
+            class="token-usage-panel__model"
+          >
+            {{ resolvedModelId }}
+          </span>
+        </div>
+        <div class="token-usage-panel__stats">
+          <span>{{ formatTokenCount(tokenUsageTotal) }} / {{ formatTokenCount(tokenContextLimit) }}</span>
+          <span v-if="tokenUsage.resetCount > 0">重置 {{ tokenUsage.resetCount }} 次</span>
+        </div>
       </div>
-      <div class="solo-log-panel__usage-stats">
+      <div
+        class="token-usage-panel__bar"
+        :class="`token-usage-panel__bar--${tokenUsageLevel}`"
+      >
+        <div
+          class="token-usage-panel__fill"
+          :style="tokenProgressStyle"
+        />
+      </div>
+      <div class="token-usage-panel__breakdown">
         <span>输入 {{ formatTokenCount(tokenUsage.inputTokens) }}</span>
         <span>输出 {{ formatTokenCount(tokenUsage.outputTokens) }}</span>
-        <span>总计 {{ formatTokenCount(tokenTotal) }}</span>
+        <span>{{ Math.round(tokenUsagePercentage) }}%</span>
       </div>
     </div>
 
     <div
       v-if="pendingInputVisible && run?.inputRequest"
-      class="solo-log-panel__form"
+      class="input-form-section"
     >
-      <div class="solo-log-panel__form-header">
-        <span>等待补充输入</span>
-        <small>{{ run.inputRequest.source === 'execution' ? '步骤执行' : '协调决策' }}</small>
-      </div>
-      <p
-        v-if="run.inputRequest.question"
-        class="solo-log-panel__form-question"
-      >
-        {{ run.inputRequest.question }}
-      </p>
+      <h5 class="section-title">
+        {{ run.inputRequest.question || '等待补充输入' }}
+      </h5>
       <DynamicForm
         :schema="run.inputRequest.formSchema"
         @submit="handleSubmit"
@@ -280,258 +531,153 @@ onMounted(async () => {
 
     <div
       ref="scrollerRef"
-      class="solo-log-panel__timeline"
+      class="log-content"
       @scroll="handleScroll"
     >
       <div
         v-if="timelineEntries.length === 0"
-        class="solo-log-panel__empty"
+        class="empty-state"
       >
-        <p>当前还没有日志。</p>
-        <span>{{ selectedStep ? '选中步骤开始执行后，这里会出现完整日志流程。' : '协调 AI 开始派发步骤后，这里会出现调度日志。' }}</span>
+        <span v-if="isScopeRunning">{{ selectedStep ? '当前步骤执行中...' : '协调 AI 正在调度...' }}</span>
+        <span v-else>{{ selectedStep ? '选中步骤开始执行后，这里会出现完整日志流程。' : '协调 AI 开始派发步骤后，这里会出现调度日志。' }}</span>
       </div>
-      <ExecutionTimeline
+
+      <div
         v-else
-        :entries="timelineEntries"
-        :group-tool-calls="true"
-      />
+        class="log-entries"
+      >
+        <ExecutionTimeline
+          :entries="timelineEntries"
+          :group-tool-calls="true"
+          :compact-context-notices="true"
+        />
+      </div>
+
+      <div
+        v-if="isScopeRunning"
+        class="running-indicator"
+      >
+        <span class="indicator-dot" />
+        <span class="indicator-text">
+          {{ activeCliRetryState
+            ? `底层自动重试中 ${activeCliRetryState.current}/${activeCliRetryState.max}`
+            : 'AI 正在执行...' }}
+        </span>
+      </div>
     </div>
   </div>
 </template>
 
+<style scoped src="../plan/taskExecutionLog/styles.css"></style>
+
 <style scoped>
-.solo-log-panel {
+.solo-execution-log {
+  --task-log-width: 100%;
+  --timeline-panel-width: 100%;
+  --timeline-panel-max-width: 100%;
   height: 100%;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  width: 100%;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--color-surface) 96%, white 4%) 0%, var(--color-surface) 100%);
-  overflow: hidden;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
 }
 
-.solo-log-panel__header,
-.solo-log-panel__usage,
-.solo-log-panel__summary {
-  padding: 12px 14px;
-  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
-}
-
-.solo-log-panel__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.solo-log-panel__eyebrow {
-  margin: 0;
-  font-size: 11px;
-  letter-spacing: 0.24em;
-  text-transform: uppercase;
-  color: var(--color-primary);
-}
-
-.solo-log-panel__header h3 {
-  margin: 6px 0 0;
-  font-size: 17px;
-  color: var(--color-text-primary);
-}
-
-.solo-log-panel__subtitle {
-  margin: 4px 0 0;
-  font-size: 11px;
-  line-height: 1.45;
-  color: var(--color-text-secondary);
-}
-
-.solo-log-panel__chips {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.solo-log-panel__chip {
+.solo-execution-log__meta-chip {
   display: inline-flex;
   align-items: center;
-  padding: 5px 9px;
+  padding: 0.125rem 0.5rem;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--color-surface-hover) 86%, transparent);
-  color: var(--color-text-secondary);
-  font-size: 11px;
-}
-
-.solo-log-panel__chip--step {
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  background: color-mix(in srgb, var(--color-bg-tertiary, #f1f5f9) 92%, #ffffff);
+  border: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+  color: var(--color-text-secondary, #64748b);
+  font-size: 0.6875rem;
+  font-weight: 500;
   white-space: nowrap;
 }
 
-.solo-log-panel__summary {
+.solo-execution-log__summary {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  background: color-mix(in srgb, var(--color-primary) 5%, transparent);
+  gap: 0.625rem;
+  padding: 0.875rem 1rem;
+  border-bottom: 1px solid var(--color-border, #e2e8f0);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-primary-light, #eff6ff) 44%, #ffffff),
+      color-mix(in srgb, var(--color-surface, #ffffff) 92%, var(--color-bg-secondary, #f8fafc))
+    );
 }
 
-.solo-log-panel__summary-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--color-text-secondary);
-  font-size: 12px;
-}
-
-.solo-log-panel__summary-text {
+.solo-execution-log__summary-eyebrow {
   margin: 0;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--color-text-primary);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-primary, #2563eb);
+}
+
+.solo-execution-log__summary-text {
+  margin: 0;
+  color: var(--color-text-primary, #1e293b);
+  font-size: 0.8125rem;
+  line-height: 1.55;
   white-space: pre-wrap;
 }
 
-.solo-log-panel__files {
+.solo-execution-log__summary-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 0.5rem 0.75rem;
+  font-size: 0.6875rem;
+  color: var(--color-text-secondary, #64748b);
 }
 
-.solo-log-panel__files span {
+.solo-execution-log__summary-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.solo-execution-log__summary-files span {
   display: inline-flex;
   align-items: center;
-  padding: 5px 9px;
+  padding: 0.25rem 0.5rem;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--color-surface-hover) 88%, transparent);
-  color: var(--color-text-secondary);
-  font-size: 11px;
+  background: color-mix(in srgb, var(--color-bg-tertiary, #f1f5f9) 92%, #ffffff);
+  border: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+  color: var(--color-text-secondary, #64748b);
+  font-size: 0.6875rem;
+  line-height: 1;
 }
 
-.solo-log-panel__usage {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+[data-theme='dark'] .solo-execution-log__meta-chip {
+  background: rgba(51, 65, 85, 0.9);
+  border-color: rgba(148, 163, 184, 0.18);
+  color: rgba(226, 232, 240, 0.78);
 }
 
-.solo-log-panel__usage-main {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--color-text-primary);
+[data-theme='dark'] .solo-execution-log__summary {
+  border-bottom-color: rgba(148, 163, 184, 0.14);
+  background:
+    linear-gradient(
+      180deg,
+      rgba(30, 41, 59, 0.92),
+      rgba(15, 23, 42, 0.88)
+    );
 }
 
-.solo-log-panel__usage-label {
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--color-text-secondary);
+[data-theme='dark'] .solo-execution-log__summary-text {
+  color: #e2e8f0;
 }
 
-.solo-log-panel__usage-stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  font-size: 11px;
-  color: var(--color-text-secondary);
+[data-theme='dark'] .solo-execution-log__summary-meta,
+[data-theme='dark'] .solo-execution-log__summary-files span {
+  color: rgba(226, 232, 240, 0.72);
 }
 
-.solo-log-panel__form {
-  padding: 12px 14px 8px;
-  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
-  background: color-mix(in srgb, #f59e0b 8%, transparent);
-}
-
-.solo-log-panel__form-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-text-primary);
-}
-
-.solo-log-panel__form-header small,
-.solo-log-panel__form-question {
-  color: var(--color-text-secondary);
-}
-
-.solo-log-panel__form-question {
-  margin: 0 0 12px;
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.solo-log-panel__timeline {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  padding: 12px 14px 16px;
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--color-primary) 28%, transparent) transparent;
-}
-
-.solo-log-panel__empty {
-  padding: 18px;
-  border-radius: 20px;
-  background: color-mix(in srgb, var(--color-surface-hover) 88%, transparent);
-  text-align: center;
-}
-
-.solo-log-panel__empty p {
-  margin: 0 0 8px;
-  color: var(--color-text-primary);
-}
-
-.solo-log-panel__empty span {
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--color-text-secondary);
-}
-
-[data-theme='dark'] .solo-log-panel {
-  background: linear-gradient(180deg, color-mix(in srgb, var(--color-surface) 88%, #020617 12%) 0%, color-mix(in srgb, var(--color-surface) 94%, #020617 6%) 100%);
-}
-
-[data-theme='dark'] .solo-log-panel__header,
-[data-theme='dark'] .solo-log-panel__usage,
-[data-theme='dark'] .solo-log-panel__summary,
-[data-theme='dark'] .solo-log-panel__form {
-  border-bottom-color: color-mix(in srgb, var(--color-border) 54%, rgba(148, 163, 184, 0.18) 46%);
-}
-
-[data-theme='dark'] .solo-log-panel__chip,
-[data-theme='dark'] .solo-log-panel__files span {
-  background: color-mix(in srgb, var(--color-surface-hover) 54%, rgba(15, 23, 42, 0.46) 46%);
-  color: color-mix(in srgb, var(--color-text-secondary) 90%, white 10%);
-}
-
-[data-theme='dark'] .solo-log-panel__summary {
-  background: color-mix(in srgb, var(--color-primary) 10%, rgba(15, 23, 42, 0.32) 90%);
-}
-
-[data-theme='dark'] .solo-log-panel__form {
-  background: color-mix(in srgb, #f59e0b 12%, rgba(120, 53, 15, 0.16));
-}
-
-[data-theme='dark'] .solo-log-panel__empty {
-  background: color-mix(in srgb, var(--color-surface-hover) 48%, rgba(15, 23, 42, 0.54) 52%);
-}
-
-.solo-log-panel__timeline::-webkit-scrollbar {
-  width: 10px;
-}
-
-.solo-log-panel__timeline::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--color-primary) 28%, transparent);
-}
-
-.solo-log-panel__timeline::-webkit-scrollbar-track {
-  background: transparent;
+[data-theme='dark'] .solo-execution-log__summary-files span {
+  background: rgba(30, 41, 59, 0.9);
+  border-color: rgba(148, 163, 184, 0.18);
 }
 </style>

@@ -36,7 +36,17 @@ import {
   createCliFailureFragment,
   type CliFailureMatch
 } from '@/utils/cliFailureMonitor'
+import {
+  mergeFinalUsageSnapshotCounts,
+  mergeResponseUsageCounts,
+  normalizeRuntimeUsage,
+  type UsageBaseline
+} from '@/utils/runtimeUsage'
 import { recordAgentCliUsageInBackground, resolveRecordedModelId } from '@/services/usage/agentCliUsageRecorder'
+import {
+  readCliSessionUsageSnapshot,
+  readSessionCliUsageSnapshot
+} from '@/services/usage/cliSessionUsageSnapshot'
 import { buildExpertSystemPrompt, resolveExpertById } from '@/services/agentTeams/runtime'
 import { writeFrontendRuntimeLog } from '@/services/runtimeLog/client'
 import { useSettingsStore } from '@/stores/settings'
@@ -47,11 +57,6 @@ import {
   resolveRuntimeBindingKey,
   upsertSessionRuntimeBinding
 } from './runtimeBindings'
-import {
-  isCumulativeUsageRuntime,
-  normalizeRuntimeUsage,
-  type UsageBaseline
-} from '@/utils/runtimeUsage'
 
 interface StreamTimingMetrics {
   startedAt: number
@@ -62,6 +67,60 @@ interface StreamTimingMetrics {
   firstToolAt?: number
   doneAt?: number
   persistedAt?: number
+}
+
+function resolveCodexContextWindowOccupancy(usage: {
+  inputTokens?: number
+  outputTokens?: number
+  rawInputTokens?: number
+  rawOutputTokens?: number
+}): number | undefined {
+  const rawInputTokens = typeof usage.rawInputTokens === 'number' ? usage.rawInputTokens : undefined
+  const rawOutputTokens = typeof usage.rawOutputTokens === 'number' ? usage.rawOutputTokens : undefined
+  if (rawInputTokens !== undefined || rawOutputTokens !== undefined) {
+    return (rawInputTokens ?? 0) + (rawOutputTokens ?? 0)
+  }
+
+  const inputTokens = typeof usage.inputTokens === 'number' ? usage.inputTokens : undefined
+  const outputTokens = typeof usage.outputTokens === 'number' ? usage.outputTokens : undefined
+  if (inputTokens !== undefined || outputTokens !== undefined) {
+    return (inputTokens ?? 0) + (outputTokens ?? 0)
+  }
+
+  return undefined
+}
+
+function normalizeUsageNumber(value?: number): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : undefined
+}
+
+function resolveRuntimeContextWindowOccupancy(options: {
+  provider?: string | null
+  inputTokens?: number
+  outputTokens?: number
+  rawInputTokens?: number
+  rawOutputTokens?: number
+}): number | undefined {
+  const provider = options.provider?.trim().toLowerCase() ?? ''
+  if (provider === 'codex') {
+    return resolveCodexContextWindowOccupancy(options)
+  }
+
+  const inputTokens = normalizeUsageNumber(options.inputTokens)
+  const outputTokens = normalizeUsageNumber(options.outputTokens)
+  if (inputTokens !== undefined || outputTokens !== undefined) {
+    return (inputTokens ?? 0) + (outputTokens ?? 0)
+  }
+
+  const rawInputTokens = normalizeUsageNumber(options.rawInputTokens)
+  const rawOutputTokens = normalizeUsageNumber(options.rawOutputTokens)
+  if (rawInputTokens !== undefined || rawOutputTokens !== undefined) {
+    return (rawInputTokens ?? 0) + (rawOutputTokens ?? 0)
+  }
+
+  return undefined
 }
 
 function removeRuntimeNoticeById(
@@ -202,7 +261,6 @@ export class ConversationService {
   private readonly cliRuntimeKeys = ['claude-cli', 'codex-cli', 'opencode-cli'] as const
   private readonly conversationRetryCount = new Map<string, number>()
   private readonly conversationRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  private readonly usageBaselines = new Map<string, UsageBaseline>()
 
   private constructor() {}
 
@@ -298,11 +356,7 @@ export class ConversationService {
     this.activeSendSessions.add(sessionId)
     sessionExecutionStore.startSending(sessionId)
     this.clearConversationRetryState(sessionId)
-    const isRetry = Boolean(options?.existingUserMessageId?.trim() || options?.reuseAssistantMessageId?.trim())
     sessionExecutionStore.clearCurrentRetryState(sessionId)
-    if (!isRetry) {
-      tokenStore.clearRealtimeTokens(sessionId)
-    }
 
     try {
       const existingUserMessageId = options?.existingUserMessageId?.trim()
@@ -395,15 +449,6 @@ export class ConversationService {
       if (environmentNotice) {
         messageStore.updateMessageBuffered(aiMessage.id, {
           runtimeNotices: [environmentNotice]
-        })
-      }
-
-      const initialUsageNotice = buildUsageNotice({ model: requestedUsageModel })
-      if (initialUsageNotice) {
-        const currentMessage = messageStore.messagesBySession(sessionId)
-          .find(message => message.id === aiMessage.id)
-        messageStore.updateMessageBuffered(aiMessage.id, {
-          runtimeNotices: upsertRuntimeNotice(currentMessage?.runtimeNotices, initialUsageNotice)
         })
       }
 
@@ -545,7 +590,6 @@ export class ConversationService {
       }
 
     } catch (error) {
-      tokenStore.clearRealtimeTokens(sessionId)
       this.finalizeSend(sessionId)
       throw error
     }
@@ -841,10 +885,6 @@ export class ConversationService {
     const runtimeProvider = inferAgentProvider(context.agent) ?? context.agent.provider ?? context.agent.type
     const runtimeLabel = runtimeProvider.toUpperCase()
 
-    if (!context.resumeSessionId || !isCumulativeUsageRuntime(runtimeProvider)) {
-      this.usageBaselines.delete(sessionId)
-    }
-
     let accumulatedContent = aiMessage.content
       ? `${aiMessage.content.trimEnd()}\n\n`
       : ''
@@ -867,14 +907,25 @@ export class ConversationService {
     const pendingTraceTasks = new Set<Promise<void>>()
     const pendingPersistenceTasks = new Set<Promise<void>>()
     const cliSessionProvider = this.resolveCliSessionProvider(context.agent)
+    const cliSnapshotProvider = (
+      cliSessionProvider === 'claude'
+      || cliSessionProvider === 'codex'
+      || cliSessionProvider === 'opencode'
+    )
+      ? cliSessionProvider
+      : undefined
+    const shouldDeferCliUsageSync = context.agent.type === 'cli'
     const runtimeKey = resolveRuntimeBindingKey(context.agent)
     const streamMetrics: StreamTimingMetrics = {
       startedAt: globalThis.performance?.now() ?? Date.now()
     }
+    let usageBaseline: UsageBaseline | null = null
     let lastErrorMessage = ''
     let usageRecorded = false
+    let latestExternalSessionId: string | undefined
     let pendingUiUpdate: Partial<Message> | null = null
-    let scheduledUiFlushHandle: number | ReturnType<typeof setTimeout> | null = null
+    let scheduledUiFlushAnimationFrame: number | null = null
+    let scheduledUiFlushTimeout: ReturnType<typeof setTimeout> | null = null
 
     const registerTraceTask = (task: Promise<void>) => {
       pendingTraceTasks.add(task)
@@ -891,6 +942,8 @@ export class ConversationService {
       if (!normalizedExternalSessionId || !cliSessionProvider) {
         return
       }
+
+      latestExternalSessionId = normalizedExternalSessionId
 
       registerPersistenceTask(
         (async () => {
@@ -919,17 +972,15 @@ export class ConversationService {
     }
 
     const clearScheduledUiFlush = () => {
-      if (scheduledUiFlushHandle === null) {
-        return
+      if (scheduledUiFlushAnimationFrame !== null && typeof globalThis.cancelAnimationFrame === 'function') {
+        globalThis.cancelAnimationFrame(scheduledUiFlushAnimationFrame)
+        scheduledUiFlushAnimationFrame = null
       }
 
-      if (typeof scheduledUiFlushHandle === 'number' && typeof globalThis.cancelAnimationFrame === 'function') {
-        globalThis.cancelAnimationFrame(scheduledUiFlushHandle)
-      } else {
-        clearTimeout(scheduledUiFlushHandle as ReturnType<typeof setTimeout>)
+      if (scheduledUiFlushTimeout !== null) {
+        clearTimeout(scheduledUiFlushTimeout)
+        scheduledUiFlushTimeout = null
       }
-
-      scheduledUiFlushHandle = null
     }
 
     const getCurrentAiMessage = () => {
@@ -977,20 +1028,21 @@ export class ConversationService {
     }
 
     const scheduleUiFlush = () => {
-      if (scheduledUiFlushHandle !== null) {
+      if (scheduledUiFlushAnimationFrame !== null || scheduledUiFlushTimeout !== null) {
         return
       }
 
       if (typeof globalThis.requestAnimationFrame === 'function') {
-        scheduledUiFlushHandle = globalThis.requestAnimationFrame(() => {
-          scheduledUiFlushHandle = null
+        scheduledUiFlushAnimationFrame = globalThis.requestAnimationFrame(() => {
+          scheduledUiFlushAnimationFrame = null
           flushPendingUiUpdate()
         })
-        return
       }
 
-      scheduledUiFlushHandle = setTimeout(() => {
-        scheduledUiFlushHandle = null
+      // Tauri WebView 在长时间 CLI 流式输出期间可能推迟 animation frame，
+      // 这里保留一个 timeout 兜底，确保消息/工具调用/token 能持续刷新到页面。
+      scheduledUiFlushTimeout = setTimeout(() => {
+        scheduledUiFlushTimeout = null
         flushPendingUiUpdate()
       }, 16)
     }
@@ -1069,27 +1121,6 @@ export class ConversationService {
       })
     }
 
-    const syncFinalUsageNotice = () => {
-      const realtimeUsage = tokenStore.realtimeTokens.get(sessionId)
-      if (realtimeUsage) {
-        const normalizedRealtimeModel = resolveRequestedUsageModel({
-          requestedModelId: context.agent.modelId,
-          reportedModelId: realtimeUsage.model
-        })
-        if ((!usageState.model || usageState.model.trim().length === 0) && normalizedRealtimeModel) {
-          usageState.model = normalizedRealtimeModel
-        }
-        if ((usageState.inputTokens ?? 0) <= 0 && realtimeUsage.inputTokens > 0) {
-          usageState.inputTokens = realtimeUsage.inputTokens
-        }
-        if ((usageState.outputTokens ?? 0) <= 0 && realtimeUsage.outputTokens > 0) {
-          usageState.outputTokens = realtimeUsage.outputTokens
-        }
-      }
-
-      syncRealtimeUsageNotice()
-    }
-
     const syncRealtimeUsageNotice = (options?: { immediate?: boolean }) => {
       const usageNotice = buildUsageNotice(usageState)
       if (!usageNotice) {
@@ -1114,6 +1145,64 @@ export class ConversationService {
       bufferMessageUpdate({
         runtimeNotices: runtimeNoticesState
       })
+    }
+
+    const applyFinalUsageSnapshot = async () => {
+      if (context.agent.type !== 'cli') {
+        syncRealtimeUsageNotice()
+        tokenStore.updateRealtimeTokens(
+          sessionId,
+          usageState.inputTokens,
+          usageState.outputTokens,
+          usageState.model,
+          usageState.contextWindowOccupancy
+        )
+        return
+      }
+
+      let finalUsageSnapshot = null
+      try {
+        finalUsageSnapshot = latestExternalSessionId && cliSnapshotProvider
+          ? await readCliSessionUsageSnapshot({
+            provider: cliSnapshotProvider,
+            cliSessionId: latestExternalSessionId
+          })
+          : await readSessionCliUsageSnapshot(
+            sessionStore.sessions.find(session => session.id === sessionId) ?? {
+              id: sessionId,
+              cliSessionProvider: cliSnapshotProvider,
+              cliSessionId: latestExternalSessionId
+            }
+          )
+      } catch (error) {
+        console.warn('[ConversationService] Failed to read final CLI usage snapshot:', error)
+      }
+
+      if (finalUsageSnapshot) {
+        const mergedUsageCounts = mergeFinalUsageSnapshotCounts({
+          inputTokens: usageState.inputTokens,
+          outputTokens: usageState.outputTokens
+        }, {
+          inputTokens: finalUsageSnapshot.inputTokens,
+          outputTokens: finalUsageSnapshot.outputTokens
+        }, cliSnapshotProvider ?? runtimeProvider)
+        usageState.model = resolveRequestedUsageModel({
+          requestedModelId: context.agent.modelId,
+          reportedModelId: finalUsageSnapshot.model
+        }) ?? usageState.model
+        usageState.inputTokens = mergedUsageCounts.inputTokens
+        usageState.outputTokens = mergedUsageCounts.outputTokens
+        usageState.contextWindowOccupancy = finalUsageSnapshot.contextWindowOccupancy
+      }
+
+      syncRealtimeUsageNotice()
+      tokenStore.updateRealtimeTokens(
+        sessionId,
+        usageState.inputTokens,
+        usageState.outputTokens,
+        usageState.model,
+        usageState.contextWindowOccupancy
+      )
     }
 
     /**
@@ -1209,7 +1298,8 @@ export class ConversationService {
 
       this.clearConversationRetryState(sessionId)
       sessionExecutionStore.clearCurrentRetryState(sessionId)
-      syncFinalUsageNotice()
+      await Promise.allSettled(Array.from(pendingPersistenceTasks))
+      await applyFinalUsageSnapshot()
       syncProcessingTimeNotice()
       bufferMessageUpdate({
         status: 'error',
@@ -1220,7 +1310,6 @@ export class ConversationService {
       markMetric('persistedAt')
       recordTimingSummary()
       recordUsageOnce(new Date().toISOString())
-      tokenStore.clearRealtimeTokens(sessionId)
       this.finalizeSend(sessionId)
     }
 
@@ -1387,6 +1476,17 @@ export class ConversationService {
           },
           onUsage: (usage) => {
             clearRetryPresentationOnRecoveredStream()
+            const normalizedUsage = normalizeRuntimeUsage({
+              provider: runtimeProvider,
+              inputTokens: usage.inputTokens,
+              outputTokens: usage.outputTokens,
+              rawInputTokens: usage.rawInputTokens,
+              rawOutputTokens: usage.rawOutputTokens,
+              cacheReadInputTokens: usage.cacheReadInputTokens,
+              cacheCreationInputTokens: usage.cacheCreationInputTokens,
+              baseline: usageBaseline
+            })
+            usageBaseline = normalizedUsage.nextBaseline
             const normalizedUsageModel = resolveRequestedUsageModel({
               requestedModelId: context.agent.modelId,
               reportedModelId: usage.model
@@ -1394,24 +1494,56 @@ export class ConversationService {
             if (normalizedUsageModel) {
               usageState.model = normalizedUsageModel
             }
-            if (usage.inputTokens !== undefined) {
-              usageState.inputTokens = (usageState.inputTokens ?? 0) + usage.inputTokens
-            }
-            if (usage.outputTokens !== undefined) {
-              usageState.outputTokens = (usageState.outputTokens ?? 0) + usage.outputTokens
-            }
-            if (usage.rawInputTokens !== undefined && usage.rawInputTokens > 0) {
-              usageState.contextWindowOccupancy = usage.rawInputTokens
+            const mergedUsageCounts = mergeResponseUsageCounts({
+              inputTokens: usageState.inputTokens,
+              outputTokens: usageState.outputTokens
+            }, {
+              inputTokens: normalizedUsage.inputTokens,
+              outputTokens: normalizedUsage.outputTokens
+            }, runtimeProvider)
+            usageState.inputTokens = mergedUsageCounts.inputTokens
+            usageState.outputTokens = mergedUsageCounts.outputTokens
+            const nextContextWindowOccupancy = resolveRuntimeContextWindowOccupancy({
+              provider: runtimeProvider,
+              inputTokens: usage.inputTokens,
+              outputTokens: usage.outputTokens,
+              rawInputTokens: usage.rawInputTokens,
+              rawOutputTokens: usage.rawOutputTokens
+            })
+            if (nextContextWindowOccupancy !== undefined && nextContextWindowOccupancy > 0) {
+              usageState.contextWindowOccupancy = nextContextWindowOccupancy
             }
 
-            syncRealtimeUsageNotice()
+            if (!shouldDeferCliUsageSync) {
+              tokenStore.updateRealtimeTokens(
+                sessionId,
+                usageState.inputTokens,
+                usageState.outputTokens,
+                usageState.model,
+                usageState.contextWindowOccupancy
+              )
+              syncRealtimeUsageNotice()
+            }
           },
           onSystem: (content) => {
             clearRetryPresentationOnRecoveredStream()
 
             if (content && content.includes('CLI Context Compaction')) {
-              tokenStore.hardClearSessionTokens(sessionId)
-              this.usageBaselines.delete(sessionId)
+              if (!shouldDeferCliUsageSync) {
+                tokenStore.hardClearSessionTokens(sessionId)
+                tokenStore.updateRealtimeTokens(
+                  sessionId,
+                  undefined,
+                  undefined,
+                  usageState.model,
+                  0
+                )
+              }
+              usageBaseline = null
+              usageState.inputTokens = undefined
+              usageState.outputTokens = undefined
+              usageState.contextWindowOccupancy = undefined
+              runtimeNoticesState = removeRuntimeNoticeById(runtimeNoticesState, 'usage')
               const lines = content.split('\n').slice(1)
               const detailParts: string[] = []
               for (const line of lines) {
@@ -1435,7 +1567,7 @@ export class ConversationService {
                 id: 'cli-context-compression',
                 title: i18n.global.t('compression.cliCompactionTitle'),
                 content: detailParts.length > 0 ? detailParts.join('\n') : i18n.global.t('compression.cliCompactionResetNotice'),
-                tone: 'info'
+                tone: 'warning'
               }
               runtimeNoticesState = upsertRuntimeNotice(runtimeNoticesState, compressionNotice)
               bufferMessageUpdate({
@@ -1473,7 +1605,6 @@ export class ConversationService {
             if (finalizedToolCalls !== toolCalls) {
               toolCalls.splice(0, toolCalls.length, ...finalizedToolCalls)
             }
-            syncFinalUsageNotice()
             syncProcessingTimeNotice()
             // 更新消息状态
             if (!shouldSurfaceExecutionFailure() && !isAiMessageInterrupted()) {
@@ -1491,12 +1622,6 @@ export class ConversationService {
               )
             }
             this.finalizeSend(sessionId)
-
-            registerPersistenceTask(
-              messageStore.flushBufferedMessageUpdate(aiMessage.id, { notifyOnFailure: true })
-            )
-            recordUsageOnce(new Date().toISOString())
-            tokenStore.clearRealtimeTokens(sessionId)
           }
         })
       })
@@ -1504,7 +1629,9 @@ export class ConversationService {
       flushPendingUiUpdate()
       await Promise.allSettled(Array.from(pendingTraceTasks))
       await Promise.allSettled(Array.from(pendingPersistenceTasks))
+      await applyFinalUsageSnapshot()
       await messageStore.flushBufferedMessageUpdate(aiMessage.id, { notifyOnFailure: true })
+      recordUsageOnce(new Date().toISOString())
 
       if (shouldSurfaceExecutionFailure() && !isAiMessageInterrupted()) {
         markMetric('doneAt')
@@ -1529,7 +1656,7 @@ export class ConversationService {
         if (finalizedToolCalls !== toolCalls) {
           toolCalls.splice(0, toolCalls.length, ...finalizedToolCalls)
         }
-        syncFinalUsageNotice()
+        await applyFinalUsageSnapshot()
         syncProcessingTimeNotice()
         if (!shouldSurfaceExecutionFailure()) {
           bufferMessageUpdate({
@@ -1549,7 +1676,6 @@ export class ConversationService {
         markMetric('persistedAt')
         recordTimingSummary()
         recordUsageOnce(new Date().toISOString())
-        tokenStore.clearRealtimeTokens(sessionId)
         this.finalizeSend(sessionId)
       }
     } catch (error) {
@@ -1599,7 +1725,8 @@ export class ConversationService {
 
       if (isAiMessageInterrupted()) {
         markMetric('doneAt')
-        syncFinalUsageNotice()
+        await Promise.allSettled(Array.from(pendingPersistenceTasks))
+        await applyFinalUsageSnapshot()
         syncProcessingTimeNotice()
         bufferMessageUpdate({
           thinkingActive: false
@@ -1608,7 +1735,6 @@ export class ConversationService {
         markMetric('persistedAt')
         recordTimingSummary()
         recordUsageOnce(new Date().toISOString())
-        tokenStore.clearRealtimeTokens(sessionId)
         this.finalizeSend(sessionId)
         return
       }
@@ -1738,60 +1864,32 @@ export class ConversationService {
       onToolInputDelta: (toolCallId: string | undefined, toolInput: Record<string, unknown> | undefined) => void
       onToolResult: (toolCallId: string, result: string, isError: boolean) => void
       onFileEdit: (trace: FileEditTrace) => void
-      onUsage: (usage: { model?: string, inputTokens?: number, outputTokens?: number, rawInputTokens?: number }) => void
+      onUsage: (usage: {
+        model?: string
+        inputTokens?: number
+        outputTokens?: number
+        rawInputTokens?: number
+        rawOutputTokens?: number
+        cacheReadInputTokens?: number
+        cacheCreationInputTokens?: number
+      }) => void
       onSystem: (content: string) => void
       onError: (error: string) => void
       onDone: () => void
     }
   ): void {
     const { onContent, onThinking, onThinkingStart, onToolUse, onToolInputDelta, onToolResult, onFileEdit, onUsage, onSystem, onError, onDone } = handlers
-    const tokenStore = useTokenStore()
-    const prevBaseline = this.usageBaselines.get(handlers.sessionId) ?? null
-    const normalizedUsage = normalizeRuntimeUsage({
-      provider: handlers.runtimeProvider,
-      inputTokens: event.inputTokens,
-      outputTokens: event.outputTokens,
-      rawInputTokens: event.rawInputTokens,
-      rawOutputTokens: event.rawOutputTokens,
-      cacheReadInputTokens: event.cacheReadInputTokens,
-      cacheCreationInputTokens: event.cacheCreationInputTokens,
-      baseline: prevBaseline
-    })
-    const normalizedEvent: StreamEvent = {
-      ...event,
-      inputTokens: normalizedUsage.inputTokens,
-      outputTokens: normalizedUsage.outputTokens
-    }
 
-    if (normalizedUsage.nextBaseline) {
-      this.usageBaselines.set(handlers.sessionId, normalizedUsage.nextBaseline)
-    }
-
-    // 处理 token 事件 - 依赖 provider 级 parser 决定哪个事件携带 canonical token。
-    if (normalizedEvent.inputTokens !== undefined || normalizedEvent.outputTokens !== undefined) {
-      tokenStore.updateRealtimeTokens(
-        handlers.sessionId,
-        normalizedEvent.inputTokens,
-        normalizedEvent.outputTokens,
-        resolveRequestedUsageModel({
-          requestedModelId: handlers.requestedModelId,
-          reportedModelId: normalizedEvent.model
-        }),
-        normalizedEvent.rawInputTokens
-      )
-    }
-
-    switch (normalizedEvent.type) {
+    switch (event.type) {
       case 'content':
-        if (normalizedEvent.content) {
-          onContent(normalizedEvent.content)
+        if (event.content) {
+          onContent(event.content)
         }
         break
 
       case 'thinking':
-        // 处理思考内容
-        if (normalizedEvent.content) {
-          onThinking(normalizedEvent.content)
+        if (event.content) {
+          onThinking(event.content)
         }
         break
 
@@ -1800,12 +1898,12 @@ export class ConversationService {
         break
 
       case 'tool_use':
-        if (normalizedEvent.toolName) {
-          const toolCallId = resolveToolCallId(normalizedEvent)
+        if (event.toolName) {
+          const toolCallId = resolveToolCallId(event)
           const toolCall: ToolCall = {
             id: toolCallId,
-            name: normalizedEvent.toolName,
-            arguments: normalizedEvent.toolInput || {},
+            name: event.toolName,
+            arguments: event.toolInput || {},
             status: 'running'
           }
           onToolUse(toolCall)
@@ -1815,51 +1913,54 @@ export class ConversationService {
         break
 
       case 'tool_input_delta':
-        onToolInputDelta(normalizedEvent.toolCallId, normalizedEvent.toolInput)
+        onToolInputDelta(event.toolCallId, event.toolInput)
         break
 
       case 'tool_result':
-        if (normalizedEvent.toolCallId) {
-          const result = typeof normalizedEvent.toolResult === 'string'
-            ? normalizedEvent.toolResult
-            : JSON.stringify(normalizedEvent.toolResult, null, 2)
-          onToolResult(normalizedEvent.toolCallId, result, false)
+        if (event.toolCallId) {
+          const result = typeof event.toolResult === 'string'
+            ? event.toolResult
+            : JSON.stringify(event.toolResult, null, 2)
+          onToolResult(event.toolCallId, result, false)
         } else {
           console.warn('[ConversationService] tool_result 事件缺少 toolCallId，尝试匹配最后一个工具调用')
-          // 如果没有 toolCallId，尝试更新最后一个 running 状态的工具调用
           const lastRunningTool = [...handlers.toolCalls].reverse().find(tc => tc.status === 'running')
-          if (lastRunningTool && normalizedEvent.toolResult) {
-            const result = typeof normalizedEvent.toolResult === 'string'
-              ? normalizedEvent.toolResult
-              : JSON.stringify(normalizedEvent.toolResult, null, 2)
+          if (lastRunningTool && event.toolResult) {
+            const result = typeof event.toolResult === 'string'
+              ? event.toolResult
+              : JSON.stringify(event.toolResult, null, 2)
             onToolResult(lastRunningTool.id, result, false)
           }
         }
         break
 
       case 'error':
-        if (normalizedEvent.error) {
-          onError(normalizedEvent.error)
+        if (event.error) {
+          onError(event.error)
         }
         break
 
       case 'usage':
         onUsage({
-          model: normalizedEvent.model,
-          inputTokens: normalizedEvent.inputTokens,
-          outputTokens: normalizedEvent.outputTokens
+          model: event.model,
+          inputTokens: event.inputTokens,
+          outputTokens: event.outputTokens,
+          rawInputTokens: event.rawInputTokens,
+          rawOutputTokens: event.rawOutputTokens,
+          cacheReadInputTokens: event.cacheReadInputTokens,
+          cacheCreationInputTokens: event.cacheCreationInputTokens
         })
         break
 
       case 'system':
-        if (normalizedEvent.content) {
-          onSystem(normalizedEvent.content)
+        if (event.content) {
+          onSystem(event.content)
         }
         break
 
       case 'file_edit':
-        if (normalizedEvent.fileEdit) {
-          onFileEdit(normalizedEvent.fileEdit)
+        if (event.fileEdit) {
+          onFileEdit(event.fileEdit)
         }
         break
 

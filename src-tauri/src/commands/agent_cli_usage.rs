@@ -711,30 +711,6 @@ pub fn record_agent_cli_usage(
     .map_err(|error| error.to_string())
 }
 
-#[derive(Debug, serde::Serialize)]
-pub struct SessionUsageSummary {
-    pub total_input_tokens: i64,
-    pub total_output_tokens: i64,
-}
-
-#[tauri::command]
-pub fn get_session_usage_summary(session_id: String) -> Result<SessionUsageSummary, String> {
-    let conn = open_db_connection().map_err(|error| error.to_string())?;
-    let result = conn
-        .query_row(
-            "SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0) FROM agent_cli_usage_records WHERE session_id = ?1",
-            [session_id],
-            |row| {
-                Ok(SessionUsageSummary {
-                    total_input_tokens: row.get(0)?,
-                    total_output_tokens: row.get(1)?,
-                })
-            },
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(result)
-}
-
 /// 查询 CLI 用量统计聚合结果。
 ///
 /// 用途：为设置页统计面板提供时间范围、粒度和维度聚合后的图表数据。

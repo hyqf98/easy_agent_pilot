@@ -67,17 +67,6 @@ function formatTime(value: string): string {
     </div>
 
     <div
-      v-if="runs.length === 0"
-      class="solo-run-list__empty"
-    >
-      <div class="solo-run-list__empty-copy">
-        <p>还没有全程自主规划任务</p>
-        <span>创建后，规划智能体会持续协调参与专家，自动推进步骤、回写结果并轮询执行直到达到目标。</span>
-      </div>
-    </div>
-
-    <div
-      v-else
       class="solo-run-list__groups"
     >
       <section
@@ -156,51 +145,6 @@ function formatTime(value: string): string {
   color: white;
   background: linear-gradient(135deg, color-mix(in srgb, var(--color-primary) 82%, white) 0%, var(--color-primary) 100%);
   cursor: pointer;
-}
-
-.solo-run-list__empty {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 28px 22px 34px;
-  color: var(--color-text-secondary);
-}
-
-.solo-run-list__empty-copy {
-  width: 100%;
-  max-width: 236px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  text-align: left;
-}
-
-.solo-run-list__empty-copy::before {
-  content: 'SOLO';
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: fit-content;
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
-  color: var(--color-primary);
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-}
-
-.solo-run-list__empty p {
-  margin: 0 0 8px;
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--color-text-primary);
-}
-
-.solo-run-list__empty span {
-  font-size: 13px;
-  line-height: 1.6;
 }
 
 .solo-run-list__groups {

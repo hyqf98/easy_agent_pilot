@@ -276,7 +276,10 @@ pub(crate) fn extract_jsonl_project_path(json: &serde_json::Value) -> Option<Str
 }
 
 pub(crate) fn extract_jsonl_role(json: &serde_json::Value) -> Option<String> {
-    let top_level_type = json.get("type").and_then(|v| v.as_str()).unwrap_or_default();
+    let top_level_type = json
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
 
     if matches!(top_level_type, "user" | "assistant" | "system") {
         return Some(top_level_type.to_string());

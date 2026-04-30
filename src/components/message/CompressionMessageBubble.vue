@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMessageStore, type CompressionMetadata, type Message } from '@/stores/message'
 import MarkdownRenderer from './MarkdownRenderer.vue'
@@ -9,10 +9,22 @@ import { formatTokenCount } from '@/stores/token'
 const { t, locale } = useI18n()
 const props = defineProps<{ message: Message }>()
 const messageStore = useMessageStore()
+const bubbleRef = ref<HTMLElement | null>(null)
+const lockedWidth = ref<number | null>(null)
+let resizeObserver: ResizeObserver | null = null
 
 // 压缩消息元数据
 const metadata = computed(() => props.message.compressionMetadata)
 const isExpanded = computed(() => Boolean(metadata.value?.panelExpanded))
+const bubbleStyle = computed(() => {
+  if (!lockedWidth.value) {
+    return undefined
+  }
+
+  return {
+    width: `min(${lockedWidth.value}px, 100%)`
+  }
+})
 
 // 是否有工具调用摘要
 const hasToolCalls = computed(() =>
@@ -46,6 +58,30 @@ const strategyText = computed(() => {
   }
 })
 
+const triggerSourceText = computed(() => {
+  if (metadata.value?.triggerSource === 'auto') {
+    return `${t('compression.cliCompactionTrigger')}: ${t('compression.cliCompactionAuto')}`
+  }
+
+  if (metadata.value?.triggerSource === 'manual') {
+    return `${t('compression.cliCompactionTrigger')}: ${t('compression.cliCompactionManual')}`
+  }
+
+  return ''
+})
+
+const syncCollapsedWidth = () => {
+  const element = bubbleRef.value
+  if (!element) {
+    return
+  }
+
+  const nextWidth = Math.ceil(element.getBoundingClientRect().width)
+  if (nextWidth > 0) {
+    lockedWidth.value = nextWidth
+  }
+}
+
 // 切换展开状态
 const toggleExpand = () => {
   const nextMetadata: CompressionMetadata = {
@@ -64,10 +100,48 @@ const toggleExpand = () => {
     compressionMetadata: nextMetadata
   }, { immediate: true })
 }
+
+onMounted(async () => {
+  await nextTick()
+  syncCollapsedWidth()
+
+  if (typeof ResizeObserver === 'undefined' || !bubbleRef.value) {
+    return
+  }
+
+  resizeObserver = new ResizeObserver(() => {
+    if (!isExpanded.value) {
+      syncCollapsedWidth()
+    }
+  })
+  resizeObserver.observe(bubbleRef.value)
+})
+
+watch(isExpanded, async (expanded) => {
+  if (expanded) {
+    if (!lockedWidth.value) {
+      await nextTick()
+      syncCollapsedWidth()
+    }
+    return
+  }
+
+  await nextTick()
+  syncCollapsedWidth()
+})
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
+})
 </script>
 
 <template>
-  <div class="compression-bubble">
+  <div
+    ref="bubbleRef"
+    class="compression-bubble"
+    :style="bubbleStyle"
+  >
     <!-- 压缩头部 -->
     <div class="compression-bubble__header">
       <div class="compression-bubble__icon">
@@ -129,6 +203,12 @@ const toggleExpand = () => {
         class="compression-bubble__strategy"
       >
         {{ strategyText }}
+      </div>
+      <div
+        v-if="triggerSourceText"
+        class="compression-bubble__strategy compression-bubble__strategy--trigger"
+      >
+        {{ triggerSourceText }}
       </div>
     </div>
 
@@ -230,8 +310,11 @@ const toggleExpand = () => {
 }
 
 .compression-bubble__content {
+  min-width: 0;
+  max-width: 100%;
   padding: var(--spacing-3);
   overflow-y: auto;
+  overflow-x: hidden;
   max-height: 300px;
 }
 
@@ -267,7 +350,14 @@ const toggleExpand = () => {
   border-radius: var(--radius-sm);
 }
 
+.compression-bubble__strategy--trigger {
+  background-color: var(--color-surface);
+  color: var(--color-text-primary);
+}
+
 .compression-bubble__tools {
+  min-width: 0;
+  max-width: 100%;
   padding: var(--spacing-3);
   border-top: 1px solid var(--color-border);
 }
@@ -305,9 +395,11 @@ const toggleExpand = () => {
 
 .compression-bubble__tool-name {
   flex: 1;
+  min-width: 0;
   font-size: var(--font-size-sm);
   font-weight: 500;
   color: var(--color-text-primary);
+  overflow-wrap: anywhere;
 }
 
 .compression-bubble__tool-count {
@@ -325,9 +417,27 @@ const toggleExpand = () => {
 }
 
 .compression-bubble__no-tools {
+  min-width: 0;
+  max-width: 100%;
   padding: var(--spacing-3);
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
   text-align: center;
+}
+
+.compression-bubble__content :deep(*) {
+  max-width: 100%;
+}
+
+.compression-bubble__content :deep(pre),
+.compression-bubble__content :deep(table) {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.compression-bubble__content :deep(code),
+.compression-bubble__content :deep(p),
+.compression-bubble__content :deep(li) {
+  overflow-wrap: anywhere;
 }
 </style>

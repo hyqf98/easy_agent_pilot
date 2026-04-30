@@ -167,8 +167,7 @@ fn parse_mcp_servers_from_toml(
                             .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
                             .collect()
                     }),
-                disabled: if let Some(enabled) =
-                    config_obj.get("enabled").and_then(|v| v.as_bool())
+                disabled: if let Some(enabled) = config_obj.get("enabled").and_then(|v| v.as_bool())
                 {
                     !enabled
                 } else {
@@ -266,7 +265,10 @@ fn build_toml_mcp_servers(
                 .into_iter()
                 .map(|(k, v)| (k, toml::Value::String(v)))
                 .collect();
-            server_table.insert("http_headers".to_string(), toml::Value::Table(headers_table));
+            server_table.insert(
+                "http_headers".to_string(),
+                toml::Value::Table(headers_table),
+            );
         }
         if server_config.disabled {
             server_table.insert("enabled".to_string(), toml::Value::Boolean(false));

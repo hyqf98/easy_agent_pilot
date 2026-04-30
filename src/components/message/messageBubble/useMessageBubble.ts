@@ -3,17 +3,21 @@ import { useI18n } from 'vue-i18n'
 import { EaIcon } from '@/components/common'
 import { conversationService } from '@/services/conversation'
 import { MANUAL_STOP_ERROR_MARKER, type Message } from '@/stores/message'
+import { useAgentStore } from '@/stores/agent'
 import { useMessageStore } from '@/stores/message'
+import { useSessionStore } from '@/stores/session'
 import { useSessionExecutionStore } from '@/stores/sessionExecution'
 import { useTokenStore } from '@/stores/token'
 import { FILE_MENTION_PATTERN, getMentionDisplayText } from '@/utils/fileMention'
 import {
+  buildUsageNotice,
   isEnvironmentRuntimeNotice,
   getProcessingTimeNoticeSummary,
   isContextRuntimeNotice,
   isProcessingTimeRuntimeNotice
 } from '@/utils/runtimeNotice'
 import { extractFormResponse, parseStructuredContent } from '@/utils/structuredContent'
+import { resolveSessionAgent } from '@/utils/sessionAgent'
 
 export interface MessageBubbleProps {
   message: Message
@@ -42,6 +46,8 @@ interface MessagePart {
 export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleEmits) {
   const { t, locale } = useI18n()
   const messageStore = useMessageStore()
+  const agentStore = useAgentStore()
+  const sessionStore = useSessionStore()
   const sessionExecutionStore = useSessionExecutionStore()
   const tokenStore = useTokenStore()
   const nowTick = ref(Date.now())
@@ -332,8 +338,18 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
     return `${minutes}:${seconds.toString().padStart(2, '0')}`
   })
 
+  const isCliUsageFinalOnlySession = computed(() => {
+    if (!props.sessionId) {
+      return false
+    }
+
+    const session = sessionStore.sessions.find(item => item.id === props.sessionId)
+    const provider = (session?.cliSessionProvider || session?.agentType || '').trim().toLowerCase()
+    return provider === 'claude' || provider === 'codex' || provider === 'opencode'
+  })
+
   const runtimeUsageFallback = computed(() => {
-    if (!props.sessionId || !isAssistant.value) {
+    if (!props.sessionId || !isAssistant.value || isCliUsageFinalOnlySession.value) {
       return null
     }
 
@@ -350,7 +366,8 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
     return {
       model: realtimeUsage.model,
       inputTokens: realtimeUsage.inputTokens,
-      outputTokens: realtimeUsage.outputTokens
+      outputTokens: realtimeUsage.outputTokens,
+      contextWindowOccupancy: realtimeUsage.contextWindowOccupancy
     }
   })
 
@@ -362,6 +379,35 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
       && !isEnvironmentRuntimeNotice(notice)
     )
   })
+
+  const streamingUsagePlaceholderNotice = computed(() => {
+    if (!props.sessionId || !isAssistant.value || !isCurrentStreamingMessage.value || !isCliUsageFinalOnlySession.value) {
+      return null
+    }
+
+    const hasUsageNotice = visibleRuntimeNotices.value.some(notice => notice.id === 'usage')
+    if (hasUsageNotice) {
+      return null
+    }
+
+    const session = sessionStore.sessions.find(item => item.id === props.sessionId)
+    const agent = resolveSessionAgent(session, agentStore.agents)
+    const model = agent?.modelId?.trim() || undefined
+    return buildUsageNotice({ model })
+  })
+
+  const displayRuntimeNotices = computed(() => {
+    const placeholderNotice = streamingUsagePlaceholderNotice.value
+    if (!placeholderNotice) {
+      return visibleRuntimeNotices.value
+    }
+
+    return [...visibleRuntimeNotices.value, placeholderNotice]
+  })
+
+  const shouldShowRuntimeNotices = computed(() =>
+    isAssistant.value && displayRuntimeNotices.value.length > 0
+  )
 
   const assistantVisibleEditTraces = computed(() => {
     if (props.sessionMessages) {
@@ -561,6 +607,8 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
     assistantElapsedLabel,
     runtimeUsageFallback,
     visibleRuntimeNotices,
+    displayRuntimeNotices,
+    shouldShowRuntimeNotices,
     assistantVisibleEditTraces,
     errorMessage,
     toolCallCount,

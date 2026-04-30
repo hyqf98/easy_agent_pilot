@@ -39,10 +39,24 @@ export function useSoloRunCreateDialog(
     Math.max(props.expertOptions.length - collapsedExpertLimit, 0)
   )
 
+  const orderedExpertOptions = computed(() => {
+    const selectedIds = new Set(props.form.participantExpertIds)
+    return [...props.expertOptions].sort((left, right) => {
+      const leftSelected = selectedIds.has(left.value)
+      const rightSelected = selectedIds.has(right.value)
+
+      if (leftSelected === rightSelected) {
+        return 0
+      }
+
+      return leftSelected ? -1 : 1
+    })
+  })
+
   const visibleExpertOptions = computed(() => (
     showAllExperts.value
-      ? props.expertOptions
-      : props.expertOptions.slice(0, collapsedExpertLimit)
+      ? orderedExpertOptions.value
+      : orderedExpertOptions.value.slice(0, collapsedExpertLimit)
   ))
 
   function updateField<K extends keyof SoloCreateFormState>(key: K, value: SoloCreateFormState[K]) {

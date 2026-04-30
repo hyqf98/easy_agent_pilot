@@ -73,6 +73,8 @@ import {
   formatRuntimeNoticeAsSystemContent
 } from '@/utils/runtimeNotice'
 import {
+  mergeFinalUsageSnapshotCounts,
+  mergeResponseUsageCounts,
   isCumulativeUsageRuntime,
   normalizeRuntimeUsage,
   type UsageBaseline
@@ -88,6 +90,11 @@ import {
   resolveRuntimeBindingKey,
   upsertTaskRuntimeBinding
 } from '@/services/conversation/runtimeBindings'
+import {
+  readCliSessionUsageSnapshot,
+  type CliSessionProvider
+} from '@/services/usage/cliSessionUsageSnapshot'
+import type { AgentRuntimeKey } from '@/services/conversation/runtimeProfiles'
 import { loadMountedMemoryPrompt } from '@/services/memory/mountedMemoryPrompt'
 import { resolveUsageModelHint } from '@/services/conversation/usageModelHint'
 import {
@@ -107,6 +114,46 @@ function finalizeRunningToolCalls(toolCalls: ToolCall[]): void {
 const TASK_EXECUTION_STOPPED_ERROR = '__TASK_EXECUTION_STOPPED__'
 const TASK_AUTO_RETRY_DELAY_MS = 10_000
 const CLI_FAILURE_RETRY_DELAY_MS = 10_000
+
+function normalizeCliSessionProvider(provider?: string | null): CliSessionProvider | null {
+  const normalizedProvider = provider?.trim().toLowerCase()
+  if (normalizedProvider === 'claude') return 'claude'
+  if (normalizedProvider === 'codex') return 'codex'
+  if (normalizedProvider === 'opencode') return 'opencode'
+  return null
+}
+
+function resolveTaskContextWindowOccupancy(options: {
+  provider?: string | null
+  inputTokens?: number
+  outputTokens?: number
+  rawInputTokens?: number
+  rawOutputTokens?: number
+}): number | undefined {
+  const provider = options.provider?.trim().toLowerCase() ?? ''
+
+  if (provider === 'codex') {
+    const rawInputTokens = typeof options.rawInputTokens === 'number' ? Math.max(0, options.rawInputTokens) : undefined
+    const rawOutputTokens = typeof options.rawOutputTokens === 'number' ? Math.max(0, options.rawOutputTokens) : undefined
+    if (rawInputTokens !== undefined || rawOutputTokens !== undefined) {
+      return (rawInputTokens ?? 0) + (rawOutputTokens ?? 0)
+    }
+  }
+
+  const inputTokens = typeof options.inputTokens === 'number' ? Math.max(0, options.inputTokens) : undefined
+  const outputTokens = typeof options.outputTokens === 'number' ? Math.max(0, options.outputTokens) : undefined
+  if (inputTokens !== undefined || outputTokens !== undefined) {
+    return (inputTokens ?? 0) + (outputTokens ?? 0)
+  }
+
+  const rawInputTokens = typeof options.rawInputTokens === 'number' ? Math.max(0, options.rawInputTokens) : undefined
+  const rawOutputTokens = typeof options.rawOutputTokens === 'number' ? Math.max(0, options.rawOutputTokens) : undefined
+  if (rawInputTokens !== undefined || rawOutputTokens !== undefined) {
+    return (rawInputTokens ?? 0) + (rawOutputTokens ?? 0)
+  }
+
+  return undefined
+}
 
 function isMissingRecordError(error: unknown): boolean {
   return /query returned no rows/i.test(getErrorMessage(error))
@@ -401,31 +448,76 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
 
   function updateTaskTokenUsage(
     taskId: string,
-    usage: Pick<StreamEvent, 'inputTokens' | 'outputTokens' | 'model'>,
+    usage: Pick<StreamEvent, 'inputTokens' | 'outputTokens' | 'model'> & {
+      contextWindowOccupancy?: number
+    },
     requestedModelId?: string | null,
-    didResetUsageWindow: boolean = false
+    didResetUsageWindow: boolean = false,
+    runtimeProvider?: string | null
   ): void {
     const state = executionStates.value.get(taskId)
     if (!state) return
 
     const current = state.tokenUsage
-    const nextInputTokens = current.inputTokens + (typeof usage.inputTokens === 'number'
-      ? Math.max(0, usage.inputTokens)
-      : 0)
-    const nextOutputTokens = current.outputTokens + (typeof usage.outputTokens === 'number'
-      ? Math.max(0, usage.outputTokens)
-      : 0)
+    const mergedUsageCounts = mergeResponseUsageCounts({
+      inputTokens: current.inputTokens,
+      outputTokens: current.outputTokens
+    }, {
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens
+    }, runtimeProvider)
     const resolvedModel = resolveRecordedModelId({
       reportedModelId: usage.model || current.model,
       requestedModelId
     }) ?? usage.model ?? current.model
 
     state.tokenUsage = {
-      inputTokens: nextInputTokens,
-      outputTokens: nextOutputTokens,
+      inputTokens: mergedUsageCounts.inputTokens ?? 0,
+      outputTokens: mergedUsageCounts.outputTokens ?? 0,
       model: resolvedModel,
+      contextWindowOccupancy: usage.contextWindowOccupancy ?? current.contextWindowOccupancy,
       resetCount: didResetUsageWindow ? current.resetCount + 1 : current.resetCount,
       lastUpdatedAt: new Date().toISOString()
+    }
+  }
+
+  function resolveRecordedTaskUsage(state: TaskExecutionState): {
+    model?: string
+    inputTokens?: number
+    outputTokens?: number
+  } {
+    let model = state.tokenUsage.model
+    let inputTokens = 0
+    let outputTokens = 0
+    let hasUsage = false
+
+    for (const log of state.logs) {
+      const metadata = log.metadata
+      if (typeof metadata?.model === 'string' && metadata.model.trim()) {
+        model = metadata.model.trim()
+      }
+      if (typeof metadata?.inputTokens === 'number') {
+        inputTokens += Math.max(0, metadata.inputTokens)
+        hasUsage = true
+      }
+      if (typeof metadata?.outputTokens === 'number') {
+        outputTokens += Math.max(0, metadata.outputTokens)
+        hasUsage = true
+      }
+    }
+
+    if (!hasUsage) {
+      return {
+        model,
+        inputTokens: state.tokenUsage.inputTokens,
+        outputTokens: state.tokenUsage.outputTokens
+      }
+    }
+
+    return {
+      model,
+      inputTokens,
+      outputTokens
     }
   }
 
@@ -715,6 +807,14 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
       : crypto.randomUUID()
     state.startedAt = isResume ? (state.startedAt ?? new Date().toISOString()) : new Date().toISOString()
     state.completedAt = null
+    state.tokenUsage = {
+      inputTokens: 0,
+      outputTokens: 0,
+      model: undefined,
+      contextWindowOccupancy: undefined,
+      resetCount: state.tokenUsage.resetCount,
+      lastUpdatedAt: null
+    }
 
     if (!isResume) {
       state.accumulatedContent = ''
@@ -746,18 +846,19 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
       }
 
       usageRecorded = true
+      const recordedUsage = resolveRecordedTaskUsage(state)
       recordAgentCliUsageInBackground(currentAgentForUsage, {
         executionId: state.executionRunId,
         executionMode: 'task_execution',
         modelId: resolveRecordedModelId({
-          reportedModelId: state.tokenUsage.model,
+          reportedModelId: recordedUsage.model,
           requestedModelId: currentAgentForUsage.modelId
         }),
         projectId: plan.projectId,
         sessionId: null,
         taskId,
-        inputTokens: state.tokenUsage.inputTokens,
-        outputTokens: state.tokenUsage.outputTokens,
+        inputTokens: recordedUsage.inputTokens,
+        outputTokens: recordedUsage.outputTokens,
         occurredAt: state.completedAt || new Date().toISOString()
       })
     }
@@ -810,11 +911,12 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
         ...baseAgent,
         modelId: runtime?.modelId || selection.modelId || baseAgent.modelId || usageModelHint
       }
+      const agentProvider = inferAgentProvider(agent)
       currentAgentForUsage = agent
       if (agent.modelId?.trim()) {
-        updateTaskTokenUsage(taskId, { model: agent.modelId }, agent.modelId)
+        updateTaskTokenUsage(taskId, { model: agent.modelId }, agent.modelId, false, agentProvider)
       }
-      const agentProvider = inferAgentProvider(agent)
+      const cliSnapshotProvider = normalizeCliSessionProvider(agentProvider)
       const runtimeKey = resolveRuntimeBindingKey(agent)
       const runtimeBinding = isResume && runtimeKey
         ? await getTaskRuntimeBinding(taskId, runtimeKey).catch((error) => {
@@ -1018,6 +1120,12 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
         throw new Error(TASK_EXECUTION_STOPPED_ERROR)
       }
 
+      await applyFinalTaskUsageSnapshot(taskId, {
+        provider: cliSnapshotProvider,
+        runtimeKey,
+        requestedModelId: agent.modelId
+      })
+
       const fatalErrorLog = [...state.logs]
         .slice(latestAttemptLogStartIndex)
         .reverse()
@@ -1057,6 +1165,11 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
+      await applyFinalTaskUsageSnapshot(taskId, {
+        provider: normalizeCliSessionProvider(currentAgentForUsage ? inferAgentProvider(currentAgentForUsage) : null),
+        runtimeKey: currentAgentForUsage ? resolveRuntimeBindingKey(currentAgentForUsage) : null,
+        requestedModelId: currentAgentForUsage?.modelId
+      })
 
       const wasStopped = isTaskStopRequested(taskId, stopRequestedTaskIds.value)
 
@@ -1157,6 +1270,13 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
       inputTokens: normalizedUsage.inputTokens,
       outputTokens: normalizedUsage.outputTokens
     }
+    const contextWindowOccupancy = resolveTaskContextWindowOccupancy({
+      provider: runtimeProvider,
+      inputTokens: event.inputTokens,
+      outputTokens: event.outputTokens,
+      rawInputTokens: event.rawInputTokens,
+      rawOutputTokens: event.rawOutputTokens
+    })
 
     if (normalizedUsage.nextBaseline) {
       usageBaselines.set(taskId, normalizedUsage.nextBaseline)
@@ -1164,8 +1284,16 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
       usageBaselines.delete(taskId)
     }
 
-    if (normalizedEvent.inputTokens !== undefined || normalizedEvent.outputTokens !== undefined || normalizedEvent.model) {
-      updateTaskTokenUsage(taskId, normalizedEvent, requestedModelId, normalizedUsage.didReset)
+    if (
+      normalizedEvent.inputTokens !== undefined
+      || normalizedEvent.outputTokens !== undefined
+      || normalizedEvent.model
+      || contextWindowOccupancy !== undefined
+    ) {
+      updateTaskTokenUsage(taskId, {
+        ...normalizedEvent,
+        contextWindowOccupancy
+      }, requestedModelId, normalizedUsage.didReset, runtimeProvider)
     }
 
     switch (normalizedEvent.type) {
@@ -1366,7 +1494,8 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
     const usageNotice = buildUsageNotice({
       model: state.tokenUsage.model,
       inputTokens: state.tokenUsage.inputTokens,
-      outputTokens: state.tokenUsage.outputTokens
+      outputTokens: state.tokenUsage.outputTokens,
+      contextWindowOccupancy: state.tokenUsage.contextWindowOccupancy
     })
     const content = formatRuntimeNoticeAsSystemContent(usageNotice)
     if (!content) {
@@ -1385,9 +1514,80 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
       metadata: {
         model: state.tokenUsage.model,
         inputTokens: state.tokenUsage.inputTokens,
-        outputTokens: state.tokenUsage.outputTokens
+        outputTokens: state.tokenUsage.outputTokens,
+        contextWindowOccupancy: state.tokenUsage.contextWindowOccupancy
       }
     })
+  }
+
+  async function applyFinalTaskUsageSnapshot(
+    taskId: string,
+    options: {
+      provider?: string | null
+      runtimeKey?: AgentRuntimeKey | null
+      requestedModelId?: string | null
+    } = {}
+  ): Promise<void> {
+    const state = executionStates.value.get(taskId)
+    if (!state) {
+      return
+    }
+
+    const provider = normalizeCliSessionProvider(options.provider)
+    if (!provider) {
+      return
+    }
+
+    const taskStore = useTaskStore()
+    const task = taskStore.tasks.find(item => item.id === taskId)
+    const runtimeBinding = options.runtimeKey
+      ? await getTaskRuntimeBinding(taskId, options.runtimeKey).catch((error) => {
+          console.warn('[TaskExecution] Failed to load task runtime binding for usage snapshot:', error)
+          return null
+        })
+      : null
+    const externalSessionId = runtimeBinding?.externalSessionId?.trim()
+      || (
+        task?.cliSessionProvider?.trim().toLowerCase() === provider
+          ? task.sessionId?.trim()
+          : ''
+      )
+      || undefined
+
+    if (!externalSessionId) {
+      return
+    }
+
+    const usageSnapshot = await readCliSessionUsageSnapshot({
+      provider,
+      cliSessionId: externalSessionId
+    }).catch((error) => {
+      console.warn('[TaskExecution] Failed to read task usage snapshot:', error)
+      return null
+    })
+    if (!usageSnapshot) {
+      return
+    }
+
+    const mergedUsageCounts = mergeFinalUsageSnapshotCounts({
+      inputTokens: state.tokenUsage.inputTokens,
+      outputTokens: state.tokenUsage.outputTokens
+    }, {
+      inputTokens: usageSnapshot.inputTokens,
+      outputTokens: usageSnapshot.outputTokens
+    }, provider)
+
+    state.tokenUsage = {
+      inputTokens: mergedUsageCounts.inputTokens ?? 0,
+      outputTokens: mergedUsageCounts.outputTokens ?? 0,
+      model: resolveRecordedModelId({
+        reportedModelId: usageSnapshot.model || state.tokenUsage.model,
+        requestedModelId: options.requestedModelId || undefined
+      }) ?? usageSnapshot.model ?? state.tokenUsage.model,
+      contextWindowOccupancy: usageSnapshot.contextWindowOccupancy,
+      resetCount: state.tokenUsage.resetCount,
+      lastUpdatedAt: new Date().toISOString()
+    }
   }
 
   async function saveTaskExecutionResult(input: SaveTaskExecutionResultInput): Promise<void> {

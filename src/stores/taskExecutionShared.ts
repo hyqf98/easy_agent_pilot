@@ -35,6 +35,7 @@ export function createExecutionState(taskId: string): TaskExecutionState {
     tokenUsage: {
       inputTokens: 0,
       outputTokens: 0,
+      contextWindowOccupancy: undefined,
       resetCount: 0,
       lastUpdatedAt: null
     }

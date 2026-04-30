@@ -776,8 +776,12 @@ pub async fn upgrade_cli(cli_name: String, app: AppHandle) -> Result<(), String>
                         return Ok(());
                     }
 
-                    let current = version_state.current.unwrap_or_else(|| "unknown".to_string());
-                    let latest = version_state.latest.unwrap_or_else(|| "unknown".to_string());
+                    let current = version_state
+                        .current
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let latest = version_state
+                        .latest
+                        .unwrap_or_else(|| "unknown".to_string());
                     let stale_error = format!(
                         "upgrade command completed but current version is still v{} (latest v{})",
                         current, latest

@@ -1,4 +1,4 @@
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useConfirmDialog } from '@/composables'
 import { resolveExpertRuntime } from '@/services/agentTeams/runtime'
@@ -29,6 +29,11 @@ export function useSoloModePanel() {
   const editingRunId = ref<string | null>(null)
   const createDialogModelOptions = ref<SoloModelOption[]>([])
   const selectedStepId = ref<string | null>(null)
+  const isLogPanelOpen = ref(false)
+  const logPanelWidth = ref(380)
+  const isLogPanelResizing = ref(false)
+  const minLogPanelWidth = 280
+  const maxLogPanelWidth = 620
 
   const createForm = reactive<SoloCreateFormState>({
     projectId: '',
@@ -52,6 +57,12 @@ export function useSoloModePanel() {
 
   const currentRun = computed(() => soloRunStore.currentRun)
   const currentSteps = computed(() => currentRun.value ? soloExecutionStore.getSteps(currentRun.value.id) : [])
+  const timelineSteps = computed(() => (
+    [...currentSteps.value].sort((left, right) => (
+      new Date(right.updatedAt || right.createdAt).getTime()
+      - new Date(left.updatedAt || left.createdAt).getTime()
+    ))
+  ))
   const currentExecutionState = computed(() => currentRun.value ? soloExecutionStore.getExecutionState(currentRun.value.id) : undefined)
   const currentRunLogs = computed(() => currentExecutionState.value?.logs ?? [])
   const selectedStep = computed(() => currentSteps.value.find((step) => step.id === selectedStepId.value) || null)
@@ -61,17 +72,31 @@ export function useSoloModePanel() {
     return enabledBuiltins.length > 0 ? enabledBuiltins : agentTeamsStore.enabledExperts
   })
 
-  const participantExpertOptions = computed<SoloAgentOption[]>(() =>
-    builtinExpertPool.value
-      .filter((expert) => expert.builtinCode !== 'builtin-solo-coordinator')
-      .map((expert) => ({
-        label: expert.name,
-        value: expert.id,
-        description: expert.description || `${expert.category} · 内置专家`
-      }))
-  )
+  const participantExpertOptions = computed<SoloAgentOption[]>(() => {
+    const selectedIds = new Set((createForm.participantExpertIds ?? []).filter(Boolean))
+    const selectableExperts = agentTeamsStore.enabledExperts.filter((expert) =>
+      expert.builtinCode !== 'builtin-solo-coordinator'
+    )
+    const selectedExperts = agentTeamsStore.experts.filter((expert) =>
+      selectedIds.has(expert.id) && expert.builtinCode !== 'builtin-solo-coordinator'
+    )
+
+    return Array.from(
+      new Map(
+        [...selectedExperts, ...selectableExperts].map((expert) => [
+          expert.id,
+          {
+            label: expert.name,
+            value: expert.id,
+            description: expert.description || `${expert.category} · ${expert.isBuiltin ? '内置专家' : '自定义专家'}`
+          }
+        ])
+      ).values()
+    )
+  })
 
   const coordinatorExpertOptions = computed<SoloAgentOption[]>(() => {
+    const selectedCoordinator = agentTeamsStore.getExpertById(createForm.coordinatorExpertId)
     const coordinatorExperts = builtinExpertPool.value.filter((expert) =>
       expert.builtinCode === 'builtin-solo-coordinator'
     )
@@ -79,17 +104,26 @@ export function useSoloModePanel() {
       ? coordinatorExperts
       : builtinExpertPool.value.filter((expert) => expert.category === 'planner' && expert.isBuiltin)
 
-    return fallbackExperts.map((expert) => ({
-      label: expert.name,
-      value: expert.id,
-      description: expert.description || 'SOLO 规划智能体'
-    }))
+    return Array.from(
+      new Map(
+        [selectedCoordinator, ...fallbackExperts]
+          .filter((expert): expert is NonNullable<typeof expert> => Boolean(expert))
+          .map((expert) => [
+            expert.id,
+            {
+              label: expert.name,
+              value: expert.id,
+              description: expert.description || 'SOLO 规划智能体'
+            }
+          ])
+      ).values()
+    )
   })
 
   const currentRunParticipants = computed(() => {
     if (!currentRun.value) return []
     const idSet = new Set(currentRun.value.participantExpertIds)
-    const availableParticipants = builtinExpertPool.value.filter((expert) => expert.builtinCode !== 'builtin-solo-coordinator')
+    const availableParticipants = agentTeamsStore.enabledExperts.filter((expert) => expert.builtinCode !== 'builtin-solo-coordinator')
     const matched = availableParticipants.filter((expert) => idSet.has(expert.id))
     return matched.length > 0 ? matched : availableParticipants
   })
@@ -252,8 +286,12 @@ export function useSoloModePanel() {
     return segments[segments.length - 1] || 'SOLO 项目'
   }
 
-  async function loadCoordinatorModelOptions(coordinatorExpertId?: string | null): Promise<SoloModelOption[]> {
+  async function loadCoordinatorModelOptions(
+    coordinatorExpertId?: string | null,
+    preferredModelId?: string | null
+  ): Promise<SoloModelOption[]> {
     const runtimeExpert = builtinExpertPool.value.find((expert) => expert.id === coordinatorExpertId)
+      || agentTeamsStore.getExpertById(coordinatorExpertId)
       || agentTeamsStore.builtinSoloCoordinatorExpert
       || agentTeamsStore.builtinPlannerExpert
       || agentTeamsStore.builtinGeneralExpert
@@ -277,12 +315,24 @@ export function useSoloModePanel() {
         isDefault: item.isDefault
       }))
 
+    if (preferredModelId?.trim() && !enabledOptions.some((item) => item.value === preferredModelId.trim())) {
+      enabledOptions.unshift({
+        label: preferredModelId.trim(),
+        value: preferredModelId.trim(),
+        isDefault: false
+      })
+    }
+
     if (enabledOptions.length > 0) {
       return enabledOptions
     }
 
-    return agent.modelId
-      ? [{ label: agent.modelId, value: agent.modelId, isDefault: true }]
+    return (preferredModelId?.trim() || agent.modelId)
+      ? [{
+        label: preferredModelId?.trim() || agent.modelId || '',
+        value: preferredModelId?.trim() || agent.modelId || '',
+        isDefault: true
+      }]
       : []
   }
 
@@ -290,9 +340,18 @@ export function useSoloModePanel() {
     return models.find((model) => model.isDefault)?.value || models[0]?.value || ''
   }
 
-  async function syncCreateDialogModels() {
-    createDialogModelOptions.value = await loadCoordinatorModelOptions(createForm.coordinatorExpertId)
-    createForm.coordinatorModelId = pickDefaultModel(createDialogModelOptions.value)
+  async function syncCreateDialogModels(preferredModelId?: string | null) {
+    createDialogModelOptions.value = await loadCoordinatorModelOptions(
+      createForm.coordinatorExpertId,
+      preferredModelId ?? createForm.coordinatorModelId
+    )
+
+    const hasCurrentModel = createForm.coordinatorModelId
+      && createDialogModelOptions.value.some((model) => model.value === createForm.coordinatorModelId)
+
+    createForm.coordinatorModelId = hasCurrentModel
+      ? createForm.coordinatorModelId
+      : pickDefaultModel(createDialogModelOptions.value)
   }
 
   function updateCreateForm(patch: Partial<SoloCreateFormState>) {
@@ -354,10 +413,7 @@ export function useSoloModePanel() {
       coordinatorExpertId: run.coordinatorExpertId || getDefaultCoordinatorExpertId(),
       coordinatorModelId: run.coordinatorModelId || ''
     })
-    createDialogModelOptions.value = await loadCoordinatorModelOptions(createForm.coordinatorExpertId)
-    if (!createForm.coordinatorModelId) {
-      createForm.coordinatorModelId = pickDefaultModel(createDialogModelOptions.value)
-    }
+    await syncCreateDialogModels(run.coordinatorModelId)
     dialogMode.value = 'edit'
     editingRunId.value = run.id
     showCreateDialog.value = true
@@ -434,6 +490,7 @@ export function useSoloModePanel() {
 
   async function selectRun(runId: string) {
     soloRunStore.setCurrentRun(runId)
+    isLogPanelOpen.value = false
     await Promise.all([
       soloRunStore.getRun(runId),
       soloExecutionStore.loadSteps(runId),
@@ -459,6 +516,34 @@ export function useSoloModePanel() {
 
   function selectStep(stepId: string) {
     selectedStepId.value = stepId
+    isLogPanelOpen.value = true
+  }
+
+  function closeLogPanel() {
+    isLogPanelOpen.value = false
+  }
+
+  function startLogPanelResize(event: MouseEvent) {
+    isLogPanelResizing.value = true
+    event.preventDefault()
+  }
+
+  function handleLogPanelResize(event: MouseEvent) {
+    if (!isLogPanelResizing.value) {
+      return
+    }
+
+    const containerRect = document.querySelector('.solo-mode-panel')?.getBoundingClientRect()
+    if (!containerRect) {
+      return
+    }
+
+    const nextWidth = containerRect.right - event.clientX
+    logPanelWidth.value = Math.min(maxLogPanelWidth, Math.max(minLogPanelWidth, nextWidth))
+  }
+
+  function stopLogPanelResize() {
+    isLogPanelResizing.value = false
   }
 
   function getStepLogCount(stepId: string): number {
@@ -466,7 +551,7 @@ export function useSoloModePanel() {
   }
 
   function getStepExpertLabel(step: SoloStep): string {
-    const expert = builtinExpertPool.value.find((item) => item.id === step.selectedExpertId)
+    const expert = agentTeamsStore.experts.find((item) => item.id === step.selectedExpertId)
     return expert?.name || step.selectedExpertId || '未指定专家'
   }
 
@@ -551,6 +636,7 @@ export function useSoloModePanel() {
     async (projectId) => {
       soloRunStore.setCurrentRun(null)
       selectedStepId.value = null
+      isLogPanelOpen.value = false
       if (!projectId) return
       await soloRunStore.loadRuns(projectId)
       if (runs.value[0]) {
@@ -591,6 +677,8 @@ export function useSoloModePanel() {
   )
 
   onMounted(async () => {
+    document.addEventListener('mousemove', handleLogPanelResize)
+    document.addEventListener('mouseup', stopLogPanelResize)
     await Promise.all([
       projectStore.loadProjects(),
       agentStore.loadAgents(),
@@ -603,6 +691,47 @@ export function useSoloModePanel() {
       }
     }
   })
+
+  watch(
+    () => currentRun.value?.id ?? null,
+    (runId, previousRunId) => {
+      if (runId !== previousRunId) {
+        isLogPanelOpen.value = false
+      }
+    }
+  )
+
+  watch(
+    () => selectedStep.value?.id ?? null,
+    (stepId) => {
+      if (!stepId) {
+        isLogPanelOpen.value = false
+      }
+    }
+  )
+
+  watch(
+    () => currentSteps.value.some((step) => step.id === selectedStepId.value),
+    (exists) => {
+      if (!exists) {
+        isLogPanelOpen.value = false
+      }
+    }
+  )
+
+  onUnmounted(() => {
+    document.removeEventListener('mousemove', handleLogPanelResize)
+    document.removeEventListener('mouseup', stopLogPanelResize)
+  })
+
+  watch(
+    () => showCreateDialog.value,
+    (visible) => {
+      if (visible) {
+        isLogPanelOpen.value = false
+      }
+    }
+  )
 
   return {
     canCreate,
@@ -621,6 +750,7 @@ export function useSoloModePanel() {
     currentRunCoordinatorLabel,
     currentRunParticipants,
     currentSteps,
+    timelineSteps,
     failedCount,
     blockedCount,
     formatTime,
@@ -634,6 +764,7 @@ export function useSoloModePanel() {
     handleResume,
     handleStart,
     handleStop,
+    closeLogPanel,
     openCreateDialog,
     participantExpertOptions,
     runStatusLabel,
@@ -642,6 +773,10 @@ export function useSoloModePanel() {
     selectedStep,
     selectedStepId,
     selectStep,
+    isLogPanelOpen,
+    logPanelWidth,
+    isLogPanelResizing,
+    startLogPanelResize,
     showCreateDialog,
     soloRunStore,
     stepStatusLabel,

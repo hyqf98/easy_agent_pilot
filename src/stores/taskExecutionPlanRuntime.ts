@@ -128,6 +128,7 @@ export function resetExecutionStateRuntime(state: TaskExecutionState | undefined
   state.tokenUsage = {
     inputTokens: 0,
     outputTokens: 0,
+    contextWindowOccupancy: undefined,
     resetCount: 0,
     lastUpdatedAt: null
   }

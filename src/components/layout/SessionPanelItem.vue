@@ -19,6 +19,7 @@ const props = defineProps<{
   editingSessionId: string | null
   editingSessionName: string
   searchQuery?: string
+  selected?: boolean
   actions: SessionActionItem[]
 }>()
 
@@ -27,20 +28,22 @@ const emit = defineEmits<{
   saveName: [session: Session]
   cancelEdit: []
   updateName: [value: string]
+  toggleSelect: [id: string]
   action: [key: string, session: Session]
 }>()
 
 const { t } = useI18n()
 const {
-  getStatusIcon,
   getStatusText,
-  getStatusClass,
-  isRunningStatus,
   formatRelativeTime,
   formatSessionCreatedAt
 } = useSessionView()
 
 const isEditing = computed(() => props.editingSessionId === props.session.id)
+
+function getStatusBadgeClass(status: Session['status']) {
+  return `session-item__status-text--${status}`
+}
 
 interface HighlightSegment {
   text: string
@@ -85,7 +88,7 @@ const lastMessageSegments = computed(() => buildHighlightSegments(props.session.
 
 <template>
   <div
-    :class="['session-item', { 'session-item--active': active }]"
+    :class="['session-item', { 'session-item--active': active, 'session-item--selected': selected }]"
     tabindex="0"
     role="listitem"
     :aria-selected="active"
@@ -94,12 +97,20 @@ const lastMessageSegments = computed(() => buildHighlightSegments(props.session.
     @keydown.space.prevent="emit('select', session.id)"
   >
     <div class="session-item__header">
-      <EaIcon
-        :name="getStatusIcon(session.status)"
-        :size="16"
-        :spin="isRunningStatus(session.status)"
-        :class="['session-item__status', getStatusClass(session.status)]"
-      />
+      <button
+        class="session-item__selector"
+        :class="{ 'session-item__selector--selected': selected }"
+        :title="selected ? t('session.unselectSession') : t('session.selectSession')"
+        :aria-label="selected ? t('session.unselectSession') : t('session.selectSession')"
+        :aria-pressed="selected"
+        @click.stop="emit('toggleSelect', session.id)"
+      >
+        <EaIcon
+          v-if="selected"
+          name="check"
+          :size="12"
+        />
+      </button>
       <input
         v-if="isEditing"
         :value="editingSessionName"
@@ -127,8 +138,12 @@ const lastMessageSegments = computed(() => buildHighlightSegments(props.session.
         </span>
         <span
           v-if="session.status !== 'idle'"
-          :class="['session-item__status-text', getStatusClass(session.status)]"
+          :class="['session-item__status-text', getStatusBadgeClass(session.status)]"
         >
+          <span
+            class="session-item__status-dot"
+            :class="getStatusBadgeClass(session.status)"
+          />
           {{ getStatusText(session.status) }}
         </span>
         <button
@@ -259,6 +274,10 @@ const lastMessageSegments = computed(() => buildHighlightSegments(props.session.
   border-color: var(--color-primary);
 }
 
+.session-item--selected {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary) 28%, transparent);
+}
+
 [data-theme='dark'] .session-item--active {
   background-color: var(--color-active-bg);
   border-color: var(--color-active-border);
@@ -275,28 +294,35 @@ const lastMessageSegments = computed(() => buildHighlightSegments(props.session.
   gap: var(--spacing-3);
 }
 
-.session-item__status {
+.session-item__selector {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1.5px solid var(--color-border-strong, var(--color-border));
+  background-color: transparent;
+  color: var(--color-surface);
   flex-shrink: 0;
+  transition: all var(--transition-fast) var(--easing-default);
+  outline: none;
 }
 
-.session-item__status--running {
-  color: var(--color-primary);
+.session-item__selector:hover {
+  border-color: var(--color-primary);
+  background-color: color-mix(in srgb, var(--color-primary) 10%, transparent);
 }
 
-.session-item__status--completed {
-  color: var(--color-success);
+.session-item__selector:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
 }
 
-.session-item__status--error {
-  color: var(--color-error);
-}
-
-.session-item__status--paused {
-  color: var(--color-warning);
-}
-
-.session-item__status--idle {
-  color: var(--color-text-tertiary);
+.session-item__selector--selected {
+  border-color: var(--color-primary);
+  background-color: var(--color-primary);
+  color: var(--color-surface);
 }
 
 .session-item__name {
@@ -341,10 +367,21 @@ const lastMessageSegments = computed(() => buildHighlightSegments(props.session.
 }
 
 .session-item__status-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-medium);
   padding: 2px 6px;
   border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.session-item__status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background-color: currentColor;
   flex-shrink: 0;
 }
 

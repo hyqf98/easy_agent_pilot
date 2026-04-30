@@ -199,7 +199,7 @@ export class CompressionService {
         strategy: options.strategy,
         summaryContent,
         toolCallsSummary: toolCallsSummary.length > 0 ? toolCallsSummary : undefined,
-        panelExpanded: false,
+        panelExpanded: triggerSource === 'auto',
         triggerSource
       }
 

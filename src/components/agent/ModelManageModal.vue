@@ -6,6 +6,7 @@ import {
 } from '@/stores/agentConfig'
 import { useAgentStore } from '@/stores/agent'
 import { EaButton, EaIcon } from '@/components/common'
+import { formatContextWindowCount } from '@/utils/contextWindow'
 import ModelEditModal from './ModelEditModal.vue'
 
 const agentConfigStore = useAgentConfigStore()
@@ -328,6 +329,9 @@ const handleClose = () => {
                   <div class="model-id">
                     {{ model.modelId || '使用默认模型' }}
                   </div>
+                  <div class="model-meta">
+                    上下文窗口 {{ formatContextWindowCount(model.contextWindow) }}
+                  </div>
                 </div>
 
                 <div class="model-actions-row">
@@ -394,6 +398,9 @@ const handleClose = () => {
                 </div>
                 <div class="model-id">
                   {{ model.modelId || '使用默认模型' }}
+                </div>
+                <div class="model-meta">
+                  上下文窗口 {{ formatContextWindowCount(model.contextWindow) }}
                 </div>
               </div>
 
@@ -655,6 +662,12 @@ const handleClose = () => {
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   font-family: monospace;
+}
+
+.model-meta {
+  margin-top: 4px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
 }
 
 .model-actions-row {

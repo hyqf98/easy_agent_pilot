@@ -230,8 +230,9 @@ fn enrich_plan_split_log_metadata_from_claude_transcript(
     };
     let tool_name = read_json_string_field(&metadata, "toolName", "tool_name");
     let tool_call_id = read_json_string_field(&metadata, "toolCallId", "tool_call_id");
-    let external_session_id = read_json_string_field(&metadata, "externalSessionId", "external_session_id")
-        .or_else(|| fallback_external_session_id.map(ToOwned::to_owned));
+    let external_session_id =
+        read_json_string_field(&metadata, "externalSessionId", "external_session_id")
+            .or_else(|| fallback_external_session_id.map(ToOwned::to_owned));
     let raw_output_tokens = read_json_u32_field(&metadata, "rawOutputTokens", "raw_output_tokens");
     if raw_output_tokens.unwrap_or(0) > 0 {
         return;
@@ -254,21 +255,29 @@ fn enrich_plan_split_log_metadata_from_claude_transcript(
 
     metadata_obj.insert(
         "rawInputTokens".to_string(),
-        usage.raw_input_tokens.map(Value::from).unwrap_or(Value::Null),
+        usage
+            .raw_input_tokens
+            .map(Value::from)
+            .unwrap_or(Value::Null),
     );
     metadata_obj.insert(
         "rawOutputTokens".to_string(),
-        usage.raw_output_tokens.map(Value::from).unwrap_or(Value::Null),
+        usage
+            .raw_output_tokens
+            .map(Value::from)
+            .unwrap_or(Value::Null),
     );
     metadata_obj.insert(
         "cacheReadInputTokens".to_string(),
-        usage.cache_read_input_tokens
+        usage
+            .cache_read_input_tokens
             .map(Value::from)
             .unwrap_or(Value::Null),
     );
     metadata_obj.insert(
         "cacheCreationInputTokens".to_string(),
-        usage.cache_creation_input_tokens
+        usage
+            .cache_creation_input_tokens
             .map(Value::from)
             .unwrap_or(Value::Null),
     );

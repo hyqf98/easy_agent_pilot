@@ -360,6 +360,53 @@ export function buildSoloExecutionPrompt(input: {
   return lines.join('\n')
 }
 
+export function buildSoloControlRepairPrompt(input: {
+  errorMessage: string
+  rawOutput: string
+  maxDispatchDepth: number
+}): string {
+  const { errorMessage, rawOutput, maxDispatchDepth } = input
+  return [
+    '你上一条 SOLO 协调回复不符合格式要求。',
+    '不要继续规划，不要解释原因，不要输出 Markdown 或代码块；只基于你刚才已经做出的判断，重新整理并输出一个合法 JSON。',
+    '',
+    `错误原因: ${errorMessage}`,
+    `最大调度层数: ${maxDispatchDepth}`,
+    '',
+    '你上一条原始输出:',
+    rawOutput.trim() || '（空）',
+    '',
+    '重新输出规则:',
+    '- 只能返回一个 JSON 对象。',
+    '- type 只能是 dispatch_step、complete_run、block_run 之一。',
+    '- 如果是 dispatch_step，必须包含 stepRef、depth、title、description、executionPrompt、doneWhen。',
+    '- dispatch_step.depth 不能超过最大调度层数。',
+    '- 禁止附加解释、前后缀文本、Markdown 代码块或第二个对象。'
+  ].join('\n')
+}
+
+export function buildSoloExecutionRepairPrompt(input: {
+  errorMessage: string
+  rawOutput: string
+}): string {
+  const { errorMessage, rawOutput } = input
+  return [
+    '你上一条 SOLO 执行回复不符合结果输出要求。',
+    '不要再次读取、修改、执行或调用工具；只把你刚才已经完成的结果重新整理成合法 JSON。',
+    '',
+    `错误原因: ${errorMessage}`,
+    '',
+    '你上一条原始输出:',
+    rawOutput.trim() || '（空）',
+    '',
+    '重新输出规则:',
+    '- 如果确实还需要用户补充信息，输出一个合法的 form_request JSON。',
+    '- 否则输出一个合法的结果 JSON，至少包含 result_summary，并尽量补齐 generated_files / modified_files / changed_files / deleted_files。',
+    '- 可以补充 task_overview、task_status、completed_points，但最终只能返回一个 JSON 对象。',
+    '- 禁止附加解释、前后缀文本、Markdown 代码块或第二个对象。'
+  ].join('\n')
+}
+
 export function buildSoloExecutionSystemPrompt(expertPrompt: string | null | undefined): string {
   return buildExpertSystemPrompt(expertPrompt, [
     [

@@ -26,7 +26,11 @@ import {
   isEnvironmentRuntimeNotice,
   upsertRuntimeNotice
 } from '@/utils/runtimeNotice'
-import { normalizeRuntimeUsage } from '@/utils/runtimeUsage'
+import {
+  mergeResponseUsageCounts,
+  normalizeRuntimeUsage,
+  type RuntimeUsageCounts
+} from '@/utils/runtimeUsage'
 import { clearMessageListSessionState } from '@/components/message/messageList/useMessageList'
 import {
   containsFormSchema,
@@ -303,8 +307,7 @@ function buildAssistantRuntimeNotices(
 
   let notices: RuntimeNotice[] | undefined
   let model = fallbackModel?.trim() || undefined
-  let totalInputTokens = 0
-  let totalOutputTokens = 0
+  let responseUsage: RuntimeUsageCounts = {}
   let hasUsage = false
   let usageBaseline: ReturnType<typeof normalizeRuntimeUsage>['nextBaseline'] = null
   let latestUsageSnapshot: TaskSplitUsageSnapshot | null = null
@@ -343,14 +346,17 @@ function buildAssistantRuntimeNotices(
       }
 
       if (typeof normalizedUsage.inputTokens === 'number') {
-        totalInputTokens += normalizedUsage.inputTokens
         hasUsage = true
       }
 
       if (typeof normalizedUsage.outputTokens === 'number') {
-        totalOutputTokens += normalizedUsage.outputTokens
         hasUsage = true
       }
+
+      responseUsage = mergeResponseUsageCounts(responseUsage, {
+        inputTokens: normalizedUsage.inputTokens,
+        outputTokens: normalizedUsage.outputTokens
+      }, runtimeProvider)
       continue
     }
 
@@ -366,9 +372,13 @@ function buildAssistantRuntimeNotices(
   const fallbackInputTokens = latestUsageSnapshot?.inputTokens
   const fallbackOutputTokens = latestUsageSnapshot?.outputTokens
   const estimatedOutputTokens = estimateTokenCountFromText(fallbackAssistantContent)
-  const resolvedInputTokens = hasUsage ? totalInputTokens : fallbackInputTokens
+  const resolvedInputTokens = hasUsage ? responseUsage.inputTokens : fallbackInputTokens
   const resolvedOutputTokens = hasUsage
-    ? (totalOutputTokens > 0 ? totalOutputTokens : fallbackOutputTokens || estimatedOutputTokens)
+    ? (
+        typeof responseUsage.outputTokens === 'number' && responseUsage.outputTokens > 0
+          ? responseUsage.outputTokens
+          : fallbackOutputTokens || estimatedOutputTokens
+      )
     : (fallbackOutputTokens || estimatedOutputTokens)
   const shouldShowUsageNotice = latestUsageSnapshot !== null
     || resolvedInputTokens !== undefined

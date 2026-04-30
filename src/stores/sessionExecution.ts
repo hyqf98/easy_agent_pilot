@@ -391,17 +391,16 @@ export const useSessionExecutionStore = defineStore('sessionExecution', () => {
   function queueMessage(
     sessionId: string,
     draft: Omit<QueuedMessageDraft, 'id' | 'createdAt' | 'status'>
-  ) {
+  ): QueuedMessageDraft {
     const state = getExecutionState(sessionId)
-    state.queuedMessages = [
-      ...state.queuedMessages,
-      {
-        ...draft,
-        id: `queued-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        createdAt: new Date().toISOString(),
-        status: 'queued'
-      }
-    ]
+    const queuedDraft: QueuedMessageDraft = {
+      ...draft,
+      id: `queued-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      createdAt: new Date().toISOString(),
+      status: 'queued'
+    }
+    state.queuedMessages = [...state.queuedMessages, queuedDraft]
+    return queuedDraft
   }
 
   function removeQueuedMessage(sessionId: string, draftId: string) {

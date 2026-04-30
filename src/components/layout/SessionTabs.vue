@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick, watch } from 'vue'
+import { computed, ref, onMounted, nextTick, watch, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSessionStore, type SessionStatus } from '@/stores/session'
 import { useWindowManagerStore } from '@/stores/windowManager'
@@ -18,9 +18,40 @@ const tabsContainerRef = ref<HTMLElement | null>(null)
 // 正在切换的标签 ID（用于视觉反馈）
 const switchingTabId = ref<string | null>(null)
 
+const contextMenuState = ref<{
+  visible: boolean
+  x: number
+  y: number
+  sessionId: string | null
+}>({
+  visible: false,
+  x: 0,
+  y: 0,
+  sessionId: null
+})
+
 // 拖拽状态
 const isDragging = ref(false)
 const dragSessionId = ref<string | null>(null)
+
+const contextTargetIndex = computed(() => {
+  if (!contextMenuState.value.sessionId) {
+    return -1
+  }
+
+  return sessionStore.openSessionIds.indexOf(contextMenuState.value.sessionId)
+})
+
+const canCloseOthers = computed(() =>
+  contextTargetIndex.value !== -1 && sessionStore.openSessionIds.length > 1
+)
+
+const canCloseLeft = computed(() => contextTargetIndex.value > 0)
+
+const canCloseRight = computed(() => (
+  contextTargetIndex.value !== -1
+  && contextTargetIndex.value < sessionStore.openSessionIds.length - 1
+))
 
 // 拖拽开始
 function onDragStart(e: DragEvent, sessionId: string) {
@@ -130,6 +161,62 @@ const switchToSession = async (sessionId: string) => {
 const closeTab = (sessionId: string, event: MouseEvent) => {
   event.stopPropagation() // 阻止触发切换会话
   sessionStore.closeSession(sessionId)
+  if (contextMenuState.value.sessionId === sessionId) {
+    hideContextMenu()
+  }
+}
+
+const hideContextMenu = () => {
+  contextMenuState.value.visible = false
+  contextMenuState.value.sessionId = null
+}
+
+const showContextMenu = (event: MouseEvent, sessionId: string) => {
+  event.preventDefault()
+  event.stopPropagation()
+
+  contextMenuState.value = {
+    visible: true,
+    x: event.clientX,
+    y: event.clientY,
+    sessionId
+  }
+}
+
+const handleContextMenuAction = (action: 'closeAll' | 'closeOthers' | 'closeLeft' | 'closeRight') => {
+  const sessionId = contextMenuState.value.sessionId
+  if (!sessionId) {
+    return
+  }
+
+  switch (action) {
+    case 'closeAll':
+      sessionStore.closeAllSessions()
+      break
+    case 'closeOthers':
+      sessionStore.closeOtherSessions(sessionId)
+      break
+    case 'closeLeft':
+      sessionStore.closeSessionsToLeft(sessionId)
+      break
+    case 'closeRight':
+      sessionStore.closeSessionsToRight(sessionId)
+      break
+  }
+
+  hideContextMenu()
+}
+
+const handleGlobalPointer = () => {
+  if (contextMenuState.value.visible) {
+    hideContextMenu()
+  }
+}
+
+const handleGlobalKeydown = (event: KeyboardEvent) => {
+  if (event.key === 'Escape' && contextMenuState.value.visible) {
+    hideContextMenu()
+  }
 }
 
 // 处理鼠标滚轮滚动（横向滚动）
@@ -163,11 +250,32 @@ const scrollToActiveTab = async () => {
 onMounted(() => {
   // 加载保存的打开会话列表
   sessionStore.loadOpenSessions()
+  window.addEventListener('click', handleGlobalPointer)
+  window.addEventListener('blur', handleGlobalPointer)
+  window.addEventListener('resize', handleGlobalPointer)
+  window.addEventListener('keydown', handleGlobalKeydown)
   void scrollToActiveTab()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('click', handleGlobalPointer)
+  window.removeEventListener('blur', handleGlobalPointer)
+  window.removeEventListener('resize', handleGlobalPointer)
+  window.removeEventListener('keydown', handleGlobalKeydown)
 })
 
 watch(() => sessionStore.currentSessionId, () => {
   void scrollToActiveTab()
+})
+
+watch(() => sessionStore.openSessionIds.join(':'), () => {
+  if (!contextMenuState.value.sessionId) {
+    return
+  }
+
+  if (!sessionStore.openSessionIds.includes(contextMenuState.value.sessionId)) {
+    hideContextMenu()
+  }
 })
 </script>
 
@@ -196,6 +304,7 @@ watch(() => sessionStore.currentSessionId, () => {
         @dragend="onDragEnd"
         @dragleave="onDragLeave"
         @click="switchToSession(session.id)"
+        @contextmenu="showContextMenu($event, session.id)"
       >
         <!-- 状态指示器 -->
         <span
@@ -230,6 +339,48 @@ watch(() => sessionStore.currentSessionId, () => {
 
     <!-- 溢出指示器 -->
     <div class="session-tabs__overflow-indicator" />
+
+    <div
+      v-if="contextMenuState.visible"
+      class="session-tabs__context-menu"
+      :style="{
+        left: `${contextMenuState.x}px`,
+        top: `${contextMenuState.y}px`
+      }"
+      @click.stop
+    >
+      <button
+        class="session-tabs__context-action"
+        type="button"
+        @click="handleContextMenuAction('closeAll')"
+      >
+        {{ t('sessionTabs.closeAll') }}
+      </button>
+      <button
+        class="session-tabs__context-action"
+        type="button"
+        :disabled="!canCloseOthers"
+        @click="handleContextMenuAction('closeOthers')"
+      >
+        {{ t('sessionTabs.closeOthers') }}
+      </button>
+      <button
+        class="session-tabs__context-action"
+        type="button"
+        :disabled="!canCloseLeft"
+        @click="handleContextMenuAction('closeLeft')"
+      >
+        {{ t('sessionTabs.closeLeft') }}
+      </button>
+      <button
+        class="session-tabs__context-action"
+        type="button"
+        :disabled="!canCloseRight"
+        @click="handleContextMenuAction('closeRight')"
+      >
+        {{ t('sessionTabs.closeRight') }}
+      </button>
+    </div>
   </div>
 </template>
 
@@ -377,5 +528,50 @@ watch(() => sessionStore.currentSessionId, () => {
 /* 拖拽时的视觉提示 */
 .session-tabs__tab[draggable="true"]:active {
   cursor: grabbing;
+}
+
+.session-tabs__context-menu {
+  position: fixed;
+  z-index: 3000;
+  min-width: 180px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: color-mix(in srgb, var(--color-surface, #fff) 96%, white);
+  border: 1px solid color-mix(in srgb, var(--color-border, #e2e8f0) 82%, transparent);
+  border-radius: 10px;
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.14);
+}
+
+.session-tabs__context-action {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--transition-fast) var(--easing-default), color var(--transition-fast) var(--easing-default);
+}
+
+.session-tabs__context-action:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+
+.session-tabs__context-action:disabled {
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+
+[data-theme='dark'] .session-tabs__context-menu {
+  background: color-mix(in srgb, var(--color-surface, #111827) 90%, #020617);
+  border-color: rgba(148, 163, 184, 0.18);
+  box-shadow: 0 16px 36px rgba(2, 6, 23, 0.38);
 }
 </style>

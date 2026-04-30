@@ -195,7 +195,9 @@ export abstract class BaseAgentStrategy implements AgentStrategy {
     return messages
       .filter(message => !message.compressionMetadata)
       .map(message => {
-        const nonImageAttachmentPrompt = buildNonImageAttachmentPrompt(message.attachments ?? [])
+        const nonImageAttachmentPrompt = this.runtimeKey.endsWith('-cli')
+          ? ''
+          : buildNonImageAttachmentPrompt(message.attachments ?? [])
         const normalizedContent = [
           message.content.trim(),
           nonImageAttachmentPrompt

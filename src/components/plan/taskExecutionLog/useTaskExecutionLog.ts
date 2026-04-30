@@ -83,6 +83,31 @@ export function useTaskExecutionLog(options: UseTaskExecutionLogOptions) {
     return agentStore.agents.find(item => item.id === agentId) || null
   })
 
+  const latestLogModel = computed(() => {
+    for (let index = logs.value.length - 1; index >= 0; index -= 1) {
+      const model = logs.value[index]?.metadata?.model
+      if (typeof model === 'string' && model.trim()) {
+        return model.trim()
+      }
+    }
+
+    return ''
+  })
+
+  const resolvedModelId = computed(() => {
+    const currentTask = task.value
+    const plan = currentTask
+      ? planStore.plans.find(item => item.id === currentTask.planId)
+      : null
+
+    return tokenUsageWindow.value.model?.trim()
+      || latestLogModel.value
+      || currentTask?.modelId?.trim()
+      || plan?.splitModelId?.trim()
+      || executionAgent.value?.modelId?.trim()
+      || ''
+  })
+
   const tokenContextLimit = computed(() => {
     const currentTask = task.value
     if (!currentTask) return DEFAULT_CONTEXT_WINDOW
@@ -90,7 +115,7 @@ export function useTaskExecutionLog(options: UseTaskExecutionLogOptions) {
     const plan = planStore.plans.find(item => item.id === currentTask.planId)
     const agentId = executionAgentId.value
     const modelId = currentTask.modelId || plan?.splitModelId
-    const runtimeModel = tokenUsageWindow.value.model?.trim()
+    const runtimeModel = resolvedModelId.value
 
     if (!agentId) {
       return DEFAULT_CONTEXT_WINDOW
@@ -105,7 +130,8 @@ export function useTaskExecutionLog(options: UseTaskExecutionLogOptions) {
   })
 
   const tokenUsageTotal = computed(() =>
-    tokenUsageWindow.value.inputTokens + tokenUsageWindow.value.outputTokens
+    tokenUsageWindow.value.contextWindowOccupancy
+      ?? (tokenUsageWindow.value.inputTokens + tokenUsageWindow.value.outputTokens)
   )
 
   const tokenUsagePercentage = computed(() => {
@@ -383,19 +409,16 @@ export function useTaskExecutionLog(options: UseTaskExecutionLogOptions) {
         runtimeFallbackUsage: log.metadata?.model
           || log.metadata?.inputTokens !== undefined
           || log.metadata?.outputTokens !== undefined
-          || tokenUsageWindow.value.model
-          || tokenUsageWindow.value.inputTokens > 0
-          || tokenUsageWindow.value.outputTokens > 0
           ? {
-              model: typeof log.metadata?.model === 'string'
-                ? log.metadata.model
-                : tokenUsageWindow.value.model,
+              model: typeof log.metadata?.model === 'string' && log.metadata.model.trim()
+                ? log.metadata.model.trim()
+                : (resolvedModelId.value || undefined),
               inputTokens: typeof log.metadata?.inputTokens === 'number'
                 ? log.metadata.inputTokens
-                : (tokenUsageWindow.value.inputTokens > 0 ? tokenUsageWindow.value.inputTokens : undefined),
+                : undefined,
               outputTokens: typeof log.metadata?.outputTokens === 'number'
                 ? log.metadata.outputTokens
-                : (tokenUsageWindow.value.outputTokens > 0 ? tokenUsageWindow.value.outputTokens : undefined)
+                : undefined
             }
           : undefined
       })
@@ -468,6 +491,7 @@ export function useTaskExecutionLog(options: UseTaskExecutionLogOptions) {
     task,
     executionState,
     tokenUsageWindow,
+    resolvedModelId,
     tokenContextLimit,
     tokenUsageTotal,
     tokenUsagePercentage,

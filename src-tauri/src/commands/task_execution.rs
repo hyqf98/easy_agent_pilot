@@ -264,7 +264,10 @@ fn summarize_task_file_changes(
         segments.push(format!("新增 {}", summarize_file_entries(added_files, 2)));
     }
     if !modified_files.is_empty() {
-        segments.push(format!("修改 {}", summarize_file_entries(modified_files, 2)));
+        segments.push(format!(
+            "修改 {}",
+            summarize_file_entries(modified_files, 2)
+        ));
     }
     if !changed_files.is_empty() {
         segments.push(format!("变更 {}", summarize_file_entries(changed_files, 2)));
@@ -373,7 +376,11 @@ fn build_plan_execution_overview(
     }
 
     let executed_count = success_items.len() + failed_items.len();
-    let mut segments = vec![format!("成功 {} 个，失败 {} 个", success_items.len(), failed_items.len())];
+    let mut segments = vec![format!(
+        "成功 {} 个，失败 {} 个",
+        success_items.len(),
+        failed_items.len()
+    )];
 
     if !success_items.is_empty() {
         segments.push(format!(

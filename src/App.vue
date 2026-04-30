@@ -224,20 +224,43 @@ onMounted(async () => {
   if (!windowManagerStore.isMiniPanelWindow) {
     await projectStore.loadProjects()
 
+    let restoredProjectId: string | null = null
+
     if (windowManagerStore.projectId) {
-      projectStore.setCurrentProject(windowManagerStore.projectId)
-    } else if (windowManagerStore.isMainWindow && appStateStore.lastProjectId) {
-      const projectExists = projectStore.projects.some(
-        project => project.id === appStateStore.lastProjectId
-      )
+      restoredProjectId = windowManagerStore.projectId
+    } else if (windowManagerStore.isMainWindow) {
+      const candidateProjectId = appStateStore.lastProjectId ?? projectStore.currentProjectId
+      const projectExists = candidateProjectId
+        ? projectStore.projects.some(project => project.id === candidateProjectId)
+        : false
 
       if (projectExists) {
-        projectStore.setCurrentProject(appStateStore.lastProjectId)
-        await sessionStore.loadSessions(appStateStore.lastProjectId, { force: true })
+        restoredProjectId = candidateProjectId
+      }
+    }
 
-        for (const sessionId of appStateStore.lastSessionIds) {
-          await sessionStore.openSession(sessionId)
-        }
+    if (restoredProjectId) {
+      projectStore.setCurrentProject(restoredProjectId)
+    }
+
+    if (windowManagerStore.isMainWindow && restoredProjectId) {
+      await sessionStore.loadSessions(restoredProjectId, { force: true })
+      const preferredSessionId = appStateStore.lastActiveSessionId
+
+      for (const sessionId of appStateStore.lastSessionIds) {
+        await sessionStore.openSession(sessionId)
+      }
+
+      const hasPreferredSession = preferredSessionId
+        ? sessionStore.openSessionIds.includes(preferredSessionId)
+        : false
+
+      if (hasPreferredSession) {
+        sessionStore.setCurrentSession(preferredSessionId)
+      } else if (!sessionStore.currentSessionId && sessionStore.openSessionIds.length > 0) {
+        sessionStore.setCurrentSession(
+          sessionStore.openSessionIds[sessionStore.openSessionIds.length - 1] ?? null
+        )
       }
     }
   }

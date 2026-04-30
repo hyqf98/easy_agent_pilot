@@ -10,12 +10,14 @@ interface Props {
   currentSessionId: string | null
   editingSessionId: string | null
   editingSessionName: string
+  selectedSessionIds: string[]
 }
 
 defineProps<Props>()
 
 const emit = defineEmits<{
   select: [id: string]
+  toggleSelect: [id: string]
   togglePin: [id: string]
   startEdit: [session: Session, event: Event]
   saveEdit: [session: Session]
@@ -26,9 +28,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const {
-  getStatusIcon,
-  getStatusClass,
-  isRunningStatus,
+  getStatusText,
   formatRelativeTime,
   formatSessionCreatedAt
 } = useSessionView()
@@ -129,6 +129,10 @@ function handleCompactAction(
   emit('delete', session)
 }
 
+function getStatusBadgeClass(status: Session['status']) {
+  return `session-item__status-text--${status}`
+}
+
 onMounted(() => {
   document.addEventListener('mousedown', handleDocumentMouseDown)
   document.addEventListener('keydown', handleDocumentKeydown)
@@ -152,6 +156,7 @@ onBeforeUnmount(() => {
         'session-item',
         {
           'session-item--active': session.id === currentSessionId,
+          'session-item--selected': selectedSessionIds.includes(session.id),
           'session-item--pinned': session.pinned,
           'session-item--menu-open': openMenuSessionId === session.id
         }
@@ -160,11 +165,24 @@ onBeforeUnmount(() => {
     >
       <div class="session-item__content">
         <div class="session-item__main">
-          <EaIcon
-            :name="getStatusIcon(session.status)"
-            :size="14"
-            :class="['session-item__status', getStatusClass(session.status), { 'animate-spin': isRunningStatus(session.status) }]"
-          />
+          <button
+            class="session-item__selector"
+            :class="{ 'session-item__selector--selected': selectedSessionIds.includes(session.id) }"
+            :title="selectedSessionIds.includes(session.id) ? t('session.unselectSession') : t('session.selectSession')"
+            :aria-label="selectedSessionIds.includes(session.id) ? t('session.unselectSession') : t('session.selectSession')"
+            :aria-pressed="selectedSessionIds.includes(session.id)"
+            @click.stop="emit('toggleSelect', session.id)"
+          >
+            <span
+              class="session-item__selector-indicator"
+              :class="{ 'session-item__selector-indicator--selected': selectedSessionIds.includes(session.id) }"
+            >
+              <EaIcon
+                name="check"
+                :size="10"
+              />
+            </span>
+          </button>
           <div
             v-if="editingSessionId === session.id"
             class="session-item__name-edit"
@@ -205,6 +223,16 @@ onBeforeUnmount(() => {
               {{ session.name }}
             </span>
             <span class="session-item__time">{{ formatRelativeTime(session.updatedAt) }}</span>
+            <span
+              v-if="session.status !== 'idle'"
+              :class="['session-item__status-text', getStatusBadgeClass(session.status)]"
+            >
+              <span
+                class="session-item__status-dot"
+                :class="getStatusBadgeClass(session.status)"
+              />
+              {{ getStatusText(session.status) }}
+            </span>
           </template>
         </div>
 
@@ -349,9 +377,10 @@ onBeforeUnmount(() => {
 .session-list {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
   gap: var(--spacing-2);
   padding: var(--spacing-2);
-  height: 100%;
+  min-height: 0;
   width: 100%;
   min-width: 0;
   overflow-y: auto;
@@ -390,6 +419,12 @@ onBeforeUnmount(() => {
   box-shadow: 0 0 0 1px var(--color-primary);
 }
 
+.session-item--selected {
+  background-color: color-mix(in srgb, var(--color-primary) 10%, var(--color-surface));
+  border-color: color-mix(in srgb, var(--color-primary) 32%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary) 24%, transparent);
+}
+
 [data-theme='dark'] .session-item--active {
   background-color: var(--color-active-bg);
   border-color: var(--color-active-border);
@@ -418,24 +453,69 @@ onBeforeUnmount(() => {
   flex-wrap: nowrap;
 }
 
-.session-item__status {
-  flex-shrink: 0;
-}
-
-.session-item__status--running {
+.session-item__selector {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  appearance: none;
+  border: none;
+  border: 1.5px solid var(--color-border-strong, var(--color-border));
+  border-radius: 999px;
+  background: transparent;
   color: var(--color-primary);
+  flex-shrink: 0;
+  cursor: pointer;
+  box-sizing: border-box;
+  transition:
+    border-color var(--transition-fast) var(--easing-default),
+    background-color var(--transition-fast) var(--easing-default),
+    box-shadow var(--transition-fast) var(--easing-default);
 }
 
-.session-item__status--completed {
-  color: var(--color-success);
+.session-item__selector:not(.session-item__selector--selected):hover {
+  border-color: var(--color-primary);
+  background-color: color-mix(in srgb, var(--color-primary) 10%, transparent);
 }
 
-.session-item__status--error {
-  color: var(--color-error);
+.session-item__selector:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-primary) 28%, transparent);
+  outline-offset: 2px;
 }
 
-.session-item__status--paused {
-  color: var(--color-warning);
+.session-item__selector--selected {
+  border-color: var(--color-primary);
+  background-color: var(--color-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 16%, transparent);
+}
+
+.session-item__selector--selected:hover {
+  border-color: var(--color-primary);
+  background-color: var(--color-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 16%, transparent);
+}
+
+.session-item__selector-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: #fff;
+  opacity: 0;
+  transform: scale(0.72);
+}
+
+.session-item__selector-indicator--selected {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.session-item__selector--selected .session-item__selector-indicator {
+  opacity: 1;
+  transform: scale(1);
 }
 
 .session-item__name {
@@ -457,15 +537,53 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   font-size: var(--sidebar-font-meta);
   color: var(--color-text-tertiary);
-  margin-left: auto;
   white-space: nowrap;
+}
+
+.session-item__status-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+.session-item__status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background-color: currentColor;
+  flex-shrink: 0;
+}
+
+.session-item__status-text--running {
+  color: var(--color-primary);
+  background-color: var(--color-primary-light);
+}
+
+.session-item__status-text--completed {
+  color: var(--color-success);
+  background-color: var(--color-success-light);
+}
+
+.session-item__status-text--error {
+  color: var(--color-error);
+  background-color: var(--color-error-light);
+}
+
+.session-item__status-text--paused {
+  color: var(--color-warning);
+  background-color: var(--color-warning-light);
 }
 
 .session-item__meta {
   display: flex;
   align-items: center;
   gap: var(--spacing-3);
-  padding-left: calc(14px + var(--spacing-2));
+  padding-left: calc(18px + var(--spacing-2));
   min-width: 0;
   flex-wrap: nowrap;
   overflow: hidden;
@@ -493,13 +611,35 @@ onBeforeUnmount(() => {
 }
 
 .session-item__preview {
-  padding-left: calc(14px + var(--spacing-2));
+  padding-left: calc(18px + var(--spacing-2));
   font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   line-height: 1.4;
+}
+
+.session-item__token-progress {
+  padding-left: calc(18px + var(--spacing-2));
+}
+
+.session-item__token-progress :deep(.token-progress) {
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--color-surface) 94%, white);
+  box-shadow: none;
+}
+
+.session-item__token-progress :deep(.token-progress__bar) {
+  min-width: 88px;
+  height: 5px;
+}
+
+.session-item__token-progress :deep(.token-progress__text) {
+  min-width: 30px;
+  font-size: 11px;
 }
 
 .session-item__name-edit {
@@ -709,7 +849,7 @@ onBeforeUnmount(() => {
 
 /* 极窄屏优化 - 隐藏更多低优先级元信息 */
 @container (max-width: 240px) {
-  .session-item__status {
+  .session-item__selector {
     display: none;
   }
 

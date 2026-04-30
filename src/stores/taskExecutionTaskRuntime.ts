@@ -39,19 +39,28 @@ export function hydrateTaskLogs(
   // 从日志重建 toolCalls，以支持待办列表面板等功能
   rebuildToolCallsFromLogs(state)
 
-  const usageMetadata = [...state.logs]
-    .reverse()
-    .find((log) =>
+  let lastModel: string | undefined
+  let latestUsageMetadata: TaskExecutionState['logs'][number]['metadata']
+
+  for (const log of state.logs) {
+    if (typeof log.metadata?.model === 'string' && log.metadata.model.trim()) {
+      lastModel = log.metadata.model.trim()
+    }
+
+    if (
       typeof log.metadata?.inputTokens === 'number'
       || typeof log.metadata?.outputTokens === 'number'
-      || typeof log.metadata?.model === 'string'
-    )
-    ?.metadata
+      || typeof log.metadata?.contextWindowOccupancy === 'number'
+    ) {
+      latestUsageMetadata = log.metadata
+    }
+  }
 
   state.tokenUsage = {
-    inputTokens: usageMetadata?.inputTokens ?? 0,
-    outputTokens: usageMetadata?.outputTokens ?? 0,
-    model: usageMetadata?.model,
+    inputTokens: latestUsageMetadata?.inputTokens ?? 0,
+    outputTokens: latestUsageMetadata?.outputTokens ?? 0,
+    model: lastModel,
+    contextWindowOccupancy: latestUsageMetadata?.contextWindowOccupancy,
     resetCount: 0,
     lastUpdatedAt: state.logs[state.logs.length - 1]?.timestamp ?? null
   }

@@ -10,6 +10,7 @@ import { useTokenStore, type CompressionStrategy } from '@/stores/token'
 import { useNotificationStore } from '@/stores/notification'
 import { useAgentStore } from '@/stores/agent'
 import { compressionService } from '@/services/compression'
+import { conversationService } from '@/services/conversation'
 import { resolveSessionAgentId } from '@/utils/sessionAgent'
 import { useOverlayDismiss } from '@/composables/useOverlayDismiss'
 
@@ -299,6 +300,7 @@ export function useMessageArea() {
 
       if (result.success) {
         notificationStore.success(t('compression.success'))
+        await conversationService.drainQueue(sessionId)
       } else {
         notificationStore.error(t('compression.failed'), result.error)
       }

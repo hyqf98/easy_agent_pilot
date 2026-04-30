@@ -6,6 +6,7 @@ import { invoke } from '@tauri-apps/api/core'
 export const APP_STATE_KEYS = {
   LAST_PROJECT_ID: 'last_project_id',
   LAST_SESSION_IDS: 'last_session_ids',
+  LAST_ACTIVE_SESSION_ID: 'last_active_session_id',
   PANEL_EXPANDED: 'panel_expanded'
 } as const
 
@@ -19,6 +20,7 @@ export const useAppStateStore = defineStore('appState', () => {
   // 状态
   const lastProjectId = ref<string | null>(null)
   const lastSessionIds = ref<string[]>([])
+  const lastActiveSessionId = ref<string | null>(null)
   const panelExpanded = ref(true)
   const isInitialized = ref(false)
 
@@ -40,6 +42,9 @@ export const useAppStateStore = defineStore('appState', () => {
             } catch {
               lastSessionIds.value = []
             }
+            break
+          case APP_STATE_KEYS.LAST_ACTIVE_SESSION_ID:
+            lastActiveSessionId.value = entry.value || null
             break
           case APP_STATE_KEYS.PANEL_EXPANDED:
             panelExpanded.value = entry.value === 'true'
@@ -75,6 +80,12 @@ export const useAppStateStore = defineStore('appState', () => {
     }
   }, { deep: true })
 
+  watch(lastActiveSessionId, (newVal) => {
+    if (isInitialized.value) {
+      saveState(APP_STATE_KEYS.LAST_ACTIVE_SESSION_ID, newVal ?? '')
+    }
+  })
+
   watch(panelExpanded, (newVal) => {
     if (isInitialized.value) {
       saveState(APP_STATE_KEYS.PANEL_EXPANDED, String(newVal))
@@ -91,6 +102,10 @@ export const useAppStateStore = defineStore('appState', () => {
     lastSessionIds.value = sessionIds
   }
 
+  function setLastActiveSession(sessionId: string | null) {
+    lastActiveSessionId.value = sessionId
+  }
+
   // 设置面板展开状态
   function setPanelExpanded(expanded: boolean) {
     panelExpanded.value = expanded
@@ -100,12 +115,14 @@ export const useAppStateStore = defineStore('appState', () => {
     // 状态
     lastProjectId,
     lastSessionIds,
+    lastActiveSessionId,
     panelExpanded,
     isInitialized,
     // 方法
     loadState,
     setLastProject,
     setLastSessions,
+    setLastActiveSession,
     setPanelExpanded
   }
 })

@@ -10,6 +10,7 @@ interface UsageFallback {
   model?: string
   inputTokens?: number
   outputTokens?: number
+  contextWindowOccupancy?: number
 }
 
 const props = withDefaults(defineProps<{
@@ -114,6 +115,7 @@ function usageSummary(notice: RuntimeNotice) {
   const fallback = props.fallbackUsage
   const requestedModel = requestedModelFallback.value
   const hasUsageValue = (value: unknown) => value !== null && value !== undefined && value !== ''
+  const noticeContextOccupancy = extractUsageNoticeContextOccupancy(notice)
 
   if (!summary) {
     if (!fallback) {
@@ -137,13 +139,22 @@ function usageSummary(notice: RuntimeNotice) {
   const hasRealOutput = hasUsageValue(summary.output)
   const fallbackInput = typeof fallback?.inputTokens === 'number' ? String(fallback.inputTokens) : null
   const fallbackOutput = typeof fallback?.outputTokens === 'number' ? String(fallback.outputTokens) : null
+  const shouldPreferFallbackInput = Boolean(
+    fallbackInput
+    && fallback?.contextWindowOccupancy
+    && noticeContextOccupancy
+    && toUsageNumber(summary.input) === fallback.contextWindowOccupancy
+    && fallback.inputTokens !== fallback.contextWindowOccupancy
+  )
 
   return {
     model: resolveRecordedModelId({
       reportedModelId: summary.model || fallback?.model,
       requestedModelId: requestedModel
     }) || requestedModel || summary.model || fallback?.model || null,
-    input: hasRealInput ? summary.input : (fallbackInput || null),
+    input: shouldPreferFallbackInput
+      ? fallbackInput
+      : (hasRealInput ? summary.input : (fallbackInput || null)),
     output: hasRealOutput ? summary.output : (fallbackOutput || null)
   }
 }
@@ -151,6 +162,20 @@ function usageSummary(notice: RuntimeNotice) {
 function extractModelFromNotice(notice: RuntimeNotice): string | null {
   const match = notice.content.match(/(?:^|\n)-?\s*(?:模型|model)\s*:\s*(.+)$/im)
   return match?.[1]?.trim() || null
+}
+
+function toUsageNumber(value: string | null | undefined): number | null {
+  if (!value) {
+    return null
+  }
+
+  const numeric = Number(value.replace(/[^\d]/g, ''))
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null
+}
+
+function extractUsageNoticeContextOccupancy(notice: RuntimeNotice): number | null {
+  const match = notice.content.match(/(?:^|\n)-?\s*(?:上下文占用|context occupancy|context window occupancy)\s*:\s*(.+)$/im)
+  return toUsageNumber(match?.[1] ?? null)
 }
 
 function usageModelLabel(notice: RuntimeNotice) {

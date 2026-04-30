@@ -1236,7 +1236,8 @@ export function useConversationComposer(options: UseConversationComposerOptions)
   }
 
   const handleConfirmCompress = async (strategy: CompressionStrategy) => {
-    if (!currentSessionId.value) return
+    const sessionId = currentSessionId.value
+    if (!sessionId) return
 
     const agentId = resolveSessionAgentId(currentSession.value, agentStore.agents) || currentAgent.value?.id
 
@@ -1251,7 +1252,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
     try {
       const result = await compressionService.compressSession(
-        currentSessionId.value,
+        sessionId,
         agentId,
         {
           strategy,
@@ -1261,6 +1262,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
       if (result.success) {
         notificationStore.success(t('compression.success'))
+        await conversationService.drainQueue(sessionId)
       } else {
         notificationStore.error(t('compression.failed'), result.error)
       }
@@ -1814,6 +1816,30 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     return true
   }
 
+  const buildQueuedMessageDraft = (
+    userInput: string,
+    rawInput: string,
+    attachments: MessageAttachment[],
+    orderedMemoryReferences: ComposerMemoryReference[],
+    displayPreviewContent?: string
+  ): Omit<QueuedMessageDraft, 'id' | 'createdAt' | 'status'> | null => {
+    const queuedExpert = currentExpert.value
+    const queuedAgent = currentAgent.value
+    if (!queuedExpert || !queuedAgent) {
+      return null
+    }
+
+    return {
+      content: userInput,
+      displayContent: displayPreviewContent || rawInput,
+      attachments,
+      expertId: queuedExpert.id,
+      agentId: queuedAgent.id,
+      modelId: selectedModelId.value.trim() || undefined,
+      memoryReferences: orderedMemoryReferences
+    }
+  }
+
   const clearComposerDraft = (sessionId: string) => {
     inputText.value = ''
     sessionExecutionStore.clearMemoryReferences(sessionId)
@@ -2086,21 +2112,18 @@ export function useConversationComposer(options: UseConversationComposerOptions)
         return
       }
 
-      const queuedExpert = currentExpert.value
-      const queuedAgent = currentAgent.value
-      if (!queuedExpert || !queuedAgent) {
+      const queuedDraft = buildQueuedMessageDraft(
+        userInput,
+        rawInput,
+        attachments,
+        orderedMemoryReferences,
+        annotatedMessage.previewContent
+      )
+      if (!queuedDraft) {
         return
       }
 
-      sessionExecutionStore.queueMessage(sessionId, {
-        content: userInput,
-        displayContent: annotatedMessage.previewContent || rawInput,
-        attachments,
-        expertId: queuedExpert.id,
-        agentId: queuedAgent.id,
-        modelId: selectedModelId.value.trim() || undefined,
-        memoryReferences: orderedMemoryReferences
-      })
+      sessionExecutionStore.queueMessage(sessionId, queuedDraft)
       clearComposerDraft(sessionId)
       focusInput()
       return
@@ -2117,6 +2140,20 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
     try {
       if (compressionService.shouldAutoCompressSession(sessionId)) {
+        const queuedDraft = buildQueuedMessageDraft(
+          userInput,
+          rawInput,
+          attachments,
+          orderedMemoryReferences,
+          annotatedMessage.previewContent
+        )
+        if (!queuedDraft) {
+          return
+        }
+
+        const queuedMessage = sessionExecutionStore.queueMessage(sessionId, queuedDraft)
+        clearComposerDraft(sessionId)
+        focusInput()
         isCompressing.value = true
         const result = await compressionService.compressSession(
           sessionId,
@@ -2129,6 +2166,10 @@ export function useConversationComposer(options: UseConversationComposerOptions)
         isCompressing.value = false
 
         if (!result.success) {
+          sessionExecutionStore.removeQueuedMessage(sessionId, queuedMessage.id)
+          inputText.value = rawInput
+          sessionExecutionStore.setMemoryReferences(sessionId, orderedMemoryReferences)
+          await restorePendingImages(attachments)
           notificationStore.error(t('compression.failed'), result.error)
           focusInput()
           return
@@ -2136,6 +2177,9 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
         notificationStore.success(t('compression.success'))
         await nextTick()
+        await conversationService.drainQueue(sessionId)
+        focusInput()
+        return
       }
 
       dispatchingSessionId.value = sessionId
@@ -2199,8 +2243,6 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       if (replaceMessageId && replaceMessageId !== messageId) {
         await messageStore.deleteMessage(replaceMessageId)
       }
-
-      tokenStore.clearRealtimeTokens(sessionId)
 
       await conversationService.sendMessage(
         sessionId,

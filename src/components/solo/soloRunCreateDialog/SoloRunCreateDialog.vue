@@ -209,7 +209,6 @@ const isEditMode = computed(() => props.mode === 'edit')
               >
                 {{ showAllExperts ? '收起' : `更多 +${hiddenExpertCount}` }}
               </button>
-              <span v-if="!showAllExperts">已折叠剩余专家，避免表单无限拉长。</span>
             </div>
           </div>
 

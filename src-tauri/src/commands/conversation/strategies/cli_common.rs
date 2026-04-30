@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -55,10 +57,10 @@ pub fn build_content_event(session_id: &str, content: String) -> CliStreamEvent 
         output_tokens: None,
         model: None,
         external_session_id: None,
-    raw_input_tokens: None,
-    raw_output_tokens: None,
-    cache_read_input_tokens: None,
-    cache_creation_input_tokens: None,
+        raw_input_tokens: None,
+        raw_output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     }
 }
 
@@ -76,10 +78,10 @@ pub fn build_error_event(session_id: &str, error: String) -> CliStreamEvent {
         output_tokens: None,
         model: None,
         external_session_id: None,
-    raw_input_tokens: None,
-    raw_output_tokens: None,
-    cache_read_input_tokens: None,
-    cache_creation_input_tokens: None,
+        raw_input_tokens: None,
+        raw_output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     }
 }
 
@@ -97,10 +99,10 @@ pub fn build_system_event(session_id: &str, content: String) -> CliStreamEvent {
         output_tokens: None,
         model: None,
         external_session_id: None,
-    raw_input_tokens: None,
-    raw_output_tokens: None,
-    cache_read_input_tokens: None,
-    cache_creation_input_tokens: None,
+        raw_input_tokens: None,
+        raw_output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
     }
 }
 
@@ -324,10 +326,7 @@ pub fn build_cli_failure_report(
 
     let normalized_command = command.trim();
     if !normalized_command.is_empty() {
-        segments.push(format!(
-            "command={}",
-            preview_text(normalized_command, 320)
-        ));
+        segments.push(format!("command={}", preview_text(normalized_command, 320)));
     }
 
     if let Some(cwd) = working_directory
@@ -378,32 +377,50 @@ pub fn shell_escape(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-pub fn render_cli_message(message: &MessageInput) -> String {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NonImageAttachmentPromptMode {
+    None,
+    All,
+    MissingOnly,
+}
+
+pub fn render_cli_message(
+    message: &MessageInput,
+    include_image_paths: bool,
+    non_image_mode: NonImageAttachmentPromptMode,
+) -> String {
     let mut sections = Vec::new();
 
     if !message.content.trim().is_empty() {
         sections.push(message.content.clone());
     }
 
-    if let Some(attachments) = &message.attachments {
-        if !attachments.is_empty() {
-            let image_paths: Vec<String> = attachments
-                .iter()
-                .filter(|a| a.mime_type.starts_with("image/"))
-                .filter(|a| !a.path.trim().is_empty())
-                .map(|a| a.path.clone())
-                .collect();
-            if !image_paths.is_empty() {
-                sections.push(format!(
-                    "Attached image file paths:\n{}",
-                    image_paths
-                        .iter()
-                        .map(|p| format!("- {}", p))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                ));
+    if include_image_paths {
+        if let Some(attachments) = &message.attachments {
+            if !attachments.is_empty() {
+                let image_paths: Vec<String> = attachments
+                    .iter()
+                    .filter(|a| a.mime_type.starts_with("image/"))
+                    .filter(|a| !a.path.trim().is_empty())
+                    .map(|a| a.path.clone())
+                    .collect();
+                if !image_paths.is_empty() {
+                    sections.push(format!(
+                        "Attached image file paths:\n{}",
+                        image_paths
+                            .iter()
+                            .map(|p| format!("- {}", p))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    ));
+                }
             }
         }
+    }
+
+    let non_image_prompt = build_non_image_attachment_prompt(message, non_image_mode);
+    if !non_image_prompt.is_empty() {
+        sections.push(non_image_prompt);
     }
 
     let body = if sections.is_empty() {
@@ -415,16 +432,186 @@ pub fn render_cli_message(message: &MessageInput) -> String {
     format!("{}:\n{}", message.role, body)
 }
 
-pub fn extract_image_paths(messages: &[MessageInput]) -> Vec<String> {
-    messages
+fn build_non_image_attachment_prompt(
+    message: &MessageInput,
+    mode: NonImageAttachmentPromptMode,
+) -> String {
+    if mode == NonImageAttachmentPromptMode::None {
+        return String::new();
+    }
+
+    let Some(attachments) = &message.attachments else {
+        return String::new();
+    };
+
+    let mut lines = Vec::new();
+    for (index, attachment) in attachments
         .iter()
-        .filter(|m| m.role == "user")
-        .filter_map(|m| m.attachments.as_ref())
+        .filter(|attachment| !attachment.mime_type.starts_with("image/"))
+        .enumerate()
+    {
+        let normalized_path = normalize_cli_attachment_path(&attachment.path);
+        if normalized_path.is_empty() {
+            continue;
+        }
+
+        let resolved_path = resolve_cli_attachment_path(normalized_path.as_str());
+        let should_include = match mode {
+            NonImageAttachmentPromptMode::None => false,
+            NonImageAttachmentPromptMode::All => true,
+            NonImageAttachmentPromptMode::MissingOnly => resolved_path.is_none(),
+        };
+
+        if !should_include {
+            continue;
+        }
+
+        let rendered_path = resolved_path.unwrap_or(normalized_path);
+        lines.push(
+            [
+                format!("{}. Name: {}", index + 1, attachment.name),
+                format!("   MIME: {}", attachment.mime_type),
+                format!("   Path: {}", rendered_path),
+            ]
+            .join("\n"),
+        );
+    }
+
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    [
+        "[Attached local file references]",
+        &lines.join("\n"),
+        "Use these file paths with the CLI's built-in file tools when you need to inspect or process the attached files.",
+    ]
+    .join("\n")
+}
+
+pub fn extract_file_paths(messages: &[MessageInput]) -> Vec<String> {
+    let mut deduped_paths = HashSet::new();
+    let mut resolved_paths = Vec::new();
+
+    for attachment in messages
+        .iter()
+        .filter(|message| message.role == "user")
+        .filter_map(|message| message.attachments.as_ref())
         .flatten()
-        .filter(|a| a.mime_type.starts_with("image/"))
-        .filter(|a| !a.path.trim().is_empty())
-        .map(|a| a.path.clone())
-        .collect()
+        .filter(|attachment| !attachment.mime_type.starts_with("image/"))
+    {
+        let normalized_path = normalize_cli_attachment_path(&attachment.path);
+        if normalized_path.is_empty() {
+            continue;
+        }
+
+        let Some(path) = resolve_cli_attachment_path(normalized_path.as_str()) else {
+            continue;
+        };
+
+        if deduped_paths.insert(path.clone()) {
+            resolved_paths.push(path);
+        }
+    }
+
+    resolved_paths
+}
+
+pub fn extract_image_paths(messages: &[MessageInput]) -> Result<Vec<String>, String> {
+    let mut deduped_paths = HashSet::new();
+    let mut resolved_paths = Vec::new();
+
+    for attachment in messages
+        .iter()
+        .filter(|message| message.role == "user")
+        .filter_map(|message| message.attachments.as_ref())
+        .flatten()
+        .filter(|attachment| attachment.mime_type.starts_with("image/"))
+    {
+        let normalized_path = normalize_cli_attachment_path(&attachment.path);
+        if normalized_path.is_empty() {
+            return Err(format!("图片附件缺少文件路径：{}", attachment.name));
+        }
+
+        let path = resolve_cli_attachment_path(normalized_path.as_str()).ok_or_else(|| {
+            format!(
+                "图片附件文件不存在，无法发送给 CLI：{}",
+                preview_text(&normalized_path, 240)
+            )
+        })?;
+
+        if deduped_paths.insert(path.clone()) {
+            resolved_paths.push(path);
+        }
+    }
+
+    Ok(resolved_paths)
+}
+
+fn normalize_cli_attachment_path(raw_path: &str) -> String {
+    raw_path
+        .trim()
+        .trim_matches(|char| char == '"' || char == '\'')
+        .to_string()
+}
+
+fn resolve_cli_attachment_path(raw_path: &str) -> Option<String> {
+    let normalized = normalize_cli_attachment_path(raw_path);
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let path = PathBuf::from(&normalized);
+    if let Some(existing) = canonicalize_existing_path(&path) {
+        return Some(existing);
+    }
+
+    if let Some(existing) = resolve_separator_variant(&normalized) {
+        return Some(existing);
+    }
+
+    None
+}
+
+fn resolve_separator_variant(path: &str) -> Option<String> {
+    #[cfg(windows)]
+    let alternate = path.replace('/', "\\");
+    #[cfg(not(windows))]
+    let alternate = path.replace('\\', "/");
+
+    if alternate == path {
+        return None;
+    }
+
+    canonicalize_existing_path(Path::new(&alternate))
+}
+
+fn canonicalize_existing_path(path: &Path) -> Option<String> {
+    if !path.exists() {
+        return None;
+    }
+
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    Some(normalize_cli_path_for_display(canonical))
+}
+
+fn normalize_cli_path_for_display(path: PathBuf) -> String {
+    let rendered = path.to_string_lossy().to_string();
+
+    #[cfg(windows)]
+    {
+        if let Some(stripped) = rendered.strip_prefix("\\\\?\\UNC\\") {
+            return format!("//{}", stripped.replace('\\', "/"));
+        }
+
+        if let Some(stripped) = rendered.strip_prefix("\\\\?\\") {
+            return stripped.replace('\\', "/");
+        }
+
+        return rendered.replace('\\', "/");
+    }
+
+    rendered
 }
 
 pub fn extract_runtime_system_notice(json: &serde_json::Value) -> Option<String> {

@@ -97,18 +97,22 @@ fn resolve_project_mcp_config_path(cli_type: &str, project_root: &Path) -> Resul
     match cli_type {
         "claude" => Ok(project_root.join(".mcp.json")),
         "opencode" => Ok(project_root.join("opencode.json")),
-        "codex" => Err("Codex CLI 当前没有可用的官方项目级 MCP 配置文件，暂仅支持全局安装".to_string()),
+        "codex" => {
+            Err("Codex CLI 当前没有可用的官方项目级 MCP 配置文件，暂仅支持全局安装".to_string())
+        }
         other => Err(format!("当前 CLI 暂不支持项目级 MCP 安装: {}", other)),
     }
 }
 
-fn read_json_mcp_config(config_path: &Path) -> Result<crate::commands::cli_config::ClaudeCliConfig, String> {
+fn read_json_mcp_config(
+    config_path: &Path,
+) -> Result<crate::commands::cli_config::ClaudeCliConfig, String> {
     if !config_path.exists() {
         return Ok(crate::commands::cli_config::ClaudeCliConfig::default());
     }
 
-    let content =
-        fs::read_to_string(config_path).map_err(|e| format!("Failed to read config file: {}", e))?;
+    let content = fs::read_to_string(config_path)
+        .map_err(|e| format!("Failed to read config file: {}", e))?;
     serde_json::from_str(&content).map_err(|e| format!("Failed to parse JSON: {}", e))
 }
 
@@ -140,20 +144,39 @@ fn read_opencode_project_mcp_config(
     let mut mcp_servers = HashMap::new();
     if let Some(mcp_obj) = json.get("mcp").and_then(|value| value.as_object()) {
         for (name, value) in mcp_obj {
-            let server_type = value.get("type").and_then(|item| item.as_str()).unwrap_or("local");
+            let server_type = value
+                .get("type")
+                .and_then(|item| item.as_str())
+                .unwrap_or("local");
 
             let (command, args, env, url, headers, disabled) = if server_type == "remote" {
                 let url = value
                     .get("url")
                     .and_then(|item| item.as_str())
                     .map(|item| item.to_string());
-                let headers = value.get("headers").and_then(|item| item.as_object()).map(|object| {
-                    object
-                        .iter()
-                        .filter_map(|(key, item)| item.as_str().map(|entry| (key.clone(), entry.to_string())))
-                        .collect()
-                });
-                (None, None, None, url, headers, !value.get("enabled").and_then(|item| item.as_bool()).unwrap_or(true))
+                let headers =
+                    value
+                        .get("headers")
+                        .and_then(|item| item.as_object())
+                        .map(|object| {
+                            object
+                                .iter()
+                                .filter_map(|(key, item)| {
+                                    item.as_str().map(|entry| (key.clone(), entry.to_string()))
+                                })
+                                .collect()
+                        });
+                (
+                    None,
+                    None,
+                    None,
+                    url,
+                    headers,
+                    !value
+                        .get("enabled")
+                        .and_then(|item| item.as_bool())
+                        .unwrap_or(true),
+                )
             } else {
                 let command_array = value.get("command").and_then(|item| item.as_array());
                 let command = command_array
@@ -173,7 +196,9 @@ fn read_opencode_project_mcp_config(
                     .map(|object| {
                         object
                             .iter()
-                            .filter_map(|(key, item)| item.as_str().map(|entry| (key.clone(), entry.to_string())))
+                            .filter_map(|(key, item)| {
+                                item.as_str().map(|entry| (key.clone(), entry.to_string()))
+                            })
                             .collect()
                     });
                 (
@@ -182,7 +207,10 @@ fn read_opencode_project_mcp_config(
                     env,
                     None,
                     None,
-                    !value.get("enabled").and_then(|item| item.as_bool()).unwrap_or(true),
+                    !value
+                        .get("enabled")
+                        .and_then(|item| item.as_bool())
+                        .unwrap_or(true),
                 )
             };
 
@@ -281,7 +309,9 @@ fn read_project_mcp_config(
     match cli_type {
         "claude" => read_json_mcp_config(config_path),
         "opencode" => read_opencode_project_mcp_config(config_path),
-        "codex" => Err("Codex CLI 当前没有可用的官方项目级 MCP 配置文件，暂仅支持全局安装".to_string()),
+        "codex" => {
+            Err("Codex CLI 当前没有可用的官方项目级 MCP 配置文件，暂仅支持全局安装".to_string())
+        }
         other => Err(format!("当前 CLI 暂不支持项目级 MCP 安装: {}", other)),
     }
 }
@@ -294,7 +324,9 @@ fn write_project_mcp_config(
     match cli_type {
         "claude" => write_json_mcp_config(config_path, config),
         "opencode" => write_opencode_project_mcp_config(config_path, config),
-        "codex" => Err("Codex CLI 当前没有可用的官方项目级 MCP 配置文件，暂仅支持全局安装".to_string()),
+        "codex" => {
+            Err("Codex CLI 当前没有可用的官方项目级 MCP 配置文件，暂仅支持全局安装".to_string())
+        }
         other => Err(format!("当前 CLI 暂不支持项目级 MCP 安装: {}", other)),
     }
 }

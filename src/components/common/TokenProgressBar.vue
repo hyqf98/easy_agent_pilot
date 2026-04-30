@@ -9,10 +9,8 @@ import { useSessionStore } from '@/stores/session'
 
 const props = withDefaults(defineProps<{
   sessionId?: string | null
-  showCompressButton?: boolean
 }>(), {
-  sessionId: null,
-  showCompressButton: true
+  sessionId: null
 })
 
 const emit = defineEmits<{

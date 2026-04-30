@@ -26,22 +26,31 @@ const {
   editingSessionId,
   editingSessionName,
   errorSession,
+  allVisibleSessionsSelected,
+  clearSelectedSessions,
   handleAdd,
   handleCreateSession,
+  handleDeleteSelectedSessions,
   handleProjectChange,
   handleRefreshSessions,
   handleSearchInput,
   handleSelectSession,
+  hasSelectedSessions,
   hasSearchQuery,
   isClearingMessages,
+  isDeletingSessions,
   isNewSessionFormValid,
   newSessionName,
+  pendingDeleteSessionCount,
   projectStore,
   rerunSummarySession,
   retryErroredSession,
   saveEditSessionName,
   searchInput,
+  selectedSessionCount,
+  selectedSessionIds,
   selectedProjectId,
+  selectAllVisibleSessions,
   sessionActionMap,
   sessionStore,
   showClearMessagesConfirm,
@@ -50,6 +59,7 @@ const {
   showSummaryModal,
   summarySession,
   t,
+  toggleSessionSelection,
   uiStore
 } = useSessionPanelView()
 
@@ -227,6 +237,48 @@ const {
         </button>
       </div>
 
+      <div
+        v-if="projectStore.currentProjectId && currentProjectSessions.length > 0"
+        class="session-batch-bar"
+      >
+        <span class="session-batch-bar__label">
+          {{
+            hasSelectedSessions
+              ? t('session.selectedCount', { count: selectedSessionCount })
+              : t('session.batchSelectHint')
+          }}
+        </span>
+        <div class="session-batch-bar__actions">
+          <EaButton
+            type="secondary"
+            size="small"
+            @click="allVisibleSessionsSelected ? clearSelectedSessions() : selectAllVisibleSessions()"
+          >
+            {{ allVisibleSessionsSelected ? t('common.clearSelection') : t('session.selectAllVisible') }}
+          </EaButton>
+          <EaButton
+            type="secondary"
+            size="small"
+            :disabled="!hasSelectedSessions"
+            @click="clearSelectedSessions"
+          >
+            {{ t('common.clearSelection') }}
+          </EaButton>
+          <EaButton
+            type="primary"
+            size="small"
+            :disabled="!hasSelectedSessions"
+            @click="handleDeleteSelectedSessions"
+          >
+            <EaIcon
+              name="trash-2"
+              :size="14"
+            />
+            {{ t('common.batchDelete') }}
+          </EaButton>
+        </div>
+      </div>
+
       <!-- 搜索无结果 -->
       <div
         v-if="projectStore.currentProjectId && hasSearchQuery && currentProjectSessions.length === 0"
@@ -287,11 +339,13 @@ const {
           :editing-session-id="editingSessionId"
           :editing-session-name="editingSessionName"
           :search-query="sessionStore.searchQuery"
+          :selected="selectedSessionIds.has(session.id)"
           :actions="(sessionActionMap.get(session.id) ?? []).map(({ key, title, icon, danger, warning }) => ({ key, title, icon, danger, warning }))"
           @select="handleSelectSession"
           @save-name="saveEditSessionName"
           @cancel-edit="cancelEditSessionName"
           @update-name="editingSessionName = $event"
+          @toggle-select="toggleSessionSelection"
           @action="(key, targetSession) => sessionActionMap.get(targetSession.id)?.find(action => action.key === key)?.handler(targetSession)"
         />
       </div>
@@ -303,6 +357,8 @@ const {
       :is-new-session-form-valid="isNewSessionFormValid"
       :show-delete-confirm="showDeleteConfirm"
       :deleting-session="deletingSession"
+      :deleting-session-count="pendingDeleteSessionCount"
+      :is-deleting-sessions="isDeletingSessions"
       :show-clear-messages-confirm="showClearMessagesConfirm"
       :is-clearing-messages="isClearingMessages"
       :show-error-modal="showErrorModal"

@@ -435,12 +435,12 @@ mod tests {
         let fragments = vec![
             CliTextFragment::new(
                 CliTextSource::Content,
-                "如果出现 429 rate limit，请降低并发后重试；当前任务已经分析完成。"
+                "如果出现 429 rate limit，请降低并发后重试；当前任务已经分析完成。",
             )
             .expect("fragment"),
             CliTextFragment::new(
                 CliTextSource::Stderr,
-                "fatal error: external helper exited unexpectedly"
+                "fatal error: external helper exited unexpectedly",
             )
             .expect("fragment"),
         ];
@@ -451,14 +451,13 @@ mod tests {
 
     #[test]
     fn classifies_retryable_process_pipe_failures() {
-        let fragments = vec![CliTextFragment::new(
-            CliTextSource::Stderr,
-            "error: broken pipe (os error 32)"
-        )
-        .expect("fragment")];
+        let fragments =
+            vec![
+                CliTextFragment::new(CliTextSource::Stderr, "error: broken pipe (os error 32)")
+                    .expect("fragment"),
+            ];
 
-        let failure =
-            classify_cli_completion("Codex", &fragments, true).expect("should classify");
+        let failure = classify_cli_completion("Codex", &fragments, true).expect("should classify");
 
         assert_eq!(failure.kind, CliCompletionFailureKind::Retryable);
     }

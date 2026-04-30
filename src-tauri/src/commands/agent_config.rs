@@ -107,28 +107,124 @@ const MODELS_SELECT_BY_ID_SQL: &str = r#"
     WHERE id = ?1
 "#;
 
-const CODEX_BUILTIN_MODELS: &[BuiltinModelDef] = &[
-    (
-        "",
-        "使用默认模型",
-        0,
-        true,
-        Some(400000),
-    ),
-];
+const CODEX_BUILTIN_MODELS: &[BuiltinModelDef] = &[("", "使用默认模型", 0, true, Some(1050000))];
 
-const CLAUDE_BUILTIN_MODELS: &[BuiltinModelDef] = &[
-    (
-        "",
-        "使用默认模型",
-        0,
-        true,
-        Some(200000),
-    ),
-];
+const CLAUDE_BUILTIN_MODELS: &[BuiltinModelDef] = &[("", "使用默认模型", 0, true, Some(200000))];
 
 fn bool_from_db(value: Option<i32>, default: bool) -> bool {
     bool_from_int(value).unwrap_or(default)
+}
+
+fn normalize_model_id(model_id: &str) -> String {
+    model_id
+        .trim()
+        .to_lowercase()
+        .replace('\u{1b}', "")
+        .replace("[1m]", "")
+        .replace("[0m]", "")
+}
+
+fn collect_model_aliases(model_id: &str) -> Vec<String> {
+    let normalized = normalize_model_id(model_id);
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+
+    let mut aliases = vec![normalized.clone()];
+    if let Some(slash_index) = normalized.rfind('/') {
+        if slash_index + 1 < normalized.len() {
+            let alias = normalized[(slash_index + 1)..].to_string();
+            if !aliases.contains(&alias) {
+                aliases.push(alias);
+            }
+        }
+    }
+
+    aliases
+}
+
+fn resolve_context_window_from_map(
+    model_id: &str,
+    context_windows: Option<&HashMap<String, i32>>,
+) -> Option<i32> {
+    let context_windows = context_windows?;
+    for alias in collect_model_aliases(model_id) {
+        if let Some(value) = context_windows.get(&alias) {
+            if *value > 0 {
+                return Some(*value);
+            }
+        }
+    }
+    None
+}
+
+#[derive(Debug, Deserialize)]
+struct OpencodeVerboseLimit {
+    context: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpencodeVerboseModel {
+    #[serde(rename = "providerID")]
+    provider_id: Option<String>,
+    id: Option<String>,
+    limit: Option<OpencodeVerboseLimit>,
+}
+
+fn parse_opencode_verbose_models(stdout: &str) -> Result<Vec<(String, Option<i32>)>, String> {
+    let mut models = Vec::new();
+    let mut pending_display_id: Option<String> = None;
+    let mut json_buffer = String::new();
+    let mut brace_depth = 0i32;
+
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if pending_display_id.is_none() {
+            if trimmed.contains('/') && !trimmed.starts_with('{') {
+                pending_display_id = Some(trimmed.to_string());
+                json_buffer.clear();
+                brace_depth = 0;
+            }
+            continue;
+        }
+
+        json_buffer.push_str(line);
+        json_buffer.push('\n');
+        brace_depth += line.matches('{').count() as i32;
+        brace_depth -= line.matches('}').count() as i32;
+
+        if brace_depth > 0 {
+            continue;
+        }
+
+        let display_id = pending_display_id.take().unwrap_or_default();
+        let parsed: OpencodeVerboseModel = serde_json::from_str(&json_buffer)
+            .map_err(|error| format!("解析 opencode models --verbose 输出失败 ({}): {}", display_id, error))?;
+
+        let model_id = match (
+            parsed.provider_id.as_deref().map(str::trim).filter(|value| !value.is_empty()),
+            parsed.id.as_deref().map(str::trim).filter(|value| !value.is_empty()),
+        ) {
+            (Some(provider_id), Some(id)) => format!("{}/{}", provider_id, id),
+            _ => display_id.clone(),
+        };
+
+        let context_window = parsed
+            .limit
+            .and_then(|limit| limit.context)
+            .and_then(|value| i32::try_from(value).ok())
+            .filter(|value| *value > 0);
+
+        models.push((model_id, context_window));
+        json_buffer.clear();
+        brace_depth = 0;
+    }
+
+    Ok(models)
 }
 
 fn builtin_models_for_provider(provider: &str) -> &'static [BuiltinModelDef] {
@@ -1097,9 +1193,7 @@ pub struct SyncRemoteModelsInput {
 }
 
 #[tauri::command]
-pub fn sync_remote_models(
-    input: SyncRemoteModelsInput,
-) -> Result<Vec<AgentModelConfig>, String> {
+pub fn sync_remote_models(input: SyncRemoteModelsInput) -> Result<Vec<AgentModelConfig>, String> {
     let mut conn = open_conn()?;
     let now = now_rfc3339();
     let tx = conn.transaction().map_err(|e| e.to_string())?;
@@ -1153,11 +1247,9 @@ pub fn sync_opencode_models(
     let cli_path = crate::commands::cli_support::find_cli_executable("opencode", &[])
         .ok_or_else(|| "未找到 opencode CLI".to_string())?;
 
-    let output = crate::commands::cli_support::run_cli_command(
-        &cli_path,
-        &["models", &input.provider_name],
-    )
-    .map_err(|e| format!("执行 opencode models {} 失败: {}", input.provider_name, e))?;
+    let output =
+        crate::commands::cli_support::run_cli_command(&cli_path, &["models", &input.provider_name])
+            .map_err(|e| format!("执行 opencode models {} 失败: {}", input.provider_name, e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -1180,7 +1272,10 @@ pub fn sync_opencode_models(
         .collect();
 
     if model_ids.is_empty() {
-        return Err(format!("未从 opencode CLI 获取到 {} 的模型列表", input.provider_name));
+        return Err(format!(
+            "未从 opencode CLI 获取到 {} 的模型列表",
+            input.provider_name
+        ));
     }
 
     let mut conn = open_conn()?;
@@ -1257,6 +1352,7 @@ pub struct OpencodeProviderModels {
 #[derive(Debug, Deserialize)]
 pub struct SyncAllOpencodeModelsInput {
     pub agent_id: String,
+    pub context_windows: Option<HashMap<String, i32>>,
 }
 
 #[tauri::command]
@@ -1266,7 +1362,7 @@ pub fn sync_all_opencode_models(
     let cli_path = crate::commands::cli_support::find_cli_executable("opencode", &[])
         .ok_or_else(|| "未找到 opencode CLI，请确认已安装 opencode".to_string())?;
 
-    let output = crate::commands::cli_support::run_cli_command(&cli_path, &["models"])
+    let output = crate::commands::cli_support::run_cli_command(&cli_path, &["models", "--verbose"])
         .map_err(|e| format!("执行 opencode models 失败: {}", e))?;
 
     if !output.status.success() {
@@ -1275,27 +1371,9 @@ pub fn sync_all_opencode_models(
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let verbose_models = parse_opencode_verbose_models(&stdout)?;
 
-    let mut provider_map: std::collections::BTreeMap<String, Vec<String>> =
-        std::collections::BTreeMap::new();
-    for line in stdout.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Some(slash_pos) = trimmed.find('/') {
-            let provider = &trimmed[..slash_pos];
-            let model = &trimmed[(slash_pos + 1)..];
-            if !provider.is_empty() && !model.is_empty() {
-                provider_map
-                    .entry(provider.to_string())
-                    .or_default()
-                    .push(model.to_string());
-            }
-        }
-    }
-
-    if provider_map.is_empty() {
+    if verbose_models.is_empty() {
         return Err("未从 opencode CLI 获取到任何模型".to_string());
     }
 
@@ -1309,29 +1387,27 @@ pub fn sync_all_opencode_models(
     )
     .map_err(|e| e.to_string())?;
 
-    let mut sort_order = 1i32;
-    for (provider, model_names) in &provider_map {
-        for model_name in model_names {
-            let id = uuid::Uuid::new_v4().to_string();
-            let model_id = format!("{}/{}", provider, model_name);
+    for (index, (model_id, verbose_context_window)) in verbose_models.iter().enumerate() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let fallback_context_window =
+            resolve_context_window_from_map(model_id, input.context_windows.as_ref());
+        let context_window = verbose_context_window.or(fallback_context_window);
 
-            tx.execute(
-                "INSERT INTO agent_models (id, agent_id, model_id, display_name, is_builtin, is_default, sort_order, enabled, context_window, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, 0, 0, ?5, 1, NULL, ?6, ?7)",
-                rusqlite::params![
-                    &id,
-                    &input.agent_id,
-                    &model_id,
-                    &model_id,
-                    sort_order,
-                    &now,
-                    &now
-                ],
-            )
-            .map_err(|e| e.to_string())?;
-
-            sort_order += 1;
-        }
+        tx.execute(
+            "INSERT INTO agent_models (id, agent_id, model_id, display_name, is_builtin, is_default, sort_order, enabled, context_window, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, 0, 0, ?5, 1, ?6, ?7, ?8)",
+            rusqlite::params![
+                &id,
+                &input.agent_id,
+                model_id,
+                model_id,
+                index as i32 + 1,
+                context_window,
+                &now,
+                &now
+            ],
+        )
+        .map_err(|e| e.to_string())?;
     }
 
     tx.commit().map_err(|e| e.to_string())?;

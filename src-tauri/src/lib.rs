@@ -234,7 +234,6 @@ pub fn run() {
             commands::agent_team::count_agent_expert_references,
             commands::agent_team::delete_agent_expert,
             commands::agent_cli_usage::record_agent_cli_usage,
-            commands::agent_cli_usage::get_session_usage_summary,
             commands::agent_cli_usage::query_agent_cli_usage_stats,
             commands::agent_cli_usage::repair_agent_cli_usage_history,
             // Agent MCP Config commands
@@ -288,6 +287,7 @@ pub fn run() {
             commands::scan::list_agent_cli_session_projects,
             commands::scan::list_agent_cli_sessions,
             commands::scan::read_cli_session_detail,
+            commands::scan::read_cli_session_usage_snapshot,
             commands::scan::delete_cli_session,
             commands::scan::delete_cli_sessions,
             // CLI Config commands

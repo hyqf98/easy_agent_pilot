@@ -52,8 +52,9 @@ const {
   statusInfo,
   assistantStatusInfo,
   assistantElapsedLabel,
+  shouldShowRuntimeNotices,
+  displayRuntimeNotices,
   runtimeUsageFallback,
-  visibleRuntimeNotices,
   assistantVisibleEditTraces,
   errorMessage,
   toolCallCount,
@@ -189,11 +190,11 @@ const {
       </div>
 
       <div
-        v-if="isAssistant && visibleRuntimeNotices.length > 0"
+        v-if="shouldShowRuntimeNotices"
         class="message-bubble__runtime"
       >
         <RuntimeNoticeList
-          :notices="visibleRuntimeNotices"
+          :notices="displayRuntimeNotices"
           :fallback-usage="runtimeUsageFallback"
         />
       </div>

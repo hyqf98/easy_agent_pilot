@@ -7,6 +7,8 @@ export interface SessionPanelDialogsProps {
   isNewSessionFormValid: boolean
   showDeleteConfirm: boolean
   deletingSession: Session | null
+  deletingSessionCount: number
+  isDeletingSessions: boolean
   showClearMessagesConfirm: boolean
   isClearingMessages: boolean
   showErrorModal: boolean

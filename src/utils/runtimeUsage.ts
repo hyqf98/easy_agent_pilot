@@ -23,7 +23,12 @@ export interface NormalizeRuntimeUsageResult {
   didReset: boolean
 }
 
-const CUMULATIVE_USAGE_RUNTIME_KEYWORDS = ['codex', 'claude-cli', 'opencode'] as const
+export interface RuntimeUsageCounts {
+  inputTokens?: number
+  outputTokens?: number
+}
+
+const CUMULATIVE_USAGE_RUNTIME_KEYWORDS = ['codex'] as const
 
 function normalizeTokenValue(value?: number): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -31,6 +36,10 @@ function normalizeTokenValue(value?: number): number | undefined {
   }
 
   return Math.max(0, Math.floor(value))
+}
+
+function resolveCountForDisplay(value?: number): number | undefined {
+  return normalizeTokenValue(value)
 }
 
 export function isCumulativeUsageRuntime(provider?: string | null): boolean {
@@ -47,15 +56,8 @@ export function normalizeRuntimeUsage(
   const rawOutputTokens = normalizeTokenValue(options.rawOutputTokens)
   const cacheReadInputTokens = normalizeTokenValue(options.cacheReadInputTokens)
   const cacheCreationInputTokens = normalizeTokenValue(options.cacheCreationInputTokens)
-  const baseline = options.baseline ?? null
-  const hasRawUsage = (
-    typeof rawInputTokens === 'number'
-    || typeof rawOutputTokens === 'number'
-    || typeof cacheReadInputTokens === 'number'
-    || typeof cacheCreationInputTokens === 'number'
-  )
 
-  if (!hasRawUsage && !isCumulativeUsageRuntime(options.provider)) {
+  if (!isCumulativeUsageRuntime(options.provider)) {
     return {
       inputTokens,
       outputTokens,
@@ -64,12 +66,14 @@ export function normalizeRuntimeUsage(
     }
   }
 
+  const baseline = options.baseline ?? null
   const previousInputTokens = baseline?.rawInputTokens ?? 0
   const previousOutputTokens = baseline?.rawOutputTokens ?? 0
   const previousCacheReadInputTokens = baseline?.cacheReadInputTokens ?? 0
   const previousCacheCreationInputTokens = baseline?.cacheCreationInputTokens ?? 0
   const nextRawInputTokens = rawInputTokens ?? inputTokens
   const nextRawOutputTokens = rawOutputTokens ?? outputTokens
+
   const didReset = (
     (typeof nextRawInputTokens === 'number' && nextRawInputTokens < previousInputTokens)
     || (typeof nextRawOutputTokens === 'number' && nextRawOutputTokens < previousOutputTokens)
@@ -129,5 +133,58 @@ export function normalizeRuntimeUsage(
         }
       : baseline,
     didReset
+  }
+}
+
+export function mergeResponseUsageCounts(
+  current: RuntimeUsageCounts,
+  incoming: RuntimeUsageCounts,
+  provider?: string | null
+): RuntimeUsageCounts {
+  const nextInputTokens = resolveCountForDisplay(incoming.inputTokens)
+  const nextOutputTokens = resolveCountForDisplay(incoming.outputTokens)
+
+  if (isCumulativeUsageRuntime(provider)) {
+    return {
+      inputTokens: nextInputTokens !== undefined
+        ? (resolveCountForDisplay(current.inputTokens) ?? 0) + nextInputTokens
+        : current.inputTokens,
+      outputTokens: nextOutputTokens !== undefined
+        ? (resolveCountForDisplay(current.outputTokens) ?? 0) + nextOutputTokens
+        : current.outputTokens
+    }
+  }
+
+  return {
+    inputTokens: nextInputTokens ?? current.inputTokens,
+    outputTokens: nextOutputTokens ?? current.outputTokens
+  }
+}
+
+export function mergeFinalUsageSnapshotCounts(
+  current: RuntimeUsageCounts,
+  snapshot: RuntimeUsageCounts,
+  provider?: string | null
+): RuntimeUsageCounts {
+  const snapshotInputTokens = resolveCountForDisplay(snapshot.inputTokens)
+  const snapshotOutputTokens = resolveCountForDisplay(snapshot.outputTokens)
+
+  if (!isCumulativeUsageRuntime(provider)) {
+    return {
+      inputTokens: snapshotInputTokens ?? current.inputTokens,
+      outputTokens: snapshotOutputTokens ?? current.outputTokens
+    }
+  }
+
+  const hasCurrentUsage = (resolveCountForDisplay(current.inputTokens) ?? 0) > 0
+    || (resolveCountForDisplay(current.outputTokens) ?? 0) > 0
+
+  return {
+    inputTokens: hasCurrentUsage
+      ? (current.inputTokens ?? snapshotInputTokens)
+      : (snapshotInputTokens ?? current.inputTokens),
+    outputTokens: hasCurrentUsage
+      ? (current.outputTokens ?? snapshotOutputTokens)
+      : (snapshotOutputTokens ?? current.outputTokens)
   }
 }

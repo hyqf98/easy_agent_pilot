@@ -324,7 +324,10 @@ fn scan_claude_project_mcp_from_main_config(
 
     let project_entry = projects.iter().find_map(|(project_key, value)| {
         let normalized_key = normalize_project_config_key(project_key);
-        if lookup_keys.iter().any(|candidate| candidate == &normalized_key) {
+        if lookup_keys
+            .iter()
+            .any(|candidate| candidate == &normalized_key)
+        {
             value.as_object()
         } else {
             None
@@ -371,11 +374,8 @@ fn scan_claude_project_mcp_from_main_config(
             merged_config.insert(key.clone(), value.clone());
         }
 
-        if let Some(server) = parse_mcp_server_config(
-            name,
-            &merged_config,
-            McpConfigScope::Project,
-        ) {
+        if let Some(server) = parse_mcp_server_config(name, &merged_config, McpConfigScope::Project)
+        {
             servers.push(server);
         }
     }
@@ -419,7 +419,8 @@ fn scan_opencode_mcp_source_file(
                 .get("url")
                 .and_then(|value| value.as_str())
                 .map(|value| value.to_string());
-            let transport = infer_transport_from_fields(url.as_ref(), None).unwrap_or(McpTransportType::Http);
+            let transport =
+                infer_transport_from_fields(url.as_ref(), None).unwrap_or(McpTransportType::Http);
 
             servers.push(ScannedMcpServer {
                 name: name.clone(),
@@ -924,13 +925,17 @@ pub fn scan_cli_config(
         .map(PathBuf::from)
         .filter(|path| path.exists() && path.is_dir());
 
-    let mcp_servers =
-        scan_mcp_config(&cli_name, &config_dir, &config_file, project_root.as_deref())
-            .unwrap_or_default();
+    let mcp_servers = scan_mcp_config(
+        &cli_name,
+        &config_dir,
+        &config_file,
+        project_root.as_deref(),
+    )
+    .unwrap_or_default();
     let skills =
         scan_skills_directory(&config_dir, &cli_name, project_root.as_deref()).unwrap_or_default();
-    let plugins = scan_plugins_directory(&config_dir, &cli_name, project_root.as_deref())
-        .unwrap_or_default();
+    let plugins =
+        scan_plugins_directory(&config_dir, &cli_name, project_root.as_deref()).unwrap_or_default();
 
     Ok(build_cli_config_scan_result(
         config_dir_str,
@@ -1438,6 +1443,16 @@ pub struct CliSessionDetail {
     pub messages: Vec<CliSessionMessage>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliSessionUsageSnapshot {
+    pub provider: String,
+    pub model: Option<String>,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub context_window_occupancy: Option<i64>,
+}
+
 /// 读取 CLI 会话详情 (Tauri 命令)
 #[tauri::command]
 pub async fn read_cli_session_detail(
@@ -1449,6 +1464,243 @@ pub async fn read_cli_session_detail(
     })
     .await
     .map_err(|e| format!("读取会话详情失败: {}", e))?
+}
+
+#[tauri::command]
+pub async fn read_cli_session_usage_snapshot(
+    provider: String,
+    cli_session_id: String,
+) -> Result<Option<CliSessionUsageSnapshot>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let normalized_provider = provider.trim().to_lowercase();
+        match normalized_provider.as_str() {
+            "opencode" => read_opencode_session_usage_snapshot(&cli_session_id),
+            "codex" => read_codex_session_usage_snapshot(&cli_session_id),
+            "claude" => read_claude_session_usage_snapshot(&cli_session_id),
+            _ => Ok(None),
+        }
+    })
+    .await
+    .map_err(|e| format!("读取 CLI 会话用量快照失败: {}", e))?
+}
+
+fn usage_u64_to_i64(value: Option<u64>) -> i64 {
+    value.unwrap_or(0).min(i64::MAX as u64) as i64
+}
+
+fn find_claude_session_file(session_id: &str) -> Result<Option<PathBuf>, String> {
+    let home_dir = dirs::home_dir().ok_or_else(|| "无法确定用户目录".to_string())?;
+    let projects_dir = home_dir.join(".claude").join("projects");
+    if !projects_dir.exists() {
+        return Ok(None);
+    }
+
+    for project_entry in fs::read_dir(&projects_dir).map_err(|e| e.to_string())? {
+        let Ok(project_entry) = project_entry else {
+            continue;
+        };
+        let project_dir = project_entry.path();
+        if !project_dir.is_dir() {
+            continue;
+        }
+
+        let direct_file = project_dir.join(format!("{session_id}.jsonl"));
+        if direct_file.exists() {
+            return Ok(Some(direct_file));
+        }
+    }
+
+    Ok(None)
+}
+
+fn find_codex_session_file(session_id: &str) -> Result<Option<PathBuf>, String> {
+    let home_dir = dirs::home_dir().ok_or_else(|| "无法确定用户目录".to_string())?;
+    let sessions_dir = home_dir.join(".codex").join("sessions");
+    if !sessions_dir.exists() {
+        return Ok(None);
+    }
+
+    let mut session_files = Vec::new();
+    collect_jsonl_files(&sessions_dir, &mut session_files);
+    for session_file in session_files {
+        let Some(file_stem) = session_file.file_stem().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if file_stem == session_id {
+            return Ok(Some(session_file));
+        }
+    }
+
+    Ok(None)
+}
+
+fn read_claude_session_usage_snapshot(
+    session_id: &str,
+) -> Result<Option<CliSessionUsageSnapshot>, String> {
+    let Some(session_file) = find_claude_session_file(session_id)? else {
+        return Ok(None);
+    };
+
+    let file = fs::File::open(&session_file).map_err(|e| format!("无法读取 Claude 会话文件: {}", e))?;
+    let reader = BufReader::new(file);
+
+    let mut latest_model: Option<String> = None;
+    let mut latest_input_tokens: Option<i64> = None;
+    let mut latest_output_tokens: Option<i64> = None;
+    let mut latest_occupancy: Option<i64> = None;
+
+    for line in reader.lines() {
+        let Ok(line) = line else {
+            continue;
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+
+        if json.get("type").and_then(|value| value.as_str()) != Some("assistant") {
+            continue;
+        }
+
+        let Some(message) = json.get("message") else {
+            continue;
+        };
+        if message.get("role").and_then(|value| value.as_str()) != Some("assistant") {
+            continue;
+        }
+
+        let Some(usage) = message.get("usage") else {
+            continue;
+        };
+
+        let raw_input_tokens = usage_u64_to_i64(
+            usage
+                .get("input_tokens")
+                .or_else(|| usage.get("inputTokens"))
+                .and_then(|value| value.as_u64()),
+        );
+        let raw_output_tokens = usage_u64_to_i64(
+            usage
+                .get("output_tokens")
+                .or_else(|| usage.get("outputTokens"))
+                .and_then(|value| value.as_u64()),
+        );
+
+        if raw_input_tokens <= 0 && raw_output_tokens <= 0 {
+            continue;
+        }
+
+        latest_model = message
+            .get("model")
+            .and_then(|value| value.as_str())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        latest_input_tokens = Some(raw_input_tokens);
+        latest_output_tokens = Some(raw_output_tokens);
+        latest_occupancy = Some(raw_input_tokens.saturating_add(raw_output_tokens));
+    }
+
+    let Some(input_tokens) = latest_input_tokens else {
+        return Ok(None);
+    };
+
+    Ok(Some(CliSessionUsageSnapshot {
+        provider: "claude".to_string(),
+        model: latest_model,
+        input_tokens,
+        output_tokens: latest_output_tokens.unwrap_or(0),
+        context_window_occupancy: latest_occupancy,
+    }))
+}
+
+fn read_codex_session_usage_snapshot(
+    session_id: &str,
+) -> Result<Option<CliSessionUsageSnapshot>, String> {
+    let Some(session_file) = find_codex_session_file(session_id)? else {
+        return Ok(None);
+    };
+
+    let file = fs::File::open(&session_file).map_err(|e| format!("无法读取 Codex 会话文件: {}", e))?;
+    let reader = BufReader::new(file);
+
+    let mut latest_model: Option<String> = None;
+    let mut latest_input_tokens: Option<i64> = None;
+    let mut latest_output_tokens: Option<i64> = None;
+    let mut latest_occupancy: Option<i64> = None;
+
+    for line in reader.lines() {
+        let Ok(line) = line else {
+            continue;
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+
+        let event_type = json.get("type").and_then(|value| value.as_str()).unwrap_or_default();
+        if event_type == "session_meta" {
+            latest_model = json
+                .pointer("/payload/model")
+                .or_else(|| json.pointer("/payload/model_name"))
+                .or_else(|| json.pointer("/payload/modelName"))
+                .and_then(|value| value.as_str())
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .or(latest_model);
+            continue;
+        }
+
+        if event_type != "event_msg" {
+            continue;
+        }
+
+        let Some(payload) = json.get("payload") else {
+            continue;
+        };
+        if payload.get("type").and_then(|value| value.as_str()) != Some("token_count") {
+            continue;
+        }
+
+        let Some(info) = payload.get("info") else {
+            continue;
+        };
+        let Some(usage) = info
+            .get("last_token_usage")
+            .or_else(|| info.get("total_token_usage"))
+        else {
+            continue;
+        };
+
+        let raw_input_tokens = usage_u64_to_i64(
+            usage.get("input_tokens").and_then(|value| value.as_u64()),
+        );
+        let raw_output_tokens = usage_u64_to_i64(
+            usage.get("output_tokens").and_then(|value| value.as_u64()),
+        );
+        let cached_input_tokens = usage_u64_to_i64(
+            usage
+                .get("cached_input_tokens")
+                .and_then(|value| value.as_u64()),
+        );
+
+        if raw_input_tokens <= 0 && raw_output_tokens <= 0 {
+            continue;
+        }
+
+        latest_input_tokens = Some(raw_input_tokens.saturating_sub(cached_input_tokens).max(0));
+        latest_output_tokens = Some(raw_output_tokens);
+        latest_occupancy = Some(raw_input_tokens.saturating_add(raw_output_tokens));
+    }
+
+    let Some(input_tokens) = latest_input_tokens else {
+        return Ok(None);
+    };
+
+    Ok(Some(CliSessionUsageSnapshot {
+        provider: "codex".to_string(),
+        model: latest_model,
+        input_tokens,
+        output_tokens: latest_output_tokens.unwrap_or(0),
+        context_window_occupancy: latest_occupancy,
+    }))
 }
 
 fn read_cli_session_detail_impl(
@@ -1647,8 +1899,8 @@ fn list_opencode_session_project_paths(config_dir: &Path) -> Result<Vec<String>,
         return Ok(Vec::new());
     }
 
-    let conn = Connection::open(&db_path)
-        .map_err(|e| format!("无法打开 OpenCode 数据库: {}", e))?;
+    let conn =
+        Connection::open(&db_path).map_err(|e| format!("无法打开 OpenCode 数据库: {}", e))?;
 
     let mut stmt = conn
         .prepare("SELECT DISTINCT directory FROM session ORDER BY directory")
@@ -1757,7 +2009,11 @@ fn scan_opencode_sessions(
             session_id: session_id.clone(),
             session_path: format!("{}{}", OPENCODE_SESSION_PATH_PREFIX, session_id),
             project_path: Some(directory),
-            first_message: if first_message.is_empty() { None } else { Some(first_message) },
+            first_message: if first_message.is_empty() {
+                None
+            } else {
+                Some(first_message)
+            },
             message_count,
             created_at,
             updated_at,
@@ -1782,8 +2038,8 @@ fn read_opencode_session_detail(session_path: &str) -> Result<CliSessionDetail, 
         .filter(|p| p.exists())
         .ok_or_else(|| "无法找到 OpenCode 数据库".to_string())?;
 
-    let conn = Connection::open(&db_path)
-        .map_err(|e| format!("无法打开 OpenCode 数据库: {}", e))?;
+    let conn =
+        Connection::open(&db_path).map_err(|e| format!("无法打开 OpenCode 数据库: {}", e))?;
 
     let (directory, title, time_created, time_updated) = conn
         .query_row(
@@ -1809,17 +2065,12 @@ fn read_opencode_session_detail(session_path: &str) -> Result<CliSessionDetail, 
     let mut msg_count = 0;
 
     let mut stmt = conn
-        .prepare(
-            "SELECT id, data FROM message WHERE session_id = ?1 ORDER BY time_created",
-        )
+        .prepare("SELECT id, data FROM message WHERE session_id = ?1 ORDER BY time_created")
         .map_err(|e| format!("查询消息失败: {}", e))?;
 
     let rows = stmt
         .query_map([session_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-            ))
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
         .map_err(|e| format!("读取消息失败: {}", e))?;
 
@@ -1883,6 +2134,110 @@ fn read_opencode_session_detail(session_path: &str) -> Result<CliSessionDetail, 
         updated_at,
         messages,
     })
+}
+
+fn read_opencode_session_usage_snapshot(
+    session_id: &str,
+) -> Result<Option<CliSessionUsageSnapshot>, String> {
+    let db_path = opencode_db_path()
+        .filter(|p| p.exists())
+        .ok_or_else(|| "无法找到 OpenCode 数据库".to_string())?;
+
+    let conn =
+        Connection::open(&db_path).map_err(|e| format!("无法打开 OpenCode 数据库: {}", e))?;
+
+    let mut stmt = conn
+        .prepare("SELECT data FROM message WHERE session_id = ?1 ORDER BY time_created")
+        .map_err(|e| format!("查询 OpenCode 会话用量失败: {}", e))?;
+
+    let rows = stmt
+        .query_map([session_id], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("读取 OpenCode 会话用量失败: {}", e))?;
+
+    let mut parsed_messages = Vec::new();
+    for row in rows {
+        let Ok(data_str) = row else {
+            continue;
+        };
+        let Ok(data) = serde_json::from_str::<serde_json::Value>(&data_str) else {
+            continue;
+        };
+        parsed_messages.push(data);
+    }
+
+    if parsed_messages.is_empty() {
+        return Ok(None);
+    }
+
+    let last_user_index = parsed_messages
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, item)| item.get("role").and_then(|v| v.as_str()) == Some("user"))
+        .map(|(index, _)| index);
+
+    let assistant_slice = match last_user_index {
+        Some(index) => &parsed_messages[index + 1..],
+        None => parsed_messages.as_slice(),
+    };
+
+    let mut total_input_tokens = 0_i64;
+    let mut total_output_tokens = 0_i64;
+    let mut latest_occupancy = None;
+    let mut latest_model = None;
+
+    for message in assistant_slice {
+        if message.get("role").and_then(|v| v.as_str()) != Some("assistant") {
+            continue;
+        }
+
+        let Some(tokens) = message.get("tokens") else {
+            continue;
+        };
+
+        total_input_tokens += tokens
+            .get("input")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+            .max(0);
+        total_output_tokens += tokens
+            .get("output")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+            .max(0);
+        latest_occupancy = tokens
+            .get("total")
+            .and_then(|v| v.as_i64())
+            .map(|value| value.max(0));
+
+        let provider_id = message
+            .get("providerID")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let model_id = message
+            .get("modelID")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        latest_model = match (provider_id, model_id) {
+            (Some(provider), Some(model)) => Some(format!("{provider}/{model}")),
+            (_, Some(model)) => Some(model.to_string()),
+            _ => latest_model,
+        };
+    }
+
+    if total_input_tokens <= 0 && total_output_tokens <= 0 && latest_occupancy.unwrap_or(0) <= 0 {
+        return Ok(None);
+    }
+
+    Ok(Some(CliSessionUsageSnapshot {
+        provider: "opencode".to_string(),
+        model: latest_model,
+        input_tokens: total_input_tokens,
+        output_tokens: total_output_tokens,
+        context_window_occupancy: latest_occupancy,
+    }))
 }
 
 #[derive(Default)]
@@ -1950,11 +2305,16 @@ fn extract_opencode_message_content(
                     continue;
                 };
 
-                let part_type = data.get("type").and_then(|v| v.as_str()).unwrap_or_default();
+                let part_type = data
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
                 let text = match part_type {
                     "text" => {
                         has_assistant_text = true;
-                        data.get("text").and_then(|v| v.as_str()).and_then(clean_display_text)
+                        data.get("text")
+                            .and_then(|v| v.as_str())
+                            .and_then(clean_display_text)
                     }
                     "reasoning" => {
                         has_assistant_text = true;
@@ -1992,17 +2352,13 @@ fn extract_opencode_message_content(
         Some(parts.join("\n\n"))
     } else {
         message_data
-        .get("error")
-        .and_then(|error| error.get("data"))
-        .and_then(|data| data.get("message"))
-        .and_then(|v| v.as_str())
-        .and_then(clean_display_text)
-        .map(|value| format!("[Error]\n{}", value))
-        .or_else(|| {
-            message_data
-                .get("summary")
-                .and_then(format_json_value)
-        })
+            .get("error")
+            .and_then(|error| error.get("data"))
+            .and_then(|data| data.get("message"))
+            .and_then(|v| v.as_str())
+            .and_then(clean_display_text)
+            .map(|value| format!("[Error]\n{}", value))
+            .or_else(|| message_data.get("summary").and_then(format_json_value))
     };
 
     let preferred_message_type = if has_assistant_text {
@@ -2031,8 +2387,8 @@ fn delete_opencode_session(_agent_id: &str, session_path: &str) -> Result<(), St
         .filter(|p| p.exists())
         .ok_or_else(|| "无法找到 OpenCode 数据库".to_string())?;
 
-    let conn = Connection::open(&db_path)
-        .map_err(|e| format!("无法打开 OpenCode 数据库: {}", e))?;
+    let conn =
+        Connection::open(&db_path).map_err(|e| format!("无法打开 OpenCode 数据库: {}", e))?;
 
     conn.execute("DELETE FROM part WHERE session_id = ?1", [session_id])
         .map_err(|e| format!("删除会话 part 失败: {}", e))?;

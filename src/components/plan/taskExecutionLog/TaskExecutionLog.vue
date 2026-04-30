@@ -15,6 +15,7 @@ const {
   logContainerRef,
   task,
   tokenUsageWindow,
+  resolvedModelId,
   tokenContextLimit,
   tokenUsageTotal,
   tokenUsagePercentage,
@@ -125,17 +126,17 @@ const {
     </div>
 
     <div
-      v-if="tokenUsageTotal > 0 || tokenUsageWindow.model"
+      v-if="tokenUsageTotal > 0 || resolvedModelId"
       class="token-usage-panel"
     >
       <div class="token-usage-panel__meta">
         <div class="token-usage-panel__title">
           <span>{{ t('taskExecution.tokenUsage') }}</span>
           <span
-            v-if="tokenUsageWindow.model"
+            v-if="resolvedModelId"
             class="token-usage-panel__model"
           >
-            {{ tokenUsageWindow.model }}
+            {{ resolvedModelId }}
           </span>
         </div>
         <div class="token-usage-panel__stats">
