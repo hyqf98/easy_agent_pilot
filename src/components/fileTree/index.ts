@@ -10,6 +10,7 @@ export { default as FileTreeRenameDialog } from './FileTreeRenameDialog.vue'
 
 // Composables
 export { useFileOperations } from './composables/useFileOperations'
+export { refreshProjectFileTreeView } from './useFileTree'
 
 // 类型
 export type {

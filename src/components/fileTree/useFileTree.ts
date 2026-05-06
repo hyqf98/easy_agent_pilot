@@ -51,6 +51,7 @@ interface ProjectFileSearchResult {
 }
 
 const projectFileTreeCaches = new Map<string, FileTreeRuntimeCache>()
+const projectFileTreeInstances = new Map<string, Set<() => Promise<void>>>()
 
 function buildCacheKey(projectId: string, projectPath: string): string {
   return `${projectId}:${projectPath}`
@@ -79,6 +80,54 @@ function getRuntimeCache(projectId: string, projectPath: string): FileTreeRuntim
   const nextCache = createRuntimeCache()
   projectFileTreeCaches.set(key, nextCache)
   return nextCache
+}
+
+function registerProjectFileTreeInstance(projectId: string, projectPath: string, handler: () => Promise<void>): () => void {
+  const key = buildCacheKey(projectId, projectPath)
+  const instances = projectFileTreeInstances.get(key) ?? new Set<() => Promise<void>>()
+  instances.add(handler)
+  projectFileTreeInstances.set(key, instances)
+
+  return () => {
+    const current = projectFileTreeInstances.get(key)
+    if (!current) {
+      return
+    }
+
+    current.delete(handler)
+    if (current.size === 0) {
+      projectFileTreeInstances.delete(key)
+    }
+  }
+}
+
+function clearProjectFileTreeCache(projectId: string, projectPath: string): void {
+  const cache = getRuntimeCache(projectId, projectPath)
+  cache.rootNodes = null
+  cache.rootLoadedAt = 0
+  cache.childrenByDir.clear()
+  cache.staleDirs.clear()
+  cache.pendingLoads.clear()
+  cache.rootLoadPromise = null
+}
+
+export async function refreshProjectFileTreeView(projectId: string, projectPath: string): Promise<void> {
+  clearProjectFileTreeCache(projectId, projectPath)
+
+  try {
+    await invoke<number>('warm_project_file_index', { projectPath })
+  } catch (error) {
+    console.error('Failed to refresh project file index:', error)
+  }
+
+  const handlers = Array.from(projectFileTreeInstances.get(buildCacheKey(projectId, projectPath)) ?? [])
+  if (handlers.length === 0) {
+    return
+  }
+
+  await Promise.all(handlers.map(handler => handler().catch((error) => {
+    console.error('Failed to refresh file tree instance:', error)
+  })))
 }
 
 function cloneTreeNodes(nodes: FileTreeNode[]): FileTreeNode[] {
@@ -183,6 +232,7 @@ export function useFileTree(props: FileTreeProps, emit: FileTreeEmits) {
   const isSearching = ref(false)
   const searchTimer = ref<ReturnType<typeof setTimeout> | null>(null)
   const searchRequestId = ref(0)
+  let unregisterInstance: (() => void) | null = null
 
   const rootContextNode = computed<FileTreeNodeData>(() => ({
     key: props.projectPath,
@@ -775,6 +825,11 @@ export function useFileTree(props: FileTreeProps, emit: FileTreeEmits) {
     restoreScrollPosition()
   }
 
+  async function hardRefreshTree(): Promise<void> {
+    clearSearch()
+    await loadTreeData({ resetChildCache: true, force: true })
+  }
+
   function handleNodeClick(event: MouseEvent, node: TreeOption) {
     rootRef.value?.focus()
     const nodeData = buildNodeData(node)
@@ -1312,6 +1367,7 @@ export function useFileTree(props: FileTreeProps, emit: FileTreeEmits) {
   }
 
   onMounted(() => {
+    unregisterInstance = registerProjectFileTreeInstance(props.projectId, props.projectPath, hardRefreshTree)
     document.addEventListener('click', handleClickOutside)
     document.addEventListener('keydown', handleDocumentKeydown)
     hydrateFromCache()
@@ -1324,6 +1380,8 @@ export function useFileTree(props: FileTreeProps, emit: FileTreeEmits) {
   })
 
   onUnmounted(() => {
+    unregisterInstance?.()
+    unregisterInstance = null
     document.removeEventListener('click', handleClickOutside)
     document.removeEventListener('keydown', handleDocumentKeydown)
     resolveScrollElement()?.removeEventListener('scroll', handleTreeScroll)
@@ -1351,6 +1409,8 @@ export function useFileTree(props: FileTreeProps, emit: FileTreeEmits) {
       closeContextMenu()
       clearDragState()
       clearSearch()
+      unregisterInstance?.()
+      unregisterInstance = registerProjectFileTreeInstance(nextProjectId, nextProjectPath, hardRefreshTree)
       hydrateFromCache()
       await loadTreeData({ force: treeData.value.length === 0 })
       scheduleFileWatcherStart()

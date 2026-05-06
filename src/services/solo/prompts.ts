@@ -38,6 +38,133 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
+function readString(value: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    if (typeof value[key] === 'string') {
+      const normalized = value[key].trim()
+      if (normalized) {
+        return normalized
+      }
+    }
+  }
+
+  return undefined
+}
+
+function readStringArray(value: Record<string, unknown>, ...keys: string[]): string[] {
+  for (const key of keys) {
+    if (Array.isArray(value[key])) {
+      return value[key]
+        .map((item) => String(item).trim())
+        .filter(Boolean)
+    }
+  }
+
+  return []
+}
+
+function readRecord(value: Record<string, unknown>, ...keys: string[]): Record<string, unknown> | undefined {
+  for (const key of keys) {
+    const candidate = value[key]
+    if (isRecord(candidate)) {
+      return candidate
+    }
+  }
+
+  return undefined
+}
+
+function normalizeSoloDecisionType(rawType: string | undefined): SoloCoordinatorDecision['type'] | null {
+  const normalized = rawType?.trim().toLowerCase()
+  if (!normalized) {
+    return null
+  }
+
+  if ([
+    'dispatch_step',
+    'dispatchstep',
+    'dispatch',
+    'next_step',
+    'nextstep',
+    'step'
+  ].includes(normalized)) {
+    return 'dispatch_step'
+  }
+
+  if ([
+    'complete_run',
+    'completerun',
+    'complete',
+    'completed',
+    'finish',
+    'finished'
+  ].includes(normalized)) {
+    return 'complete_run'
+  }
+
+  if ([
+    'block_run',
+    'blockrun',
+    'block',
+    'blocked',
+    'need_input',
+    'needinfo',
+    'need_info',
+    'ask_user'
+  ].includes(normalized)) {
+    return 'block_run'
+  }
+
+  return null
+}
+
+function normalizeSoloDecisionRecord(value: Record<string, unknown>): Record<string, unknown> {
+  const stepPayload = readRecord(value, 'step', 'payload', 'data')
+  const stepCandidate = stepPayload ?? value
+  const formSchema = readRecord(value, 'formSchema', 'form_schema')
+    ?? (Array.isArray(value.forms) && isRecord(value.forms[0]) ? value.forms[0] as Record<string, unknown> : undefined)
+
+  return {
+    ...value,
+    ...(normalizeSoloDecisionType(readString(value, 'type', 'action', 'decision', 'phase'))
+      ? { type: normalizeSoloDecisionType(readString(value, 'type', 'action', 'decision', 'phase')) }
+      : {}),
+    stepRef: readString(stepCandidate, 'stepRef', 'step_ref', 'ref'),
+    parentStepRef: readString(stepCandidate, 'parentStepRef', 'parent_step_ref', 'parentRef', 'parent_ref'),
+    depth: typeof stepCandidate.depth === 'number'
+      ? stepCandidate.depth
+      : typeof stepCandidate.depth === 'string' && stepCandidate.depth.trim()
+        ? Number(stepCandidate.depth)
+        : undefined,
+    title: readString(stepCandidate, 'title', 'name'),
+    description: readString(stepCandidate, 'description', 'desc'),
+    selectedExpertId: readString(
+      stepCandidate,
+      'selectedExpertId',
+      'selected_expert_id',
+      'expertId',
+      'expert_id',
+      'assigneeExpertId',
+      'assignee_expert_id'
+    ),
+    executionPrompt: readString(stepCandidate, 'executionPrompt', 'execution_prompt', 'prompt', 'instruction', 'instructions'),
+    doneWhen: readStringArray(
+      stepCandidate,
+      'doneWhen',
+      'done_when',
+      'acceptanceCriteria',
+      'acceptance_criteria',
+      'successCriteria',
+      'success_criteria'
+    ),
+    summary: readString(value, 'summary', 'resultSummary', 'result_summary', 'finalSummary', 'final_summary'),
+    deliveredArtifacts: readStringArray(value, 'deliveredArtifacts', 'delivered_artifacts', 'artifacts'),
+    reason: readString(value, 'reason', 'blockReason', 'block_reason', 'message', 'error'),
+    question: readString(value, 'question', 'userQuestion', 'user_question', 'ask'),
+    formSchema
+  }
+}
+
 function extractJsonCandidate(raw: string): string | null {
   const trimmed = raw.trim()
   if (!trimmed) return null
@@ -81,11 +208,21 @@ function unwrapSoloDecisionCandidate(value: unknown): Record<string, unknown> | 
     return null
   }
 
-  if (typeof value.type === 'string' && ['dispatch_step', 'complete_run', 'block_run'].includes(value.type)) {
-    return value
+  const normalizedRecord = normalizeSoloDecisionRecord(value)
+
+  if (typeof normalizedRecord.type === 'string' && ['dispatch_step', 'complete_run', 'block_run'].includes(normalizedRecord.type)) {
+    return normalizedRecord
   }
 
-  const directKeys = ['structured_output', 'structuredOutput', 'result', 'data', 'value', 'output']
+  const inferredType = inferSoloDecisionType(normalizedRecord)
+  if (inferredType) {
+    return {
+      ...normalizedRecord,
+      type: inferredType
+    }
+  }
+
+  const directKeys = ['structured_output', 'structuredOutput', 'result', 'data', 'value', 'output', 'payload', 'response', 'message']
   for (const key of directKeys) {
     const nested = unwrapSoloDecisionCandidate(value[key])
     if (nested) {
@@ -98,6 +235,38 @@ function unwrapSoloDecisionCandidate(value: unknown): Record<string, unknown> | 
     if (nested) {
       return nested
     }
+  }
+
+  return null
+}
+
+function inferSoloDecisionType(value: Record<string, unknown>): SoloCoordinatorDecision['type'] | null {
+  const stepCandidate = normalizeSoloDecisionRecord(value)
+  const doneWhen = Array.isArray(stepCandidate.doneWhen) ? stepCandidate.doneWhen : null
+  if (
+    typeof stepCandidate.stepRef === 'string'
+    && typeof stepCandidate.title === 'string'
+    && typeof stepCandidate.description === 'string'
+    && typeof stepCandidate.executionPrompt === 'string'
+    && doneWhen
+    && doneWhen.length > 0
+  ) {
+    return 'dispatch_step'
+  }
+
+  if (
+    typeof value.summary === 'string'
+    || Array.isArray(value.deliveredArtifacts)
+  ) {
+    return 'complete_run'
+  }
+
+  if (
+    typeof value.reason === 'string'
+    || value.formSchema
+    || typeof value.question === 'string'
+  ) {
+    return 'block_run'
   }
 
   return null
@@ -281,6 +450,7 @@ export function buildSoloControlPrompt(input: {
   lines.push('- doneWhen 必须是可观察、可验证的完成条件。')
   lines.push('- selectedExpertId 应从专家目录中选择最贴近该步骤的视角；如果没有合适专家，可以留空。')
   lines.push('- 返回 dispatch_step 时，请直接在顶层返回 stepRef、depth、title、description、executionPrompt、doneWhen，不要嵌套 step 对象。')
+  lines.push('- 顶层键名必须严格使用 type、stepRef、parentStepRef、selectedExpertId、executionPrompt、doneWhen、summary、deliveredArtifacts、reason、question、formSchema；不要使用 action、payload、step_ref、selected_expert_id、execution_prompt、done_when、delivered_artifacts、form_schema 等别名。')
   lines.push('- 严禁调用 StructuredOutput、Skill、Read、Bash 或任何工具。')
   lines.push('- 你不需要阅读仓库；此回合只做调度决策。')
   lines.push('- 禁止空回复；如果无法继续推进，也必须返回合法的 block_run JSON，不要留空。')
@@ -380,6 +550,7 @@ export function buildSoloControlRepairPrompt(input: {
     '- 只能返回一个 JSON 对象。',
     '- type 只能是 dispatch_step、complete_run、block_run 之一。',
     '- 如果是 dispatch_step，必须包含 stepRef、depth、title、description、executionPrompt、doneWhen。',
+    '- 键名必须使用 stepRef / parentStepRef / selectedExpertId / executionPrompt / doneWhen / deliveredArtifacts / formSchema，不要使用 snake_case 或 action/payload 包装。',
     '- dispatch_step.depth 不能超过最大调度层数。',
     '- 禁止附加解释、前后缀文本、Markdown 代码块或第二个对象。'
   ].join('\n')
@@ -510,6 +681,8 @@ export function parseSoloCoordinatorDecision(content: string): SoloCoordinatorDe
 
     if (parsed.formSchema && typeof parsed.formSchema === 'object') {
       blockResult.formSchema = parsed.formSchema as SoloCoordinatorBlockResult['formSchema']
+    } else if (Array.isArray(parsed.forms) && parsed.forms[0] && typeof parsed.forms[0] === 'object') {
+      blockResult.formSchema = parsed.forms[0] as SoloCoordinatorBlockResult['formSchema']
     }
 
     return blockResult

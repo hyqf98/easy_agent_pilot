@@ -168,6 +168,26 @@ static PROJECT_FILE_CACHE: Lazy<Mutex<HashMap<String, ProjectFileCacheEntry>>> =
 static GLOBAL_FILE_CACHE: Lazy<Mutex<GlobalFileSearchCache>> =
     Lazy::new(|| Mutex::new(GlobalFileSearchCache::default()));
 
+fn normalize_path_key(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn invalidate_project_file_cache_for_path(path: &Path) {
+    let normalized = normalize_path_key(path);
+    let normalized_prefix = format!("{}/", normalized.trim_end_matches('/'));
+    let mut cache = PROJECT_FILE_CACHE.lock();
+    cache.retain(|key, _| {
+        let normalized_key = key.replace('\\', "/");
+        normalized_key != normalized && !normalized_key.starts_with(&normalized_prefix)
+    });
+}
+
+fn invalidate_project_file_cache_for_paths(paths: &[&Path]) {
+    for path in paths {
+        invalidate_project_file_cache_for_path(path);
+    }
+}
+
 /// 创建项目输入
 #[derive(Debug, Deserialize)]
 pub struct CreateProjectInput {
@@ -1538,6 +1558,8 @@ pub fn create_entry(input: CreateEntryInput) -> Result<FileOperationResult, Stri
         }
     }
 
+    invalidate_project_file_cache_for_paths(&[parent_path.as_path(), new_path.as_path()]);
+
     Ok(FileOperationResult {
         success: true,
         message: None,
@@ -1584,6 +1606,7 @@ pub fn rename_file(input: RenameFileInput) -> Result<FileOperationResult, String
 
     // 执行重命名
     fs::rename(&old_path, &new_path).map_err(|e| format!("重命名失败: {}", e))?;
+    invalidate_project_file_cache_for_paths(&[old_path.as_path(), parent.as_ref(), new_path.as_path()]);
 
     Ok(FileOperationResult {
         success: true,
@@ -1605,12 +1628,19 @@ pub fn delete_file(path: String) -> Result<FileOperationResult, String> {
         });
     }
 
+    let parent_path = resolved_path.parent().map(Path::to_path_buf);
+
     if resolved_path.is_dir() {
         // 递归删除目录
         fs::remove_dir_all(&resolved_path).map_err(|e| format!("删除目录失败: {}", e))?;
     } else {
         // 删除文件
         fs::remove_file(&resolved_path).map_err(|e| format!("删除文件失败: {}", e))?;
+    }
+
+    invalidate_project_file_cache_for_path(&resolved_path);
+    if let Some(parent_path) = parent_path.as_ref() {
+        invalidate_project_file_cache_for_path(parent_path);
     }
 
     Ok(FileOperationResult {
@@ -1625,9 +1655,11 @@ pub fn delete_file(path: String) -> Result<FileOperationResult, String> {
 pub fn batch_delete_files(input: BatchDeleteInput) -> Result<FileOperationResult, String> {
     let mut failed_count = 0;
     let mut error_messages = Vec::new();
+    let mut touched_paths: Vec<PathBuf> = Vec::new();
 
     for path_str in input.paths {
         let resolved_path = resolve_path(&path_str)?;
+        let parent_path = resolved_path.parent().map(Path::to_path_buf);
 
         if !resolved_path.exists() {
             failed_count += 1;
@@ -1637,7 +1669,12 @@ pub fn batch_delete_files(input: BatchDeleteInput) -> Result<FileOperationResult
 
         if resolved_path.is_dir() {
             match fs::remove_dir_all(&resolved_path) {
-                Ok(_) => {}
+                Ok(_) => {
+                    touched_paths.push(resolved_path.clone());
+                    if let Some(parent_path) = parent_path.clone() {
+                        touched_paths.push(parent_path);
+                    }
+                }
                 Err(e) => {
                     failed_count += 1;
                     error_messages.push(format!("删除目录 {} 失败: {}", path_str, e));
@@ -1645,13 +1682,22 @@ pub fn batch_delete_files(input: BatchDeleteInput) -> Result<FileOperationResult
             }
         } else {
             match fs::remove_file(&resolved_path) {
-                Ok(_) => {}
+                Ok(_) => {
+                    touched_paths.push(resolved_path.clone());
+                    if let Some(parent_path) = parent_path.clone() {
+                        touched_paths.push(parent_path);
+                    }
+                }
                 Err(e) => {
                     failed_count += 1;
                     error_messages.push(format!("删除文件 {} 失败: {}", path_str, e));
                 }
             }
         }
+    }
+
+    for path in &touched_paths {
+        invalidate_project_file_cache_for_path(path);
     }
 
     if failed_count == 0 {
@@ -1708,6 +1754,7 @@ pub fn move_file(input: MoveFileInput) -> Result<FileOperationResult, String> {
         .file_name()
         .ok_or_else(|| "无法获取文件名".to_string())?;
     let new_path = target_path.join(file_name);
+    let source_parent = source_path.parent().map(Path::to_path_buf);
 
     // 检查目标是否已存在同名文件
     if new_path.exists() {
@@ -1723,6 +1770,12 @@ pub fn move_file(input: MoveFileInput) -> Result<FileOperationResult, String> {
 
     // 执行移动
     fs::rename(&source_path, &new_path).map_err(|e| format!("移动失败: {}", e))?;
+    invalidate_project_file_cache_for_path(&source_path);
+    if let Some(source_parent) = source_parent.as_ref() {
+        invalidate_project_file_cache_for_path(source_parent);
+    }
+    invalidate_project_file_cache_for_path(&target_path);
+    invalidate_project_file_cache_for_path(&new_path);
 
     Ok(FileOperationResult {
         success: true,

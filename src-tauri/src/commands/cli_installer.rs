@@ -33,6 +33,10 @@ fn create_command(program: &str) -> Command {
     }
 }
 
+#[cfg(windows)]
+const WINDOWS_CLAUDE_NATIVE_INSTALL_COMMAND: &str =
+    "& ([ScriptBlock]::Create((Invoke-RestMethod -Uri 'https://claude.ai/install.ps1'))) -Target latest";
+
 /// 包管理器信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageManager {
@@ -216,7 +220,7 @@ pub fn get_cli_install_options(cli_name: String) -> Result<CliInstallerInfo, Str
             {
                 options.push(InstallOption {
                     method: "native".to_string(),
-                    command: "irm https://claude.ai/install.ps1 | iex".to_string(),
+                    command: WINDOWS_CLAUDE_NATIVE_INSTALL_COMMAND.to_string(),
                     recommended: true,
                     available: true, // PowerShell 默认可用
                     display_name: "Native Install (PowerShell)".to_string(),
@@ -479,7 +483,7 @@ fn execute_install_command(
     app: &AppHandle,
     cli_name: &str,
     method: &str,
-    _command: &str,
+    command: &str,
 ) -> Result<(), String> {
     let mut child = match method {
         "native" => {
@@ -487,7 +491,7 @@ fn execute_install_command(
             {
                 create_command("bash")
                     .arg("-c")
-                    .arg(_command)
+                    .arg(command)
                     .stdin(Stdio::null())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
@@ -495,9 +499,16 @@ fn execute_install_command(
             }
             #[cfg(windows)]
             {
-                create_command("powershell")
-                    .arg("-Command")
-                    .arg(_command)
+                create_command("powershell.exe")
+                    .args([
+                        "-NoLogo",
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-Command",
+                        command,
+                    ])
                     .stdin(Stdio::null())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
@@ -698,21 +709,62 @@ fn verify_brew_owns(cli_name: &str) -> bool {
             .unwrap_or(false)
 }
 
-fn build_upgrade_method_order(cli_name: &str, install_info: &CliInstallerInfo) -> Vec<String> {
-    let detected = detect_install_method(cli_name);
+fn build_upgrade_method_order_for_context(
+    _cli_name: &str,
+    install_info: &CliInstallerInfo,
+    detected: Option<String>,
+    prefer_native_last: bool,
+) -> Vec<String> {
     let mut methods = Vec::new();
+    let mut push_method = |method: &str| {
+        if methods.iter().any(|existing| existing == method) {
+            return;
+        }
+
+        if !install_info
+            .install_options
+            .iter()
+            .any(|option| option.available && option.method == method)
+        {
+            return;
+        }
+
+        methods.push(method.to_string());
+    };
 
     if let Some(ref m) = detected {
-        methods.push(m.clone());
+        let should_deprioritize_detected_native = prefer_native_last && m == "native";
+        if !should_deprioritize_detected_native {
+            push_method(m);
+        }
+    }
+
+    if prefer_native_last {
+        for option in &install_info.install_options {
+            if option.available && option.method != "native" {
+                push_method(&option.method);
+            }
+        }
     }
 
     for option in &install_info.install_options {
-        if option.available && !methods.contains(&option.method) {
-            methods.push(option.method.clone());
+        if option.available {
+            push_method(&option.method);
         }
     }
 
     methods
+}
+
+fn build_upgrade_method_order(cli_name: &str, install_info: &CliInstallerInfo) -> Vec<String> {
+    let detected = detect_install_method(cli_name);
+
+    #[cfg(windows)]
+    let prefer_native_last = cli_name == "claude";
+    #[cfg(not(windows))]
+    let prefer_native_last = false;
+
+    build_upgrade_method_order_for_context(cli_name, install_info, detected, prefer_native_last)
 }
 
 async fn execute_upgrade_by_method(
@@ -910,4 +962,76 @@ pub fn cancel_install() -> Result<(), String> {
         operations.clear();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_upgrade_method_order_for_context, CliInstallerInfo, InstallOption};
+
+    fn create_install_info(options: Vec<InstallOption>) -> CliInstallerInfo {
+        CliInstallerInfo {
+            cli_name: "claude".to_string(),
+            installed: true,
+            current_version: Some("1.0.0".to_string()),
+            install_options: options,
+        }
+    }
+
+    #[test]
+    fn prefers_non_native_methods_before_native_when_requested() {
+        let install_info = create_install_info(vec![
+            InstallOption {
+                method: "native".to_string(),
+                command: "native".to_string(),
+                recommended: true,
+                available: true,
+                display_name: "Native".to_string(),
+            },
+            InstallOption {
+                method: "npm".to_string(),
+                command: "npm".to_string(),
+                recommended: false,
+                available: true,
+                display_name: "npm".to_string(),
+            },
+        ]);
+
+        let methods = build_upgrade_method_order_for_context(
+            "claude",
+            &install_info,
+            Some("native".to_string()),
+            true,
+        );
+
+        assert_eq!(methods, vec!["npm".to_string(), "native".to_string()]);
+    }
+
+    #[test]
+    fn keeps_detected_method_first_when_native_is_not_deprioritized() {
+        let install_info = create_install_info(vec![
+            InstallOption {
+                method: "native".to_string(),
+                command: "native".to_string(),
+                recommended: true,
+                available: true,
+                display_name: "Native".to_string(),
+            },
+            InstallOption {
+                method: "npm".to_string(),
+                command: "npm".to_string(),
+                recommended: false,
+                available: true,
+                display_name: "npm".to_string(),
+            },
+        ]);
+
+        let methods = build_upgrade_method_order_for_context(
+            "claude",
+            &install_info,
+            Some("native".to_string()),
+            false,
+        );
+
+        assert_eq!(methods, vec!["native".to_string(), "npm".to_string()]);
+    }
 }

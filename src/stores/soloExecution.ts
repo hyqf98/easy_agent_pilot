@@ -74,6 +74,7 @@ import type { DynamicFormSchema } from '@/types/plan'
 const SOLO_STOPPED_ERROR = '__SOLO_STOPPED__'
 const SOLO_CLI_FAILURE_RETRY_DELAY_MS = 10_000
 const SOLO_OUTPUT_REPAIR_MAX_ATTEMPTS = 3
+const SOLO_AI_RETRY_MAX_ATTEMPTS = 10
 
 class SoloRecoverableOutputError extends Error {
   rawOutput: string
@@ -134,6 +135,38 @@ function sleep(ms: number): Promise<void> {
 
 function isSoloRecoverableOutputError(error: unknown): error is SoloRecoverableOutputError {
   return error instanceof SoloRecoverableOutputError
+}
+
+function normalizeSoloErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function isCliUnavailableError(agent: AgentConfig, error: unknown): boolean {
+  if (agent.type !== 'cli') {
+    return false
+  }
+
+  const normalized = normalizeSoloErrorMessage(error).trim().toLowerCase()
+  if (!normalized) {
+    return false
+  }
+
+  return normalized.includes('cli 路径未配置')
+    || normalized.includes('path not configured')
+    || normalized.includes('command not found')
+    || normalized.includes('executable file not found')
+    || normalized.includes('binary not found')
+    || normalized.includes('program not found')
+    || normalized.includes('no such file or directory')
+    || normalized.includes('not found in $path')
+    || normalized.includes('not found')
+    || normalized.includes('enoent')
+    || normalized.includes('os error 2')
+    || normalized.includes('permission denied')
+    || normalized.includes('operation not permitted')
+    || normalized.includes('not executable')
+    || normalized.includes('failed to spawn')
+    || normalized.includes('spawn')
 }
 
 function transformStep(raw: RustSoloStep): SoloStep {
@@ -1105,6 +1138,53 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
     }
   }
 
+  async function retrySoloAiOperation<T>(input: {
+    run: SoloRun
+    state: SoloExecutionState
+    agent: AgentConfig
+    scope: SoloLogEntry['scope']
+    stepId?: string
+    label: string
+    execute: () => Promise<T>
+  }): Promise<T> {
+    const { run, state, agent, scope, stepId, label, execute } = input
+    let lastError: unknown = null
+
+    for (let attempt = 1; attempt <= SOLO_AI_RETRY_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        return await execute()
+      } catch (error) {
+        lastError = error
+        const errorMessage = normalizeSoloErrorMessage(error)
+
+        if (errorMessage === SOLO_STOPPED_ERROR || stopRequestedRunIds.value.has(run.id)) {
+          throw error
+        }
+
+        if (isCliUnavailableError(agent, error)) {
+          throw error
+        }
+
+        if (attempt >= SOLO_AI_RETRY_MAX_ATTEMPTS) {
+          throw error
+        }
+
+        state.accumulatedContent = ''
+        state.accumulatedThinking = ''
+
+        await addLog({
+          runId: run.id,
+          stepId,
+          scope,
+          type: 'system',
+          content: `${label}失败，开始第 ${attempt + 1}/${SOLO_AI_RETRY_MAX_ATTEMPTS} 次 AI 重试: ${errorMessage}`
+        })
+      }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error(`${label}重试失败`)
+  }
+
   async function executeControlTurn(run: SoloRun, runtime: Awaited<ReturnType<typeof resolveCoordinatorRuntime>>): Promise<ReturnType<typeof parseSoloCoordinatorDecision>> {
     const state = initExecutionState(run.id)
     const steps = getSteps.value(run.id)
@@ -1132,49 +1212,14 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
       inputResponse: run.inputResponse
     })
 
-    const response = await executeTurn({
+    return retrySoloAiOperation({
       run,
       state,
       agent: runtime.agent,
-      workingDirectory: runtime.workingDirectory,
-      mcpServers: undefined,
-      messages: [
-        ...(mountedMemoryPrompt ? [createMessage(run.id, 'system', mountedMemoryPrompt)] : []),
-        createMessage(run.id, 'system', systemPrompt),
-        createMessage(run.id, 'user', controlPrompt)
-      ],
-      responseMode: useSchemaResponse ? 'json_once' : 'stream_text',
-      jsonSchema: useSchemaResponse ? buildSoloControlJsonSchema() : undefined,
       scope: 'coordinator',
-      strategy: 'solo_control',
-      runtimeLabel: inferAgentProvider(runtime.agent)?.toUpperCase() || runtime.agent.type,
-      expertLabel: runtime.expertName,
-      persistContentLogs: !useSchemaResponse,
-      runtimeBindingKey: null
-    })
-
-    let latestContent = response.content
-    let repairError: unknown = null
-
-    for (let attempt = 0; attempt <= SOLO_OUTPUT_REPAIR_MAX_ATTEMPTS; attempt += 1) {
-      try {
-        const decision = validateCoordinatorDecision(run, latestContent)
-        await appendUsageNotice(run.id)
-        return decision
-      } catch (error) {
-        repairError = error
-        if (!isSoloRecoverableOutputError(error) || attempt >= SOLO_OUTPUT_REPAIR_MAX_ATTEMPTS) {
-          throw error
-        }
-
-        await addLog({
-          runId: run.id,
-          scope: 'coordinator',
-          type: 'system',
-          content: `协调输出格式异常，开始第 ${attempt + 1}/${SOLO_OUTPUT_REPAIR_MAX_ATTEMPTS} 次自修复: ${error.message}`
-        })
-
-        const repaired = await executeTurn({
+      label: '协调回合',
+      execute: async () => {
+        const response = await executeTurn({
           run,
           state,
           agent: runtime.agent,
@@ -1183,29 +1228,73 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
           messages: [
             ...(mountedMemoryPrompt ? [createMessage(run.id, 'system', mountedMemoryPrompt)] : []),
             createMessage(run.id, 'system', systemPrompt),
-            createMessage(run.id, 'user', controlPrompt),
-            createMessage(run.id, 'assistant', latestContent),
-            createMessage(run.id, 'user', buildSoloControlRepairPrompt({
-              errorMessage: error.message,
-              rawOutput: latestContent,
-              maxDispatchDepth: run.maxDispatchDepth
-            }))
+            createMessage(run.id, 'user', controlPrompt)
           ],
           responseMode: useSchemaResponse ? 'json_once' : 'stream_text',
           jsonSchema: useSchemaResponse ? buildSoloControlJsonSchema() : undefined,
           scope: 'coordinator',
-          strategy: 'solo_control_repair',
+          strategy: 'solo_control',
           runtimeLabel: inferAgentProvider(runtime.agent)?.toUpperCase() || runtime.agent.type,
           expertLabel: runtime.expertName,
-          persistContentLogs: false,
+          persistContentLogs: !useSchemaResponse,
           runtimeBindingKey: null
         })
 
-        latestContent = repaired.content
-      }
-    }
+        let latestContent = response.content
+        let repairError: unknown = null
 
-    throw repairError instanceof Error ? repairError : new Error('协调输出修复失败')
+        for (let attempt = 0; attempt <= SOLO_OUTPUT_REPAIR_MAX_ATTEMPTS; attempt += 1) {
+          try {
+            const decision = validateCoordinatorDecision(run, latestContent)
+            await appendUsageNotice(run.id)
+            return decision
+          } catch (error) {
+            repairError = error
+            if (!isSoloRecoverableOutputError(error) || attempt >= SOLO_OUTPUT_REPAIR_MAX_ATTEMPTS) {
+              throw error
+            }
+
+            await addLog({
+              runId: run.id,
+              scope: 'coordinator',
+              type: 'system',
+              content: `协调输出格式异常，开始第 ${attempt + 1}/${SOLO_OUTPUT_REPAIR_MAX_ATTEMPTS} 次自修复: ${error.message}`
+            })
+
+            const repaired = await executeTurn({
+              run,
+              state,
+              agent: runtime.agent,
+              workingDirectory: runtime.workingDirectory,
+              mcpServers: undefined,
+              messages: [
+                ...(mountedMemoryPrompt ? [createMessage(run.id, 'system', mountedMemoryPrompt)] : []),
+                createMessage(run.id, 'system', systemPrompt),
+                createMessage(run.id, 'user', controlPrompt),
+                createMessage(run.id, 'assistant', latestContent),
+                createMessage(run.id, 'user', buildSoloControlRepairPrompt({
+                  errorMessage: error.message,
+                  rawOutput: latestContent,
+                  maxDispatchDepth: run.maxDispatchDepth
+                }))
+              ],
+              responseMode: useSchemaResponse ? 'json_once' : 'stream_text',
+              jsonSchema: useSchemaResponse ? buildSoloControlJsonSchema() : undefined,
+              scope: 'coordinator',
+              strategy: 'solo_control_repair',
+              runtimeLabel: inferAgentProvider(runtime.agent)?.toUpperCase() || runtime.agent.type,
+              expertLabel: runtime.expertName,
+              persistContentLogs: false,
+              runtimeBindingKey: null
+            })
+
+            latestContent = repaired.content
+          }
+        }
+
+        throw repairError instanceof Error ? repairError : new Error('协调输出修复失败')
+      }
+    })
   }
 
   async function executeStepTurn(
@@ -1277,97 +1366,109 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
       runtimeBindingKey: stepRuntime.bindingKey
     })
 
-    let response: Awaited<ReturnType<typeof executeTurn>>
-    let activeResumeSessionId = binding?.externalSessionId
-    try {
-      response = await invokeStepTurn(activeResumeSessionId)
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error)
-      const shouldRetryWithoutResume = Boolean(
-        binding?.externalSessionId
-        && stepRuntime.bindingKey
-        && isInvalidCliResumeError(errorMessage, stepRuntime.runtimeKey)
-      )
+    const validatedOutput = await retrySoloAiOperation({
+      run,
+      state,
+      agent: stepRuntime.agent,
+      scope: 'step',
+      stepId: step.id,
+      label: `步骤执行「${step.title}」`,
+      execute: async () => {
+        let response: Awaited<ReturnType<typeof executeTurn>>
+        let activeResumeSessionId = binding?.externalSessionId
+        try {
+          response = await invokeStepTurn(activeResumeSessionId)
+        } catch (error) {
+          const errorMessage = normalizeSoloErrorMessage(error)
+          const shouldRetryWithoutResume = Boolean(
+            binding?.externalSessionId
+            && stepRuntime.bindingKey
+            && isInvalidCliResumeError(errorMessage, stepRuntime.runtimeKey)
+          )
 
-      if (!shouldRetryWithoutResume) {
-        throw error
-      }
+          if (!shouldRetryWithoutResume) {
+            throw error
+          }
 
-      await addLog({
-        runId: run.id,
-        stepId: step.id,
-        scope: 'step',
-        type: 'system',
-        content: '检测到无效的专家续接会话，已切换为重新执行当前步骤提示。'
-      })
-      await deleteSoloRuntimeBinding(run.id, stepRuntime.bindingKey!).catch(() => {})
-      activeResumeSessionId = undefined
-      response = await invokeStepTurn(undefined)
-    }
-
-    const repairMessages = [
-      ...(!activeResumeSessionId && mountedMemoryPrompt
-        ? [createMessage(run.id, 'system', mountedMemoryPrompt)]
-        : []),
-      ...(!activeResumeSessionId
-        ? [createMessage(run.id, 'system', buildSoloExecutionSystemPrompt(selectedExpert?.prompt || stepRuntime.expertPrompt))]
-        : []),
-      createMessage(run.id, 'user', userPrompt)
-    ]
-
-    let latestContent = response.content
-    let validatedOutput: ReturnType<typeof validateStepTurnOutput> | null = null
-    let repairError: unknown = null
-
-    for (let attempt = 0; attempt <= SOLO_OUTPUT_REPAIR_MAX_ATTEMPTS; attempt += 1) {
-      try {
-        validatedOutput = validateStepTurnOutput(latestContent)
-        break
-      } catch (error) {
-        repairError = error
-        if (!isSoloRecoverableOutputError(error) || attempt >= SOLO_OUTPUT_REPAIR_MAX_ATTEMPTS) {
-          throw error
+          await addLog({
+            runId: run.id,
+            stepId: step.id,
+            scope: 'step',
+            type: 'system',
+            content: '检测到无效的专家续接会话，已切换为重新执行当前步骤提示。'
+          })
+          await deleteSoloRuntimeBinding(run.id, stepRuntime.bindingKey!).catch(() => {})
+          activeResumeSessionId = undefined
+          response = await invokeStepTurn(undefined)
         }
 
-        await addLog({
-          runId: run.id,
-          stepId: step.id,
-          scope: 'step',
-          type: 'system',
-          content: `步骤输出格式异常，开始第 ${attempt + 1}/${SOLO_OUTPUT_REPAIR_MAX_ATTEMPTS} 次自修复: ${error.message}`
-        })
+        const repairMessages = [
+          ...(!activeResumeSessionId && mountedMemoryPrompt
+            ? [createMessage(run.id, 'system', mountedMemoryPrompt)]
+            : []),
+          ...(!activeResumeSessionId
+            ? [createMessage(run.id, 'system', buildSoloExecutionSystemPrompt(selectedExpert?.prompt || stepRuntime.expertPrompt))]
+            : []),
+          createMessage(run.id, 'user', userPrompt)
+        ]
 
-        const repaired = await executeTurn({
-          run,
-          state,
-          agent: stepRuntime.agent,
-          workingDirectory: stepRuntime.workingDirectory,
-          mcpServers: undefined,
-          messages: [
-            ...repairMessages,
-            createMessage(run.id, 'assistant', latestContent),
-            createMessage(run.id, 'user', buildSoloExecutionRepairPrompt({
-              errorMessage: error.message,
-              rawOutput: latestContent
-            }))
-          ],
-          responseMode: 'stream_text',
-          stepId: step.id,
-          scope: 'step',
-          strategy: 'solo_step_output_repair',
-          runtimeLabel: inferAgentProvider(stepRuntime.agent)?.toUpperCase() || stepRuntime.agent.type,
-          expertLabel: selectedExpert?.name || stepRuntime.expertName,
-          persistContentLogs: false,
-          runtimeBindingKey: null
-        })
+        let latestContent = response.content
+        let validatedOutput: ReturnType<typeof validateStepTurnOutput> | null = null
+        let repairError: unknown = null
 
-        latestContent = repaired.content
+        for (let attempt = 0; attempt <= SOLO_OUTPUT_REPAIR_MAX_ATTEMPTS; attempt += 1) {
+          try {
+            validatedOutput = validateStepTurnOutput(latestContent)
+            break
+          } catch (error) {
+            repairError = error
+            if (!isSoloRecoverableOutputError(error) || attempt >= SOLO_OUTPUT_REPAIR_MAX_ATTEMPTS) {
+              throw error
+            }
+
+            await addLog({
+              runId: run.id,
+              stepId: step.id,
+              scope: 'step',
+              type: 'system',
+              content: `步骤输出格式异常，开始第 ${attempt + 1}/${SOLO_OUTPUT_REPAIR_MAX_ATTEMPTS} 次自修复: ${error.message}`
+            })
+
+            const repaired = await executeTurn({
+              run,
+              state,
+              agent: stepRuntime.agent,
+              workingDirectory: stepRuntime.workingDirectory,
+              mcpServers: undefined,
+              messages: [
+                ...repairMessages,
+                createMessage(run.id, 'assistant', latestContent),
+                createMessage(run.id, 'user', buildSoloExecutionRepairPrompt({
+                  errorMessage: error.message,
+                  rawOutput: latestContent
+                }))
+              ],
+              responseMode: 'stream_text',
+              stepId: step.id,
+              scope: 'step',
+              strategy: 'solo_step_output_repair',
+              runtimeLabel: inferAgentProvider(stepRuntime.agent)?.toUpperCase() || stepRuntime.agent.type,
+              expertLabel: selectedExpert?.name || stepRuntime.expertName,
+              persistContentLogs: false,
+              runtimeBindingKey: null
+            })
+
+            latestContent = repaired.content
+          }
+        }
+
+        if (!validatedOutput) {
+          throw repairError instanceof Error ? repairError : new Error('步骤输出修复失败')
+        }
+
+        return validatedOutput
       }
-    }
-
-    if (!validatedOutput) {
-      throw repairError instanceof Error ? repairError : new Error('步骤输出修复失败')
-    }
+    })
 
     await appendUsageNotice(run.id, step.id)
 

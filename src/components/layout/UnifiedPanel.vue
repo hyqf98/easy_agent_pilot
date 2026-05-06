@@ -11,6 +11,7 @@ import { useSessionView } from '@/composables'
 import { useFileEditorStore } from '@/modules/fileEditor'
 import { EaIcon, EaButton, EaSkeleton } from '@/components/common'
 import { ProjectCreateModal } from '@/components/project'
+import { refreshProjectFileTreeView } from '@/components/fileTree'
 import UnifiedPanelConfirmDialog from './UnifiedPanelConfirmDialog.vue'
 import UnifiedPanelProjectEntry from './UnifiedPanelProjectEntry.vue'
 import { resolveExpertRuntime } from '@/services/agentTeams/runtime'
@@ -63,6 +64,17 @@ const setProjectTab = async (projectId: string, tab: ProjectTabType) => {
   layoutStore.setProjectTab(projectId, tab)
   if (tab === 'sessions') {
     await sessionStore.loadSessions(projectId)
+    return
+  }
+
+  if (tab === 'files') {
+    const project = projectStore.projects.find(item => item.id === projectId)
+    if (!project) {
+      return
+    }
+
+    await projectStore.refreshFileTree(project.id, project.path)
+    await refreshProjectFileTreeView(project.id, project.path)
   }
 }
 
@@ -98,9 +110,17 @@ const formatImportTime = (dateStr: string): string => {
 const handleProjectCardClick = async (project: Project) => {
   projectStore.toggleProjectExpand(project.id)
 
-  if (projectStore.isProjectExpanded(project.id) && getProjectTab(project.id) === 'sessions') {
-    await sessionStore.loadSessions(project.id)
+  if (!projectStore.isProjectExpanded(project.id)) {
+    return
   }
+
+  if (getProjectTab(project.id) === 'sessions') {
+    await sessionStore.loadSessions(project.id)
+    return
+  }
+
+  await projectStore.refreshFileTree(project.id, project.path)
+  await refreshProjectFileTreeView(project.id, project.path)
 }
 
 // 生命周期
@@ -134,6 +154,13 @@ const handleRefresh = async () => {
 
   const expandedProjectIds = Array.from(projectStore.expandedProjects)
   const expandedProjects = projectStore.projects.filter(project => expandedProjectIds.includes(project.id))
+  const fileTabProjects = expandedProjects.filter(project => getProjectTab(project.id) === 'files')
+
+  await Promise.all(fileTabProjects.map(async (project) => {
+    await projectStore.refreshFileTree(project.id, project.path)
+    await refreshProjectFileTreeView(project.id, project.path)
+  }))
+
   await Promise.all(expandedProjects
     .filter(project => getProjectTab(project.id) === 'sessions')
     .map(project => sessionStore.loadSessions(project.id, { force: true })))

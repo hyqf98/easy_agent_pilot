@@ -3,6 +3,7 @@ import { useI18n } from 'vue-i18n'
 import { useProjectStore, type Project } from '@/stores/project'
 import { useUIStore } from '@/stores/ui'
 import { useFileEditorStore } from '@/modules/fileEditor'
+import { refreshProjectFileTreeView } from '@/components/fileTree'
 
 export interface ProjectPanelProps {
   collapsed?: boolean
@@ -66,7 +67,10 @@ export function useProjectPanel() {
     )
 
     await Promise.all(
-      expandedProjects.map((project) => projectStore.refreshFileTree(project.id, project.path))
+      expandedProjects.map(async (project) => {
+        await projectStore.refreshFileTree(project.id, project.path)
+        await refreshProjectFileTreeView(project.id, project.path)
+      })
     )
   }
 
@@ -115,6 +119,7 @@ export function useProjectPanel() {
 
     if (projectStore.isProjectExpanded(project.id)) {
       await projectStore.refreshFileTree(project.id, project.path)
+      await refreshProjectFileTreeView(project.id, project.path)
     }
   }
 
