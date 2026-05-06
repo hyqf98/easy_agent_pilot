@@ -306,11 +306,12 @@ async function handleDelete(expert: AgentExpert) {
 }
 
 watch(
-  () => teamsStore.selectedExpertId,
-  () => {
-    applyExpertToForm(selectedExpert.value)
+  selectedExpert,
+  (expert) => {
+    applyExpertToForm(expert)
     syncRuntimeAgentSelection()
-  }
+  },
+  { immediate: true }
 )
 
 watch(runtimeAgentIds, () => {

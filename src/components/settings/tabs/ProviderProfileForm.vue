@@ -124,8 +124,12 @@ const opencodeModelsLoading = ref(false)
 const opencodeModelsError = ref('')
 const opencodeModelDropdownOpen = ref(false)
 const opencodeModelSearch = ref('')
+const opencodeProviderDropdownOpen = ref(false)
+const opencodeProviderSearch = ref('')
 const comboboxInputRef = ref<HTMLElement | null>(null)
 const comboboxDropdownStyle = ref<Record<string, string>>({})
+const providerComboboxInputRef = ref<HTMLElement | null>(null)
+const providerDropdownStyle = ref<Record<string, string>>({})
 const opencodeProviderMode = ref<OpenCodeProviderMode>('preset')
 const opencodeProviderModelRows = ref<string[]>([''])
 const showApiKeyValue = ref(false)
@@ -213,6 +217,7 @@ function syncOpenCodeProviderMode() {
   }
 
   opencodeProviderMode.value = 'preset'
+  syncOpenCodeProviderSearch()
 }
 
 function handleOpenCodeProviderModeChange(mode: OpenCodeProviderMode) {
@@ -236,6 +241,7 @@ async function loadOpenCodeProviders() {
     const result = await invoke<AuthProvider[]>('read_opencode_auth_providers')
     opencodeProviders.value = result
     syncOpenCodeProviderMode()
+    syncOpenCodeProviderSearch()
   } catch (error) {
     opencodeProviders.value = []
     opencodeProvidersError.value = formatInvokeError(error)
@@ -283,6 +289,77 @@ async function loadOpenCodeProviderApiKey() {
 function handleOpenCodeProviderChange() {
   loadOpenCodeModels(false)
   loadOpenCodeProviderApiKey()
+}
+
+const selectedOpenCodeProviderLabel = computed(() => {
+  const provider = opencodeProviders.value.find(item => item.id === form.value.providerName.trim())
+  return provider?.displayName || form.value.providerName.trim()
+})
+
+const filteredProviders = computed(() => {
+  const query = opencodeProviderSearch.value.trim().toLowerCase()
+  if (!query) {
+    return opencodeProviders.value
+  }
+
+  return opencodeProviders.value.filter(provider =>
+    provider.displayName.toLowerCase().includes(query)
+    || provider.id.toLowerCase().includes(query)
+  )
+})
+
+function syncOpenCodeProviderSearch() {
+  opencodeProviderSearch.value = selectedOpenCodeProviderLabel.value
+}
+
+function updateProviderDropdownPosition() {
+  if (!providerComboboxInputRef.value) return
+  const rect = providerComboboxInputRef.value.getBoundingClientRect()
+  providerDropdownStyle.value = {
+    position: 'fixed',
+    top: `${rect.bottom + 4}px`,
+    left: `${rect.left}px`,
+    width: `${rect.width}px`,
+    zIndex: '9999',
+  }
+}
+
+function openProviderDropdown() {
+  updateProviderDropdownPosition()
+  opencodeProviderDropdownOpen.value = true
+}
+
+function onProviderFocus() {
+  syncOpenCodeProviderSearch()
+  openProviderDropdown()
+}
+
+function onProviderInput(event: Event) {
+  opencodeProviderSearch.value = (event.target as HTMLInputElement).value
+  openProviderDropdown()
+}
+
+function onProviderBlur() {
+  opencodeProviderDropdownOpen.value = false
+  syncOpenCodeProviderSearch()
+}
+
+function toggleProviderDropdown() {
+  if (opencodeProviderDropdownOpen.value) {
+    opencodeProviderDropdownOpen.value = false
+    syncOpenCodeProviderSearch()
+    return
+  }
+
+  syncOpenCodeProviderSearch()
+  openProviderDropdown()
+}
+
+function selectOpenCodeProvider(provider: AuthProvider) {
+  form.value.providerName = provider.id
+  opencodeProviderSearch.value = provider.displayName
+  opencodeProviderDropdownOpen.value = false
+  handleOpenCodeProviderChange()
 }
 
 function selectOpenCodeModel(model: string) {
@@ -343,11 +420,15 @@ watch(
       opencodeProvidersLoaded.value = false
       opencodeProvidersError.value = ''
       opencodeModelsError.value = ''
+      opencodeProviderDropdownOpen.value = false
       syncOpenCodeProviderMode()
       loadOpenCodeProviders()
       if (form.value.providerName) {
         nextTick(() => loadOpenCodeModels(false))
       }
+    } else {
+      opencodeProviderDropdownOpen.value = false
+      opencodeModelDropdownOpen.value = false
     }
   },
   { immediate: true }
@@ -359,6 +440,7 @@ watch(
     if (props.cliType === 'opencode') {
       syncOpenCodeProviderModelRows(props.profile?.opencodeProviderModels || '')
       syncOpenCodeProviderMode()
+      syncOpenCodeProviderSearch()
     }
   }
 )
@@ -454,7 +536,7 @@ async function handleSubmit() {
             @click="handleClose"
           >
             <EaIcon
-              name="close"
+              name="x"
               :size="20"
             />
           </button>
@@ -659,29 +741,56 @@ async function handleSubmit() {
                   {{ t('settings.providerSwitch.form.providerName') }} <span class="required">*</span>
                 </label>
                 <template v-if="!isOpenCodeCustomProvider">
-                  <select
-                    v-model="form.providerName"
-                    class="form-input form-select"
-                    :disabled="opencodeProvidersLoading"
-                    required
-                    @change="handleOpenCodeProviderChange"
-                  >
-                    <option
-                      value=""
-                      disabled
+                  <div class="combobox-wrapper">
+                    <input
+                      ref="providerComboboxInputRef"
+                      :value="opencodeProviderSearch"
+                      type="text"
+                      class="form-input combobox-input"
+                      :placeholder="t('settings.providerSwitch.form.opencodeProviderPlaceholder')"
+                      :disabled="opencodeProvidersLoading"
+                      required
+                      @focus="onProviderFocus"
+                      @input="onProviderInput"
+                      @blur="onProviderBlur"
                     >
-                      {{ t('settings.providerSwitch.form.opencodeProviderPlaceholder') }}
-                    </option>
-                    <template v-if="opencodeProviders.length">
-                      <option
-                        v-for="p in opencodeProviders"
-                        :key="p.id"
-                        :value="p.id"
+                    <button
+                      v-if="opencodeProviders.length > 0"
+                      type="button"
+                      class="combobox-toggle"
+                      :disabled="opencodeProvidersLoading"
+                      @mousedown.prevent="toggleProviderDropdown"
+                    >
+                      <EaIcon
+                        name="chevron-down"
+                        :size="14"
+                      />
+                    </button>
+                  </div>
+                  <Teleport to="body">
+                    <div
+                      v-if="opencodeProviderDropdownOpen && filteredProviders.length > 0"
+                      class="combobox-dropdown"
+                      :style="providerDropdownStyle"
+                      @mousedown.prevent
+                    >
+                      <div
+                        v-for="provider in filteredProviders"
+                        :key="provider.id"
+                        class="combobox-option"
+                        :class="{ active: provider.id === form.providerName }"
+                        @mousedown.prevent="selectOpenCodeProvider(provider)"
                       >
-                        {{ p.displayName }}
-                      </option>
-                    </template>
-                  </select>
+                        <span>{{ provider.displayName }}</span>
+                        <span
+                          v-if="provider.hasKey"
+                          class="combobox-option-meta"
+                        >
+                          Key
+                        </span>
+                      </div>
+                    </div>
+                  </Teleport>
                 </template>
                 <template v-else>
                   <input
@@ -1078,7 +1187,8 @@ async function handleSubmit() {
 }
 
 .combobox-dropdown {
-  max-height: 200px;
+  max-width: min(720px, calc(100vw - 32px));
+  max-height: 240px;
   overflow-y: auto;
   background: var(--color-bg-primary, #fff);
   border: 1px solid var(--color-border, #e0e0e0);
@@ -1087,6 +1197,10 @@ async function handleSubmit() {
 }
 
 .combobox-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   padding: 8px 14px;
   font-size: 13px;
   cursor: pointer;
@@ -1101,6 +1215,12 @@ async function handleSubmit() {
   background: color-mix(in srgb, var(--color-primary, #7c3aed) 12%, transparent);
   color: var(--color-primary, #7c3aed);
   font-weight: 500;
+}
+
+.combobox-option-meta {
+  flex-shrink: 0;
+  color: var(--color-text-tertiary, #999);
+  font-size: 12px;
 }
 
 .api-key-input-wrapper {

@@ -150,51 +150,37 @@ const {
 
     <!-- 搜索和过滤栏 -->
     <div class="agent-list-page__toolbar">
-      <div class="search-box">
-        <EaIcon
-          name="search"
-          :size="16"
-          class="search-box__icon"
-        />
-        <input
-          v-model="searchQuery"
-          type="text"
-          class="search-box__input"
-          :placeholder="t('settings.agentList.searchPlaceholder')"
-          @input="handleSearchChange"
-        >
-        <button
-          v-if="searchQuery"
-          class="search-box__clear"
-          @click="searchQuery = ''; handleSearchChange()"
-        >
+      <div class="agent-list-page__toolbar-main">
+        <div class="search-box">
           <EaIcon
-            name="x"
-            :size="14"
+            name="search"
+            :size="16"
+            class="search-box__icon"
           />
-        </button>
-      </div>
+          <input
+            v-model="searchQuery"
+            type="text"
+            class="search-box__input"
+            :placeholder="t('settings.agentList.searchPlaceholder')"
+            @input="handleSearchChange"
+          >
+          <button
+            v-if="searchQuery"
+            class="search-box__clear"
+            @click="searchQuery = ''; handleSearchChange()"
+          >
+            <EaIcon
+              name="x"
+              :size="14"
+            />
+          </button>
+        </div>
 
-      <div class="filter-group">
-        <EaButton
-          v-if="searchQuery"
-          type="ghost"
-          size="small"
-          @click="clearSearch"
-        >
-          <EaIcon
-            name="x"
-            :size="14"
-          />
-          {{ t('common.clearSearch') }}
-        </EaButton>
-      </div>
-
-      <div class="toolbar-actions">
         <EaButton
           v-if="!showMigrationBanner"
           type="ghost"
           size="small"
+          class="toolbar-refresh"
           @click="triggerMigrationCheck"
         >
           <EaIcon
@@ -202,6 +188,21 @@ const {
             :size="14"
           />
         </EaButton>
+
+        <div class="filter-group">
+          <EaButton
+            v-if="searchQuery"
+            type="ghost"
+            size="small"
+            @click="clearSearch"
+          >
+            <EaIcon
+              name="x"
+              :size="14"
+            />
+            {{ t('common.clearSearch') }}
+          </EaButton>
+        </div>
       </div>
 
       <div class="agent-count">
@@ -329,17 +330,27 @@ const {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
   gap: var(--spacing-3);
   padding: var(--spacing-3);
   background-color: var(--color-bg-secondary);
   border-radius: var(--radius-lg);
 }
 
+.agent-list-page__toolbar-main {
+  display: flex;
+  flex: 1 1 28rem;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
 .search-box {
   position: relative;
   display: flex;
   align-items: center;
-  flex: 1;
+  flex: 1 1 18rem;
   min-width: 200px;
   max-width: 320px;
 }
@@ -398,17 +409,15 @@ const {
   gap: var(--spacing-2);
 }
 
-.toolbar-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  margin-left: auto;
+.toolbar-refresh {
+  flex-shrink: 0;
 }
 
 .agent-count {
-  margin-left: auto;
+  flex-shrink: 0;
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
+  white-space: nowrap;
 }
 
 /* 测试结果提示 */

@@ -2,7 +2,7 @@ use anyhow::Result;
 use rusqlite::{Connection, Row};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::support::{
     bind_optional, bind_value, bool_from_int, now_rfc3339, open_db_connection, UpdateSqlBuilder,
@@ -27,6 +27,15 @@ const PROVIDER_PROFILE_SELECT_BY_ID_SQL: &str =
 const PROVIDER_PROFILE_SELECT_ACTIVE_SQL: &str =
     "SELECT id, name, cli_type, is_active, api_key, base_url, provider_name, main_model, reasoning_model, haiku_model, sonnet_default, opus_default, codex_model, opencode_provider_models, opencode_provider_npm, created_at, updated_at FROM provider_profiles WHERE cli_type = ?1 AND is_active = 1";
 const OPENCODE_DEFAULT_PROVIDER_NPM: &str = "@ai-sdk/openai-compatible";
+const MODELS_DEV_PROVIDER_CATALOG_URL: &str = "https://models.dev/api.json";
+const CODEX_RUNTIME_SYNC_FILES: &[&str] = &[
+    "config.toml",
+    "auth.json",
+    "version.json",
+    ".personality_migration",
+    "installation_id",
+];
+const CODEX_RUNTIME_SYNC_DIRS: &[&str] = &["skills", "plugins", "rules", "sessions", "memories"];
 
 fn open_conn() -> Result<Connection, String> {
     open_db_connection().map_err(|e| e.to_string())
@@ -97,6 +106,117 @@ fn parse_json_object_map(
     value
         .and_then(|value| value.as_object().cloned())
         .unwrap_or_default()
+}
+
+fn set_process_env_var(key: &str, value: Option<&str>) {
+    let normalized = value
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    match normalized {
+        Some(value) => std::env::set_var(key, value),
+        None => std::env::remove_var(key),
+    }
+}
+
+fn copy_directory_recursive(source: &Path, target: &Path) -> Result<(), String> {
+    if !source.exists() {
+        return Ok(());
+    }
+
+    fs::create_dir_all(target).map_err(|e| e.to_string())?;
+
+    for entry in fs::read_dir(source).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+
+        if source_path.is_dir() {
+            copy_directory_recursive(&source_path, &target_path)?;
+            continue;
+        }
+
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+
+        fs::copy(&source_path, &target_path).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn copy_file_if_exists(source_root: &Path, target_root: &Path, relative_path: &str) -> Result<(), String> {
+    let source_path = source_root.join(relative_path);
+    if !source_path.exists() {
+        return Ok(());
+    }
+
+    let target_path = target_root.join(relative_path);
+    if let Some(parent) = target_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    fs::copy(&source_path, &target_path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn sync_codex_runtime_home_from_user_home() -> Result<(), String> {
+    let Some(home_dir) = dirs::home_dir() else {
+        return Ok(());
+    };
+
+    let source_root = home_dir.join(".codex");
+    if !source_root.exists() {
+        return Ok(());
+    }
+
+    let runtime_home = crate::commands::get_persistence_dir_path()
+        .map_err(|e| e.to_string())?
+        .join("cache")
+        .join("codex-home");
+    fs::create_dir_all(&runtime_home).map_err(|e| e.to_string())?;
+
+    for relative_path in CODEX_RUNTIME_SYNC_FILES {
+        copy_file_if_exists(&source_root, &runtime_home, relative_path)?;
+    }
+
+    for relative_path in CODEX_RUNTIME_SYNC_DIRS {
+        let source_path = source_root.join(relative_path);
+        if !source_path.exists() {
+            continue;
+        }
+
+        copy_directory_recursive(&source_path, &runtime_home.join(relative_path))?;
+    }
+
+    Ok(())
+}
+
+fn apply_cli_runtime_state(profile: &ProviderProfile) -> Result<(), String> {
+    match profile.cli_type.as_str() {
+        "claude" => {
+            set_process_env_var("ANTHROPIC_AUTH_TOKEN", profile.api_key.as_deref());
+            set_process_env_var("ANTHROPIC_BASE_URL", profile.base_url.as_deref());
+            set_process_env_var("ANTHROPIC_MODEL", profile.main_model.as_deref());
+        }
+        "codex" => {
+            set_process_env_var("OPENAI_API_KEY", profile.api_key.as_deref());
+            set_process_env_var("OPENAI_BASE_URL", profile.base_url.as_deref());
+            set_process_env_var("OPENAI_MODEL", profile.codex_model.as_deref());
+            sync_codex_runtime_home_from_user_home()?;
+        }
+        "opencode" => {}
+        _ => {}
+    }
+
+    Ok(())
+}
+
+pub fn refresh_cli_runtime_state(cli_type: &str) -> Result<(), String> {
+    let normalized_cli_type = cli_type.trim().to_lowercase();
+    let profile = read_current_cli_config(normalized_cli_type)?;
+    apply_cli_runtime_state(&profile)
 }
 
 /// Provider 配置
@@ -778,6 +898,8 @@ fn write_to_cli_config(profile: &ProviderProfile) -> Result<(), String> {
         }
     }
 
+    apply_cli_runtime_state(profile)?;
+
     Ok(())
 }
 
@@ -1394,6 +1516,13 @@ pub struct OpenCodeAuthProvider {
     pub has_key: bool,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct ModelsDevProviderEntry {
+    #[allow(dead_code)]
+    id: Option<String>,
+    name: Option<String>,
+}
+
 fn load_opencode_config_json() -> Option<serde_json::Value> {
     let config_path = opencode_config_dir().ok()?.join("opencode.json");
     let content = fs::read_to_string(config_path).ok()?;
@@ -1469,10 +1598,7 @@ fn load_configured_opencode_models(provider: &str) -> Vec<String> {
 
 /// 聚合 opencode CLI、opencode.json 与 auth.json 中的 Provider 信息
 #[tauri::command]
-pub fn read_opencode_auth_providers() -> Result<Vec<OpenCodeAuthProvider>, String> {
-    let mut providers = Vec::new();
-
-    let all_provider_ids = collect_opencode_provider_ids();
+pub async fn read_opencode_auth_providers() -> Result<Vec<OpenCodeAuthProvider>, String> {
     let mut auth_keys_set: std::collections::HashSet<String> = std::collections::HashSet::new();
     if let Some(auth) = load_opencode_auth_json() {
         if let Some(obj) = auth.as_object() {
@@ -1484,23 +1610,84 @@ pub fn read_opencode_auth_providers() -> Result<Vec<OpenCodeAuthProvider>, Strin
         }
     }
 
-    let display_names = build_provider_display_names(&all_provider_ids);
-    for id in &all_provider_ids {
-        let display_name = display_names.get(id).cloned().unwrap_or_else(|| id.clone());
+    let mut providers = fetch_models_dev_providers()
+        .await
+        .unwrap_or_default();
+
+    let existing_ids: std::collections::HashSet<String> =
+        providers.iter().map(|provider| provider.id.clone()).collect();
+    let fallback_ids = collect_opencode_provider_ids();
+
+    for id in fallback_ids {
+        if existing_ids.contains(&id) {
+            continue;
+        }
         providers.push(OpenCodeAuthProvider {
+            display_name: format_provider_display_name(&id),
             id: id.clone(),
-            display_name,
-            has_key: auth_keys_set.contains(id),
+            has_key: false,
         });
     }
 
+    for provider in &mut providers {
+        provider.has_key = auth_keys_set.contains(&provider.id);
+    }
+
+    if providers.is_empty() {
+        return Err("未查询到可用的 OpenCode Provider".to_string());
+    }
+
+    Ok(providers)
+}
+
+async fn fetch_models_dev_providers() -> Result<Vec<OpenCodeAuthProvider>, String> {
+    let client = reqwest::Client::builder()
+        .build()
+        .map_err(|e| format!("创建 models.dev HTTP 客户端失败: {}", e))?;
+
+    let response = client
+        .get(MODELS_DEV_PROVIDER_CATALOG_URL)
+        .send()
+        .await
+        .map_err(|e| format!("请求 models.dev provider catalog 失败: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "请求 models.dev provider catalog 失败: HTTP {}",
+            response.status()
+        ));
+    }
+
+    let payload = response
+        .json::<serde_json::Map<String, serde_json::Value>>()
+        .await
+        .map_err(|e| format!("解析 models.dev provider catalog 失败: {}", e))?;
+
+    let mut providers = Vec::with_capacity(payload.len());
+    for (id, value) in payload {
+        let entry: ModelsDevProviderEntry = serde_json::from_value(value).unwrap_or(ModelsDevProviderEntry {
+            id: None,
+            name: None,
+        });
+        providers.push(OpenCodeAuthProvider {
+            id: id.clone(),
+            display_name: entry
+                .name
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| format_provider_display_name(&id)),
+            has_key: false,
+        });
+    }
+
+    providers.sort_by(|a, b| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()));
     Ok(providers)
 }
 
 /// 通过 `opencode models` 命令（不带参数）获取所有可用模型的 provider 前缀，
 /// 去重后返回所有 CLI 支持的 provider ID 列表。
 fn fetch_all_opencode_provider_ids() -> Result<Vec<String>, String> {
-    let cli_path = crate::commands::cli_support::find_cli_executable("opencode", &[])
+    let scan_paths = crate::commands::cli::get_scan_paths_public();
+    let cli_path = crate::commands::cli_support::find_cli_executable("opencode", &scan_paths)
         .ok_or_else(|| "未找到 opencode CLI".to_string())?;
 
     let output = crate::commands::cli_support::run_cli_command(&cli_path, &["models"])
@@ -1524,15 +1711,6 @@ fn fetch_all_opencode_provider_ids() -> Result<Vec<String>, String> {
     }
 
     Ok(provider_set.into_iter().collect())
-}
-
-/// 从 auth.json 的 provider ID 直接生成 display_name
-/// 无需调用 CLI，format_provider_display_name 已能覆盖所有情况
-fn build_provider_display_names(auth_keys: &[String]) -> std::collections::HashMap<String, String> {
-    auth_keys
-        .iter()
-        .map(|id| (id.clone(), format_provider_display_name(id)))
-        .collect()
 }
 
 /// 从 auth.json 或 opencode.json 配置中读取指定 provider 的 API Key
@@ -1572,7 +1750,10 @@ pub fn read_opencode_provider_api_key(provider: String) -> Result<Option<String>
 pub fn list_opencode_models(provider: String) -> Result<Vec<String>, String> {
     let configured_models = load_configured_opencode_models(&provider);
 
-    let Some(cli_path) = crate::commands::cli_support::find_cli_executable("opencode", &[]) else {
+    let scan_paths = crate::commands::cli::get_scan_paths_public();
+    let Some(cli_path) =
+        crate::commands::cli_support::find_cli_executable("opencode", &scan_paths)
+    else {
         if !configured_models.is_empty() {
             return Ok(configured_models);
         }

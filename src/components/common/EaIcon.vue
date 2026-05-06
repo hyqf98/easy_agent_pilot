@@ -34,7 +34,8 @@ const iconComponent = computed(() => {
     .map(word => word.charAt(0).toUpperCase() + word.slice(1))
     .join('')
 
-  return (LucideIcons as Record<string, unknown>)[pascalCase] || null
+  const icons = LucideIcons as Record<string, unknown>
+  return icons[pascalCase] || icons[`${pascalCase}Icon`] || null
 })
 
 const iconStyle = computed(() => ({

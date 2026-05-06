@@ -1038,6 +1038,7 @@ pub fn write_default_cli_config_file(
 
     fs::write(&path, &content)
         .map_err(|error| format!("Failed to write config file: {}", error))?;
+    super::provider_profile::refresh_cli_runtime_state(&normalized_cli_type)?;
 
     Ok(CliConfigEditorFile {
         cli_type: normalized_cli_type.clone(),

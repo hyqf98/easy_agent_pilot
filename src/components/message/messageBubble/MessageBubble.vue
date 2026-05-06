@@ -54,7 +54,6 @@ const {
   assistantElapsedLabel,
   shouldShowRuntimeNotices,
   displayRuntimeNotices,
-  runtimeUsageFallback,
   assistantVisibleEditTraces,
   errorMessage,
   toolCallCount,
@@ -195,7 +194,6 @@ const {
       >
         <RuntimeNoticeList
           :notices="displayRuntimeNotices"
-          :fallback-usage="runtimeUsageFallback"
         />
       </div>
 
