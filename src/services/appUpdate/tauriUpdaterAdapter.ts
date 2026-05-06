@@ -9,6 +9,30 @@ import type {
   AppUpdaterAdapter
 } from '@/types/appUpdate'
 
+function extractTaggedVersion(value: string | null | undefined): string | null {
+  const normalized = value?.trim()
+  if (!normalized) {
+    return null
+  }
+
+  const withoutRefPrefix = normalized.replace(/^refs\/tags\//i, '')
+  const withoutVersionPrefix = withoutRefPrefix.replace(/^[vV]/, '')
+
+  return withoutVersionPrefix.trim() || null
+}
+
+export function resolveUpdateVersion(
+  version: string,
+  rawJson: Record<string, unknown> | null | undefined
+): string {
+  const tagName = rawJson?.tag_name
+  if (typeof tagName === 'string') {
+    return extractTaggedVersion(tagName) || version
+  }
+
+  return version
+}
+
 function detectPlatform(): string {
   if (typeof navigator === 'undefined') {
     return 'unknown'
@@ -30,7 +54,7 @@ function shouldRelaunchAfterInstall(): boolean {
 function toMetadata(update: Update): AppUpdateInfo {
   return {
     currentVersion: update.currentVersion,
-    version: update.version,
+    version: resolveUpdateVersion(update.version, update.rawJson),
     publishedAt: update.date ?? null,
     notes: update.body ?? null,
     rawJson: update.rawJson
