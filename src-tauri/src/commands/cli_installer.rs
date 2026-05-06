@@ -4,7 +4,9 @@
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsStr;
 use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{LazyLock, Mutex};
 use std::thread;
@@ -19,7 +21,7 @@ use crate::commands::cli_support::{find_cli_executable, get_cli_version};
 static ACTIVE_CLI_OPERATIONS: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 
-fn create_command(program: &str) -> Command {
+fn create_command<S: AsRef<OsStr>>(program: S) -> Command {
     #[cfg(target_os = "windows")]
     {
         let mut command = Command::new(program);
@@ -31,6 +33,19 @@ fn create_command(program: &str) -> Command {
     {
         Command::new(program)
     }
+}
+
+fn resolve_package_manager_executable(program: &str) -> Option<PathBuf> {
+    let scan_paths = crate::commands::cli::get_scan_paths_public();
+    find_cli_executable(program, &scan_paths)
+}
+
+fn create_resolved_command(program: &str) -> Command {
+    if let Some(path) = resolve_package_manager_executable(program) {
+        return create_command(path);
+    }
+
+    create_command(program)
 }
 
 #[cfg(windows)]
@@ -108,7 +123,7 @@ pub struct InstallCompleteEvent {
 pub fn detect_package_managers() -> Result<Vec<PackageManager>, String> {
     let mut managers = Vec::new();
 
-    if let Ok(output) = create_command("npm").arg("--version").output() {
+    if let Ok(output) = create_resolved_command("npm").arg("--version").output() {
         let available = output.status.success();
         let version = if available {
             Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -130,7 +145,7 @@ pub fn detect_package_managers() -> Result<Vec<PackageManager>, String> {
 
     #[cfg(target_os = "macos")]
     {
-        if let Ok(output) = create_command("brew").arg("--version").output() {
+        if let Ok(output) = create_resolved_command("brew").arg("--version").output() {
             let available = output.status.success();
             let version = if available {
                 let stdout = String::from_utf8_lossy(&output.stdout);
@@ -154,7 +169,7 @@ pub fn detect_package_managers() -> Result<Vec<PackageManager>, String> {
 
     #[cfg(not(windows))]
     {
-        if let Ok(output) = create_command("curl").arg("--version").output() {
+        if let Ok(output) = create_resolved_command("curl").arg("--version").output() {
             let available = output.status.success();
             let version = if available {
                 let stdout = String::from_utf8_lossy(&output.stdout);
@@ -517,7 +532,7 @@ fn execute_install_command(
         }
         "npm" => {
             let package = get_npm_package(cli_name);
-            create_command("npm")
+            create_resolved_command("npm")
                 .args(["install", "-g", package])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -525,7 +540,7 @@ fn execute_install_command(
         }
         "homebrew" => {
             let package = get_brew_package(cli_name);
-            create_command("brew")
+            create_resolved_command("brew")
                 .args(["install", package])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -677,7 +692,7 @@ fn verify_npm_owns(cli_name: &str) -> bool {
     if package.is_empty() {
         return false;
     }
-    create_command("npm")
+    create_resolved_command("npm")
         .args(["list", "-g", package, "--depth=0"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -693,14 +708,14 @@ fn verify_brew_owns(cli_name: &str) -> bool {
         return false;
     }
     // Check cask first (claude-code etc.), then formula
-    create_command("brew")
+    create_resolved_command("brew")
         .args(["list", "--cask", package])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
-        || create_command("brew")
+        || create_resolved_command("brew")
             .args(["list", "--formula", package])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -906,7 +921,7 @@ async fn execute_upgrade_command(
         &format!("📝 Executing: {} {}", program, args.join(" ")),
     );
 
-    let mut child = create_command(program)
+    let mut child = create_resolved_command(program)
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

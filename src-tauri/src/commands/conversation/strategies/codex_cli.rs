@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -345,6 +346,32 @@ fn prepare_codex_runtime_home() -> Result<PathBuf> {
     Ok(runtime_home)
 }
 
+fn load_codex_runtime_auth_env(codex_home: &Path) -> HashMap<String, String> {
+    let auth_path = codex_home.join("auth.json");
+    let Ok(content) = fs::read_to_string(&auth_path) else {
+        return HashMap::new();
+    };
+
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return HashMap::new();
+    };
+
+    let Some(object) = value.as_object() else {
+        return HashMap::new();
+    };
+
+    object
+        .iter()
+        .filter_map(|(key, value)| {
+            value
+                .as_str()
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(|item| (key.clone(), item.to_string()))
+        })
+        .collect()
+}
+
 struct TempSchemaFile {
     path: PathBuf,
 }
@@ -535,6 +562,11 @@ impl AgentExecutionStrategy for CodexCliStrategy {
             .stderr(Stdio::piped())
             .env("CODEX_HOME", &codex_runtime_home)
             .env_remove("CLAUDECODE");
+
+        for (env_key, env_value) in load_codex_runtime_auth_env(&codex_runtime_home) {
+            cmd.env(&env_key, &env_value);
+            log_info!("注入 Codex 认证环境变量: {}", env_key);
+        }
 
         log_info!("设置 CODEX_HOME: {}", codex_runtime_home.to_string_lossy());
 
@@ -2061,9 +2093,11 @@ fn parse_codex_json_blob_output(session_id: &str, output: &str) -> Option<CliStr
 #[cfg(test)]
 mod tests {
     use super::{
-        should_ignore_stderr_line, should_treat_process_failure_as_success, StderrReadOutcome,
-        StdoutReadOutcome,
+        load_codex_runtime_auth_env, should_ignore_stderr_line,
+        should_treat_process_failure_as_success, StderrReadOutcome, StdoutReadOutcome,
     };
+    use std::fs;
+    use uuid::Uuid;
 
     #[test]
     fn ignores_rmcp_transport_closed_warning() {
@@ -2134,5 +2168,32 @@ mod tests {
             &stdout_outcome,
             &stderr_outcome,
         ));
+    }
+
+    #[test]
+    fn loads_string_env_values_from_codex_auth_json() {
+        let temp_dir = std::env::temp_dir().join(format!("codex-auth-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let auth_path = temp_dir.join("auth.json");
+        fs::write(
+            &auth_path,
+            r#"{
+  "OPENAI_API_KEY": "sk-test",
+  "EMPTY_VALUE": "   ",
+  "NUMBER_VALUE": 1,
+  "CUSTOM_TOKEN": "token-value"
+}"#,
+        )
+        .expect("write auth json");
+
+        let env_map = load_codex_runtime_auth_env(&temp_dir);
+
+        assert_eq!(env_map.get("OPENAI_API_KEY").map(String::as_str), Some("sk-test"));
+        assert_eq!(env_map.get("CUSTOM_TOKEN").map(String::as_str), Some("token-value"));
+        assert!(!env_map.contains_key("EMPTY_VALUE"));
+        assert!(!env_map.contains_key("NUMBER_VALUE"));
+
+        let _ = fs::remove_file(auth_path);
+        let _ = fs::remove_dir(temp_dir);
     }
 }

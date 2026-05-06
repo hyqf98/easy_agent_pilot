@@ -158,7 +158,10 @@ export function useAgentSettingsPage() {
   }
 
   async function triggerMigrationCheck() {
-    await checkMigrationNeeded()
+    await Promise.all([
+      agentStore.scanCliTools({ force: true }),
+      checkMigrationNeeded()
+    ])
   }
 
   async function handleQuickAdd(tool: CliTool) {
