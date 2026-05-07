@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import DynamicForm from '@/components/plan/dynamicForm/DynamicForm.vue'
 import { useThemeStore } from '@/stores/theme'
 import type { TimelineEntry } from '@/types/timeline'
+import { resolveRecordedModelId } from '@/services/usage/agentCliUsageRecorder'
 import StructuredContentRenderer from './StructuredContentRenderer.vue'
 import ThinkingDisplay from './ThinkingDisplay.vue'
 import ToolCallDisplay from './ToolCallDisplay.vue'
@@ -106,6 +107,29 @@ function getToolGroupKey(entries: TimelineEntry[]) {
 
 function shouldClampToolGroup(entries: TimelineEntry[]) {
   return entries.length > 10
+}
+
+function resolveTimelineEntriesModel(entries: Array<TimelineEntry | null | undefined>) {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const model = entries[index]?.runtimeFallbackUsage?.model?.trim()
+    if (model) {
+      return model
+    }
+  }
+
+  return ''
+}
+
+function resolveToolGroupModelLabel(
+  toolEntries: TimelineEntry[],
+  fallbackEntries: Array<TimelineEntry | null | undefined> = []
+) {
+  const reportedModel = resolveTimelineEntriesModel(toolEntries)
+  const requestedModel = resolveTimelineEntriesModel(fallbackEntries)
+  return resolveRecordedModelId({
+    reportedModelId: reportedModel,
+    requestedModelId: requestedModel
+  }) || requestedModel || reportedModel || ''
 }
 
 function isAssistantContentEntry(entry: TimelineEntry) {
@@ -327,36 +351,47 @@ function getEntryElapsedLabel(entry: TimelineEntry) {
     >
       <div
         v-if="block.kind === 'tool-group'"
-        class="execution-timeline__tool-calls-shell"
-        :class="{ 'execution-timeline__tool-calls-shell--scrollable': shouldClampToolGroup(block.entries) }"
+        class="execution-timeline__tool-calls-wrap"
       >
-        <button
-          type="button"
-          class="execution-timeline__tool-calls-head"
-          :aria-expanded="isToolGroupExpanded(block.key)"
-          @click="toggleToolGroup(block.key)"
-        >
-          <span class="execution-timeline__tool-calls-title">工具调用</span>
-          <span class="execution-timeline__tool-calls-head-right">
-            <span class="execution-timeline__tool-calls-count">{{ block.entries.length }}</span>
-            <span class="execution-timeline__tool-calls-toggle">
-              {{ isToolGroupExpanded(block.key) ? t('message.collapse') : t('message.expand') }}
-            </span>
-          </span>
-        </button>
         <div
-          v-if="isToolGroupExpanded(block.key)"
-          class="execution-timeline__tool-calls"
+          v-if="resolveToolGroupModelLabel(block.entries)"
+          class="execution-timeline__tool-model-bubble"
         >
-          <ToolCallDisplay
-            v-for="toolEntry in block.entries"
-            :key="getToolCallRenderKey(toolEntry.toolCall!)"
-            :tool-call="toolEntry.toolCall!"
-            :live="toolEntry.animate"
-            :compact="toolEntry.toolCompact"
-            :default-expanded="toolEntry.toolDefaultExpanded ?? false"
-            :default-result-expanded="toolEntry.toolDefaultResultExpanded ?? false"
-          />
+          <span class="execution-timeline__tool-model-label">{{ t('message.runtimeNotice.model') }}</span>
+          <span class="execution-timeline__tool-model-value">{{ resolveToolGroupModelLabel(block.entries) }}</span>
+        </div>
+        <div
+          class="execution-timeline__tool-calls-shell"
+          :class="{ 'execution-timeline__tool-calls-shell--scrollable': shouldClampToolGroup(block.entries) }"
+        >
+          <button
+            type="button"
+            class="execution-timeline__tool-calls-head"
+            :aria-expanded="isToolGroupExpanded(block.key)"
+            @click="toggleToolGroup(block.key)"
+          >
+            <span class="execution-timeline__tool-calls-title">工具调用</span>
+            <span class="execution-timeline__tool-calls-head-right">
+              <span class="execution-timeline__tool-calls-count">{{ block.entries.length }}</span>
+              <span class="execution-timeline__tool-calls-toggle">
+                {{ isToolGroupExpanded(block.key) ? t('message.collapse') : t('message.expand') }}
+              </span>
+            </span>
+          </button>
+          <div
+            v-if="isToolGroupExpanded(block.key)"
+            class="execution-timeline__tool-calls"
+          >
+            <ToolCallDisplay
+              v-for="toolEntry in block.entries"
+              :key="getToolCallRenderKey(toolEntry.toolCall!)"
+              :tool-call="toolEntry.toolCall!"
+              :live="toolEntry.animate"
+              :compact="toolEntry.toolCompact"
+              :default-expanded="toolEntry.toolDefaultExpanded ?? false"
+              :default-result-expanded="toolEntry.toolDefaultResultExpanded ?? false"
+            />
+          </div>
         </div>
       </div>
 
@@ -381,36 +416,47 @@ function getEntryElapsedLabel(entry: TimelineEntry) {
 
         <div
           v-if="block.toolEntries.length > 0"
-          class="execution-timeline__tool-calls-shell"
-          :class="{ 'execution-timeline__tool-calls-shell--scrollable': shouldClampToolGroup(block.toolEntries) }"
+          class="execution-timeline__tool-calls-wrap"
         >
-          <button
-            type="button"
-            class="execution-timeline__tool-calls-head"
-            :aria-expanded="isToolGroupExpanded(getToolGroupKey(block.toolEntries))"
-            @click="toggleToolGroup(getToolGroupKey(block.toolEntries))"
-          >
-            <span class="execution-timeline__tool-calls-title">工具调用</span>
-            <span class="execution-timeline__tool-calls-head-right">
-              <span class="execution-timeline__tool-calls-count">{{ block.toolEntries.length }}</span>
-              <span class="execution-timeline__tool-calls-toggle">
-                {{ isToolGroupExpanded(getToolGroupKey(block.toolEntries)) ? t('message.collapse') : t('message.expand') }}
-              </span>
-            </span>
-          </button>
           <div
-            v-if="isToolGroupExpanded(getToolGroupKey(block.toolEntries))"
-            class="execution-timeline__tool-calls"
+            v-if="resolveToolGroupModelLabel(block.toolEntries, [block.contentEntry, block.thinkingEntry])"
+            class="execution-timeline__tool-model-bubble"
           >
-            <ToolCallDisplay
-              v-for="toolEntry in block.toolEntries"
-              :key="getToolCallRenderKey(toolEntry.toolCall!)"
-              :tool-call="toolEntry.toolCall!"
-              :live="toolEntry.animate"
-              :compact="toolEntry.toolCompact"
-              :default-expanded="toolEntry.toolDefaultExpanded ?? false"
-              :default-result-expanded="toolEntry.toolDefaultResultExpanded ?? false"
-            />
+            <span class="execution-timeline__tool-model-label">{{ t('message.runtimeNotice.model') }}</span>
+            <span class="execution-timeline__tool-model-value">{{ resolveToolGroupModelLabel(block.toolEntries, [block.contentEntry, block.thinkingEntry]) }}</span>
+          </div>
+          <div
+            class="execution-timeline__tool-calls-shell"
+            :class="{ 'execution-timeline__tool-calls-shell--scrollable': shouldClampToolGroup(block.toolEntries) }"
+          >
+            <button
+              type="button"
+              class="execution-timeline__tool-calls-head"
+              :aria-expanded="isToolGroupExpanded(getToolGroupKey(block.toolEntries))"
+              @click="toggleToolGroup(getToolGroupKey(block.toolEntries))"
+            >
+              <span class="execution-timeline__tool-calls-title">工具调用</span>
+              <span class="execution-timeline__tool-calls-head-right">
+                <span class="execution-timeline__tool-calls-count">{{ block.toolEntries.length }}</span>
+                <span class="execution-timeline__tool-calls-toggle">
+                  {{ isToolGroupExpanded(getToolGroupKey(block.toolEntries)) ? t('message.collapse') : t('message.expand') }}
+                </span>
+              </span>
+            </button>
+            <div
+              v-if="isToolGroupExpanded(getToolGroupKey(block.toolEntries))"
+              class="execution-timeline__tool-calls"
+            >
+              <ToolCallDisplay
+                v-for="toolEntry in block.toolEntries"
+                :key="getToolCallRenderKey(toolEntry.toolCall!)"
+                :tool-call="toolEntry.toolCall!"
+                :live="toolEntry.animate"
+                :compact="toolEntry.toolCompact"
+                :default-expanded="toolEntry.toolDefaultExpanded ?? false"
+                :default-result-expanded="toolEntry.toolDefaultResultExpanded ?? false"
+              />
+            </div>
           </div>
         </div>
 
@@ -605,6 +651,14 @@ function getEntryElapsedLabel(entry: TimelineEntry) {
   gap: var(--spacing-3);
 }
 
+.execution-timeline__tool-calls-wrap {
+  width: var(--timeline-entry-width);
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
 .execution-timeline__tool-calls-shell {
   --tool-call-shell-max-height: var(--timeline-tool-call-shell-max-height, min(40rem, calc(3.35rem * 10 + var(--spacing-2) * 9 + 3rem)));
   --tool-call-shell-border: rgba(249, 115, 22, 0.2);
@@ -629,6 +683,46 @@ function getEntryElapsedLabel(entry: TimelineEntry) {
 
 .execution-timeline__tool-calls-shell--scrollable {
   max-height: var(--tool-call-shell-max-height);
+}
+
+.execution-timeline__tool-model-bubble {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+  width: var(--timeline-entry-width);
+  max-width: 100%;
+  padding: 0.58rem 0.85rem;
+  border-radius: 0.75rem;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.12), rgba(6, 182, 212, 0.08));
+  border: 1px solid rgba(14, 165, 233, 0.18);
+  box-shadow: 0 10px 22px rgba(14, 165, 233, 0.08);
+  box-sizing: border-box;
+}
+
+.execution-timeline__tool-model-label,
+.execution-timeline__tool-model-value {
+  display: inline-block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+
+.execution-timeline__tool-model-label {
+  color: #0369a1;
+  font-weight: 600;
+}
+
+.execution-timeline__tool-model-value {
+  flex: 1 1 auto;
+  text-align: right;
+  color: #0f172a;
+  font-weight: 700;
+  letter-spacing: 0.01em;
 }
 
 .execution-timeline__tool-calls-head {
@@ -898,6 +992,20 @@ function getEntryElapsedLabel(entry: TimelineEntry) {
   --tool-call-shell-count-bg: rgba(249, 115, 22, 0.18);
   --tool-call-shell-count-text: #fed7aa;
   --tool-call-shell-scrollbar-thumb: rgba(251, 146, 60, 0.42);
+}
+
+.execution-timeline--dark .execution-timeline__tool-model-bubble {
+  background: linear-gradient(135deg, rgba(8, 47, 73, 0.78), rgba(15, 118, 110, 0.34));
+  border-color: rgba(34, 211, 238, 0.22);
+  box-shadow: 0 12px 24px rgba(2, 6, 23, 0.22);
+}
+
+.execution-timeline--dark .execution-timeline__tool-model-label {
+  color: #67e8f9;
+}
+
+.execution-timeline--dark .execution-timeline__tool-model-value {
+  color: #ecfeff;
 }
 
 .execution-timeline--dark .timeline-message__text {

@@ -2,17 +2,22 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { EaIcon } from '@/components/common'
 import { conversationService } from '@/services/conversation'
+import { resolveRecordedModelId } from '@/services/usage/agentCliUsageRecorder'
+import { useAgentStore } from '@/stores/agent'
 import { MANUAL_STOP_ERROR_MARKER, type Message } from '@/stores/message'
 import { useMessageStore } from '@/stores/message'
+import { useSessionStore } from '@/stores/session'
 import { useSessionExecutionStore } from '@/stores/sessionExecution'
 import { FILE_MENTION_PATTERN, getMentionDisplayText } from '@/utils/fileMention'
 import {
   isEnvironmentRuntimeNotice,
   getProcessingTimeNoticeSummary,
   isContextRuntimeNotice,
-  isProcessingTimeRuntimeNotice
+  isProcessingTimeRuntimeNotice,
+  resolveRuntimeNoticeModel
 } from '@/utils/runtimeNotice'
 import { extractFormResponse, parseStructuredContent } from '@/utils/structuredContent'
+import { resolveSessionAgent } from '@/utils/sessionAgent'
 
 export interface MessageBubbleProps {
   message: Message
@@ -40,7 +45,9 @@ interface MessagePart {
  */
 export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleEmits) {
   const { t, locale } = useI18n()
+  const agentStore = useAgentStore()
   const messageStore = useMessageStore()
+  const sessionStore = useSessionStore()
   const sessionExecutionStore = useSessionExecutionStore()
   const nowTick = ref(Date.now())
   const areToolCallsExpanded = ref(false)
@@ -362,6 +369,23 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
 
   const toolCallCount = computed(() => props.message.toolCalls?.length ?? 0)
   const shouldClampToolCalls = computed(() => toolCallCount.value > 10)
+  const toolCallModelLabel = computed(() => {
+    if (!isAssistant.value || toolCallCount.value === 0) {
+      return ''
+    }
+
+    const runtimeModel = resolveRuntimeNoticeModel(props.message.runtimeNotices)
+    const sessionId = props.sessionId || props.message.sessionId
+    const session = sessionId
+      ? sessionStore.sessions.find(item => item.id === sessionId)
+      : null
+    const fallbackModel = resolveSessionAgent(session, agentStore.agents)?.modelId?.trim() || ''
+
+    return resolveRecordedModelId({
+      reportedModelId: runtimeModel,
+      requestedModelId: fallbackModel
+    }) || fallbackModel || runtimeModel || ''
+  })
 
   const sortedToolCalls = computed(() => {
     const toolCalls = props.message.toolCalls ?? []
@@ -548,6 +572,7 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
     assistantVisibleEditTraces,
     errorMessage,
     toolCallCount,
+    toolCallModelLabel,
     shouldClampToolCalls,
     sortedToolCalls,
     isAssistantFormOnly,

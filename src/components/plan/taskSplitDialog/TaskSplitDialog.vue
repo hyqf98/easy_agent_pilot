@@ -130,16 +130,17 @@ const {
           <div class="split-content">
             <div class="conversation-pane">
               <div class="messages-container">
-                <MessageList
-                  :session-id="splitChatSessionId"
-                  :messages="splitChatMessages"
-                  :external-is-sending="isSessionRunning || isSplitHistoryLoading"
-                  :current-streaming-message-id="splitCurrentStreamingMessageId"
-                  :force-scroll-to-bottom-token="splitChatScrollToken"
-                  hide-context-strategy-notice
-                  @form-submit="handleActiveFormSubmit"
-                  @stop="stopSplitTask"
-                />
+                 <MessageList
+                   :session-id="splitChatSessionId"
+                   :messages="splitChatMessages"
+                   :external-is-sending="isSessionRunning || isSplitHistoryLoading"
+                   :current-streaming-message-id="splitCurrentStreamingMessageId"
+                   :force-scroll-to-bottom-token="splitChatScrollToken"
+                   hide-context-strategy-notice
+                   @form-submit="handleActiveFormSubmit"
+                   @stop="stopSplitTask"
+                   @retry="retrySplitTask"
+                 />
               </div>
 
               <div class="conversation-input-area">

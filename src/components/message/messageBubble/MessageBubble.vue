@@ -57,6 +57,7 @@ const {
   assistantVisibleEditTraces,
   errorMessage,
   toolCallCount,
+  toolCallModelLabel,
   shouldClampToolCalls,
   sortedToolCalls,
   isAssistantFormOnly,
@@ -198,51 +199,59 @@ const {
       </div>
 
       <!-- 工具调用显示 -->
-      <div
-        v-if="isAssistant && message.toolCalls && message.toolCalls.length > 0"
-        class="message-bubble__tool-calls-shell"
-        :class="{ 'message-bubble__tool-calls-shell--scrollable': shouldClampToolCalls }"
-      >
-        <button
-          type="button"
-          class="message-bubble__tool-calls-head"
-          :aria-expanded="areToolCallsExpanded"
-          @click="toggleToolCallsExpanded"
+      <template v-if="isAssistant && message.toolCalls && message.toolCalls.length > 0">
+        <div
+          v-if="toolCallModelLabel"
+          class="message-bubble__tool-model-bubble"
         >
-          <span class="message-bubble__tool-calls-title">工具调用</span>
-          <span class="message-bubble__tool-calls-head-right">
-            <span class="message-bubble__tool-calls-count">{{ toolCallCount }}</span>
-            <span class="message-bubble__tool-calls-toggle">
-              {{ areToolCallsExpanded ? t('message.collapse') : t('message.expand') }}
+          <span class="message-bubble__tool-model-label">{{ t('message.runtimeNotice.model') }}</span>
+          <span class="message-bubble__tool-model-value">{{ toolCallModelLabel }}</span>
+        </div>
+        <div
+          class="message-bubble__tool-calls-shell"
+          :class="{ 'message-bubble__tool-calls-shell--scrollable': shouldClampToolCalls }"
+        >
+          <button
+            type="button"
+            class="message-bubble__tool-calls-head"
+            :aria-expanded="areToolCallsExpanded"
+            @click="toggleToolCallsExpanded"
+          >
+            <span class="message-bubble__tool-calls-title">工具调用</span>
+            <span class="message-bubble__tool-calls-head-right">
+              <span class="message-bubble__tool-calls-count">{{ toolCallCount }}</span>
+              <span class="message-bubble__tool-calls-toggle">
+                {{ areToolCallsExpanded ? t('message.collapse') : t('message.expand') }}
+              </span>
             </span>
-          </span>
-        </button>
-        <TransitionGroup
-          v-if="areToolCallsExpanded"
-          name="tool-call"
-          tag="div"
-          class="message-bubble__tool-calls"
-        >
-          <ToolCallDisplay
-            v-for="toolCall in sortedToolCalls"
-            :key="getToolCallRenderKey(toolCall)"
-            :tool-call="toolCall"
-            :live="isStreaming || toolCall.status === 'running'"
-            :default-expanded="false"
-            :default-result-expanded="false"
-          />
-        </TransitionGroup>
-        <button
-          v-if="areToolCallsExpanded"
-          type="button"
-          class="message-bubble__tool-calls-footer"
-          @click="toggleToolCallsExpanded"
-        >
-          <span class="message-bubble__tool-calls-toggle">
-            {{ t('message.collapse') }}
-          </span>
-        </button>
-      </div>
+          </button>
+          <TransitionGroup
+            v-if="areToolCallsExpanded"
+            name="tool-call"
+            tag="div"
+            class="message-bubble__tool-calls"
+          >
+            <ToolCallDisplay
+              v-for="toolCall in sortedToolCalls"
+              :key="getToolCallRenderKey(toolCall)"
+              :tool-call="toolCall"
+              :live="isStreaming || toolCall.status === 'running'"
+              :default-expanded="false"
+              :default-result-expanded="false"
+            />
+          </TransitionGroup>
+          <button
+            v-if="areToolCallsExpanded"
+            type="button"
+            class="message-bubble__tool-calls-footer"
+            @click="toggleToolCallsExpanded"
+          >
+            <span class="message-bubble__tool-calls-toggle">
+              {{ t('message.collapse') }}
+            </span>
+          </button>
+        </div>
+      </template>
 
       <div
         v-if="assistantVisibleEditTraces.length > 0"
