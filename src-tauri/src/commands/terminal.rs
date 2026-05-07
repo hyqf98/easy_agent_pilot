@@ -61,6 +61,12 @@ pub struct TerminalState {
     sessions: Arc<Mutex<HashMap<String, Arc<TerminalSession>>>>,
 }
 
+struct ShellLaunchConfig {
+    program: String,
+    display_name: String,
+    args: Vec<String>,
+}
+
 fn default_shell() -> String {
     #[cfg(target_os = "windows")]
     {
@@ -80,6 +86,49 @@ fn default_shell() -> String {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "/bin/bash".to_string())
+    }
+}
+
+fn resolve_shell_launch(shell_override: Option<&str>) -> ShellLaunchConfig {
+    if let Some(shell) = shell_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return ShellLaunchConfig {
+            program: shell.to_string(),
+            display_name: shell.to_string(),
+            args: Vec::new(),
+        };
+    }
+
+    let default_program = default_shell();
+
+    #[cfg(target_os = "windows")]
+    {
+        let normalized = default_program.to_ascii_lowercase();
+        let mut args = Vec::new();
+
+        if normalized.contains("powershell") || normalized.contains("pwsh") {
+            // Windows 用户的 profile 和 PSReadLine 在嵌入式 PTY 中经常导致无输入或假死，
+            // 默认禁用 profile 可保持底部终端稳定可交互。
+            args.push("-NoLogo".to_string());
+            args.push("-NoProfile".to_string());
+        }
+
+        return ShellLaunchConfig {
+            program: default_program.clone(),
+            display_name: default_program,
+            args,
+        };
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        ShellLaunchConfig {
+            program: default_program.clone(),
+            display_name: default_program,
+            args: Vec::new(),
+        }
     }
 }
 
@@ -176,15 +225,12 @@ pub fn create_terminal_session(
         .openpty(create_pty_size(input.cols.max(40), input.rows.max(12)))
         .map_err(|error| error.to_string())?;
 
-    let shell = input
-        .shell
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(default_shell);
+    let shell_config = resolve_shell_launch(input.shell.as_deref());
 
-    let mut command = CommandBuilder::new(shell.clone());
+    let mut command = CommandBuilder::new(shell_config.program.clone());
+    if !shell_config.args.is_empty() {
+        command.args(&shell_config.args);
+    }
     if let Some(cwd) = input
         .cwd
         .as_deref()
@@ -209,7 +255,7 @@ pub fn create_terminal_session(
 
     let session_id = Uuid::new_v4().to_string();
     let session = Arc::new(TerminalSession {
-        shell: shell.clone(),
+        shell: shell_config.display_name.clone(),
         cwd: Mutex::new(input.cwd.clone()),
         master: Mutex::new(pair.master),
         writer: Mutex::new(writer),
@@ -254,7 +300,7 @@ pub fn create_terminal_session(
 
     Ok(TerminalSessionInfo {
         session_id,
-        shell,
+        shell: shell_config.display_name,
         cwd: input.cwd,
     })
 }
