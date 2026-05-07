@@ -458,6 +458,39 @@ export function getUsageNoticeSummary(notice: RuntimeNotice): UsageNoticeSummary
   return { model, input, output }
 }
 
+function extractNoticeModelValue(notice: RuntimeNotice): string | null {
+  const usageSummary = getUsageNoticeSummary(notice)
+  if (usageSummary?.model?.trim()) {
+    return usageSummary.model.trim()
+  }
+
+  const lines = parseRuntimeNoticeLines(notice.content)
+  const matchedLine = lines.find(line => isModelLabel(line.label) && line.value.trim())
+  return matchedLine?.value.trim() || null
+}
+
+export function resolveRuntimeNoticeModel(notices?: RuntimeNotice[] | null): string | null {
+  if (!notices?.length) {
+    return null
+  }
+
+  const usageNotice = notices.find(notice => resolveRuntimeNoticeDescriptor(notice)?.id === 'usage')
+  const usageNoticeModel = usageNotice ? extractNoticeModelValue(usageNotice) : null
+
+  if (usageNoticeModel) {
+    return usageNoticeModel
+  }
+
+  for (let index = notices.length - 1; index >= 0; index -= 1) {
+    const model = extractNoticeModelValue(notices[index])
+    if (model) {
+      return model
+    }
+  }
+
+  return null
+}
+
 export function buildUsageNotice(usage: UsageSnapshot): RuntimeNotice | null {
   const inputTokens = typeof usage.inputTokens === 'number' ? usage.inputTokens : undefined
   const outputTokens = typeof usage.outputTokens === 'number' ? usage.outputTokens : undefined
