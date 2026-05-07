@@ -208,8 +208,18 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
   })
   let lastThinkingEntry: TimelineEntry | null = null
   let lastContentEntry: TimelineEntry | null = null
+  const buildRuntimeFallbackUsage = (model?: string) => {
+    const resolvedModel = model?.trim() || resolvedModelId.value || ''
+    return resolvedModel
+      ? { model: resolvedModel }
+      : undefined
+  }
 
   return visibleLogs.value.reduce<TimelineEntry[]>((entries, log) => {
+    const logModel = typeof log.metadata?.model === 'string' && log.metadata.model.trim()
+      ? log.metadata.model.trim()
+      : undefined
+
     if (log.type === 'tool_input_delta' || log.type === 'tool_result') {
       return entries
     }
@@ -220,7 +230,8 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
         type: 'thinking',
         content: '',
         timestamp: log.timestamp,
-        animate: isScopeRunning.value
+        animate: isScopeRunning.value,
+        runtimeFallbackUsage: buildRuntimeFallbackUsage(logModel)
       }
       entries.push(lastThinkingEntry)
       return entries
@@ -233,12 +244,16 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
           type: 'thinking',
           content: log.content,
           timestamp: log.timestamp,
-          animate: isScopeRunning.value
+          animate: isScopeRunning.value,
+          runtimeFallbackUsage: buildRuntimeFallbackUsage(logModel)
         }
         entries.push(lastThinkingEntry)
       } else {
         lastThinkingEntry.content = `${lastThinkingEntry.content || ''}${log.content}`
         lastThinkingEntry.timestamp = log.timestamp
+        if (logModel || !lastThinkingEntry.runtimeFallbackUsage?.model) {
+          lastThinkingEntry.runtimeFallbackUsage = buildRuntimeFallbackUsage(logModel)
+        }
       }
       lastContentEntry = null
       return entries
@@ -252,12 +267,16 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
           content: log.content,
           timestamp: log.timestamp,
           role: 'assistant',
-          animate: isScopeRunning.value
+          animate: isScopeRunning.value,
+          runtimeFallbackUsage: buildRuntimeFallbackUsage(logModel)
         }
         entries.push(lastContentEntry)
       } else {
         lastContentEntry.content = `${lastContentEntry.content || ''}${log.content}`
         lastContentEntry.timestamp = log.timestamp
+        if (logModel || !lastContentEntry.runtimeFallbackUsage?.model) {
+          lastContentEntry.runtimeFallbackUsage = buildRuntimeFallbackUsage(logModel)
+        }
       }
       lastThinkingEntry = null
       return entries
@@ -268,7 +287,8 @@ const timelineEntries = computed<TimelineEntry[]>(() => {
         id: `tool-${log.id}`,
         type: 'tool',
         timestamp: log.timestamp,
-        toolCall: toolCallMap.get(log.metadata?.toolCallId || log.id)
+        toolCall: toolCallMap.get(log.metadata?.toolCallId || log.id),
+        runtimeFallbackUsage: buildRuntimeFallbackUsage(logModel)
       })
       lastThinkingEntry = null
       lastContentEntry = null

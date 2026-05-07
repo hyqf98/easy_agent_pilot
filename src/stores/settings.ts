@@ -24,38 +24,6 @@ export interface DetectionResult {
   total_found: number
 }
 
-// Market source type
-export type MarketSourceType = 'github' | 'remote_json' | 'local_dir'
-
-// Market source status
-export type MarketSourceStatus = 'active' | 'inactive' | 'error'
-
-// Market source configuration
-export interface MarketSource {
-  id: string
-  name: string
-  type: MarketSourceType
-  url_or_path: string
-  status: MarketSourceStatus
-  enabled: boolean
-  last_synced_at: string | null
-  created_at: string
-  updated_at: string
-}
-
-// Market source create/update input
-export interface MarketSourceInput {
-  name: string
-  type: MarketSourceType
-  url_or_path: string
-}
-
-// Test connection result
-export interface TestConnectionResult {
-  success: boolean
-  message: string
-}
-
 // Install operation type
 export type InstallOperationType = 'create_file' | 'create_dir' | 'modify_file' | 'delete_file'
 
@@ -86,120 +54,6 @@ export interface InstallResult {
   rollback_performed: boolean
   rollback_error: string | null
   backup_location: string | null
-}
-
-// Plugins Market types
-export interface PluginComponent {
-  name: string
-  component_type: string
-  description: string
-  version: string
-}
-
-export interface PluginVersion {
-  version: string
-  release_notes: string
-  released_at: string
-}
-
-export interface PluginConfigOption {
-  name: string
-  description: string
-  required: boolean
-  default_value: string | null
-}
-
-export interface PluginMarketItem {
-  id: string
-  name: string
-  version: string
-  description: string
-  source_market: string
-  author: string
-  component_types: string[]
-  tags: string[]
-  repository_url: string | null
-  homepage_url: string | null
-  downloads: number
-  rating: number
-  created_at: string
-  updated_at: string
-}
-
-export interface PluginMarketDetail {
-  id: string
-  name: string
-  version: string
-  description: string
-  full_description: string
-  source_market: string
-  author: string
-  component_types: string[]
-  tags: string[]
-  repository_url: string | null
-  homepage_url: string | null
-  license: string
-  downloads: number
-  rating: number
-  components: PluginComponent[]
-  version_history: PluginVersion[]
-  config_options: PluginConfigOption[]
-  created_at: string
-  updated_at: string
-}
-
-export interface PluginMarketListResponse {
-  items: PluginMarketItem[]
-  total: number
-}
-
-export interface PluginMarketQuery {
-  category?: string | null
-  search?: string | null
-}
-
-// Plugin Install Input
-export interface PluginInstallInput {
-  plugin_id: string
-  plugin_name: string
-  plugin_version: string
-  cli_path: string
-  scope: 'global' | 'project'
-  project_path: string | null
-  selected_components: string[]
-  config_values: Record<string, string>
-}
-
-// Plugin Install Result
-export interface PluginInstallResult {
-  success: boolean
-  message: string
-  plugin_id: string
-  installed_components: InstalledPluginComponent[]
-  backup_path: string | null
-  plugins_json_path: string | null
-}
-
-// Installed Plugin Component
-export interface InstalledPluginComponent {
-  name: string
-  component_type: string
-  target_path: string
-}
-
-// Installed Plugin (from plugins.json)
-export interface InstalledPlugin {
-  id: string
-  name: string
-  description: string
-  version: string
-  source_market: string
-  cli_path: string
-  scope: string
-  components: InstalledPluginComponent[]
-  enabled: boolean
-  installed_at: string
-  config_values: Record<string, string>
 }
 
 export type { AppSettings } from './settingsSchema'
@@ -264,27 +118,6 @@ export const useSettingsStore = defineStore('settings', () => {
     { deep: true }
   )
 
-  // Market sources configuration
-  const marketSources = ref<MarketSource[]>([])
-  const isLoadingMarketSources = ref(false)
-
-  // Plugins Market state
-  const pluginsMarketItems = ref<PluginMarketItem[]>([])
-  const isLoadingPluginsMarket = ref(false)
-  const pluginsMarketError = ref<string | null>(null)
-  const selectedPluginDetail = ref<PluginMarketDetail | null>(null)
-  const isLoadingPluginDetail = ref(false)
-  const pluginDetailError = ref<string | null>(null)
-
-  // Installed Plugins state
-  const installedPlugins = ref<InstalledPlugin[]>([])
-  const isLoadingInstalledPlugins = ref(false)
-  const installedPluginsError = ref<string | null>(null)
-
-  // Plugin Install state
-  const isInstallingPlugin = ref(false)
-  const pluginInstallError = ref<string | null>(null)
-
   // Pending Install Sessions state
   const pendingInstallSessions = ref<InstallSession[]>([])
   const isLoadingPendingSessions = ref(false)
@@ -339,119 +172,6 @@ export const useSettingsStore = defineStore('settings', () => {
       await invoke('save_app_settings', { settings: settingsToSave })
     } catch (error) {
       console.error('Failed to reset settings:', error)
-    }
-  }
-
-  // Plugins Market actions
-  async function fetchPluginsMarket(query: PluginMarketQuery) {
-    isLoadingPluginsMarket.value = true
-    pluginsMarketError.value = null
-
-    try {
-      const response = await invoke<PluginMarketListResponse>('fetch_plugins_market', { query })
-      pluginsMarketItems.value = response.items
-    } catch (error) {
-      console.error('Failed to fetch Plugins market:', error)
-      pluginsMarketError.value = error instanceof Error ? error.message : '获取 Plugins 市场数据失败'
-    } finally {
-      isLoadingPluginsMarket.value = false
-    }
-  }
-
-  function clearPluginsMarket() {
-    pluginsMarketItems.value = []
-    pluginsMarketError.value = null
-  }
-
-  async function fetchPluginDetail(pluginId: string) {
-    isLoadingPluginDetail.value = true
-    pluginDetailError.value = null
-
-    try {
-      const detail = await invoke<PluginMarketDetail>('fetch_plugin_detail', { pluginId })
-      selectedPluginDetail.value = detail
-    } catch (error) {
-      console.error('Failed to fetch plugin detail:', error)
-      pluginDetailError.value = error instanceof Error ? error.message : '获取插件详情失败'
-    } finally {
-      isLoadingPluginDetail.value = false
-    }
-  }
-
-  function clearPluginDetail() {
-    selectedPluginDetail.value = null
-    pluginDetailError.value = null
-  }
-
-  // Installed Plugins actions
-  async function loadInstalledPlugins() {
-    isLoadingInstalledPlugins.value = true
-    installedPluginsError.value = null
-
-    try {
-      const plugins = await invoke<InstalledPlugin[]>('list_installed_plugins')
-      installedPlugins.value = plugins
-    } catch (error) {
-      console.error('Failed to load installed plugins:', error)
-      installedPluginsError.value = error instanceof Error ? error.message : '获取已安装插件列表失败'
-    } finally {
-      isLoadingInstalledPlugins.value = false
-    }
-  }
-
-  function clearInstalledPlugins() {
-    installedPlugins.value = []
-    installedPluginsError.value = null
-  }
-
-  // Plugin Install actions
-  async function installPlugin(input: PluginInstallInput): Promise<PluginInstallResult> {
-    isInstallingPlugin.value = true
-    pluginInstallError.value = null
-
-    try {
-      const result = await invoke<PluginInstallResult>('install_plugin', { input })
-      if (result.success) {
-        // Refresh the installed plugins list after successful installation
-        await loadInstalledPlugins()
-      }
-      return result
-    } catch (error) {
-      console.error('Failed to install plugin:', error)
-      const errorMsg = error instanceof Error ? error.message : '安装插件失败'
-      pluginInstallError.value = errorMsg
-      throw error
-    } finally {
-      isInstallingPlugin.value = false
-    }
-  }
-
-  async function togglePlugin(pluginId: string, enabled: boolean): Promise<InstalledPlugin> {
-    try {
-      const plugin = await invoke<InstalledPlugin>('toggle_plugin', { pluginId, enabled })
-      // Update local state
-      const localPlugin = installedPlugins.value.find(p => p.id === pluginId)
-      if (localPlugin) {
-        localPlugin.enabled = enabled
-      }
-      return plugin
-    } catch (error) {
-      console.error('Failed to toggle plugin:', error)
-      throw error
-    }
-  }
-
-  async function uninstallPlugin(pluginId: string): Promise<PluginInstallResult> {
-    try {
-      const result = await invoke<PluginInstallResult>('uninstall_plugin', { pluginId })
-      if (result.success) {
-        // Remove from local state
-        installedPlugins.value = installedPlugins.value.filter(p => p.id !== pluginId)
-      }
-      return result
-    } catch (error) {
-      console.error('Failed to uninstall plugin:', error)
-      throw error
     }
   }
 
@@ -582,112 +302,11 @@ export const useSettingsStore = defineStore('settings', () => {
     pendingSessionsError.value = null
   }
 
-  // Market Source actions
-  async function loadMarketSources(): Promise<void> {
-    isLoadingMarketSources.value = true
-    try {
-      const sources = await invoke<MarketSource[]>('list_market_sources')
-      marketSources.value = sources
-    } catch (error) {
-      console.error('Failed to load market sources:', error)
-      throw error
-    } finally {
-      isLoadingMarketSources.value = false
-    }
-  }
-
-  async function testMarketSourceConnection(type: MarketSourceType, urlOrPath: string): Promise<TestConnectionResult> {
-    try {
-      const result = await invoke<TestConnectionResult>('test_market_source_connection', { type, urlOrPath })
-      return result
-    } catch (error) {
-      console.error('Failed to test market source connection:', error)
-      throw error
-    }
-  }
-
-  async function testAndUpdateMarketSource(sourceId: string): Promise<TestConnectionResult> {
-    try {
-      const result = await invoke<TestConnectionResult>('test_and_update_market_source', { sourceId })
-      // Reload market sources to get updated data
-      await loadMarketSources()
-      return result
-    } catch (error) {
-      console.error('Failed to test and update market source:', error)
-      throw error
-    }
-  }
-
-  async function addMarketSource(input: MarketSourceInput): Promise<MarketSource> {
-    try {
-      const source = await invoke<MarketSource>('add_market_source', { input })
-      marketSources.value.push(source)
-      return source
-    } catch (error) {
-      console.error('Failed to add market source:', error)
-      throw error
-    }
-  }
-
-  async function updateMarketSource(sourceId: string, input: MarketSourceInput, enabled?: boolean): Promise<MarketSource> {
-    try {
-      const source = await invoke<MarketSource>('update_market_source', { sourceId, input, enabled })
-      const index = marketSources.value.findIndex(s => s.id === sourceId)
-      if (index !== -1) {
-        marketSources.value[index] = source
-      }
-      return source
-    } catch (error) {
-      console.error('Failed to update market source:', error)
-      throw error
-    }
-  }
-
-  async function toggleMarketSource(sourceId: string, enabled: boolean): Promise<MarketSource> {
-    try {
-      const source = await invoke<MarketSource>('toggle_market_source', { sourceId, enabled })
-      const index = marketSources.value.findIndex(s => s.id === sourceId)
-      if (index !== -1) {
-        marketSources.value[index] = source
-      }
-      return source
-    } catch (error) {
-      console.error('Failed to toggle market source:', error)
-      throw error
-    }
-  }
-
-  async function deleteMarketSource(sourceId: string): Promise<void> {
-    try {
-      await invoke('delete_market_source', { sourceId })
-      marketSources.value = marketSources.value.filter(s => s.id !== sourceId)
-    } catch (error) {
-      console.error('Failed to delete market source:', error)
-      throw error
-    }
-  }
-
   return {
     // State
     settings,
     isLoading,
     hasLoaded,
-    marketSources,
-    isLoadingMarketSources,
-    // Plugins Market state
-    pluginsMarketItems,
-    isLoadingPluginsMarket,
-    pluginsMarketError,
-    selectedPluginDetail,
-    isLoadingPluginDetail,
-    pluginDetailError,
-    // Installed Plugins state
-    installedPlugins,
-    isLoadingInstalledPlugins,
-    installedPluginsError,
-    // Plugin Install state
-    isInstallingPlugin,
-    pluginInstallError,
     // Pending Install Sessions state
     pendingInstallSessions,
     isLoadingPendingSessions,
@@ -698,18 +317,6 @@ export const useSettingsStore = defineStore('settings', () => {
     loadSettings,
     updateSettings,
     resetSettings,
-    // Plugins Market actions
-    fetchPluginsMarket,
-    clearPluginsMarket,
-    fetchPluginDetail,
-    clearPluginDetail,
-    // Installed Plugins actions
-    loadInstalledPlugins,
-    clearInstalledPlugins,
-    // Plugin Install actions
-    installPlugin,
-    togglePlugin,
-    uninstallPlugin,
     // Install session actions
     createInstallSession,
     recordCreateFile,
@@ -722,14 +329,6 @@ export const useSettingsStore = defineStore('settings', () => {
     cancelInstallSession,
     loadPendingInstallSessions,
     cleanupInstallSession,
-    clearPendingInstallSessions,
-    // Market Source actions
-    loadMarketSources,
-    testMarketSourceConnection,
-    testAndUpdateMarketSource,
-    addMarketSource,
-    updateMarketSource,
-    toggleMarketSource,
-    deleteMarketSource
+    clearPendingInstallSessions
   }
 })

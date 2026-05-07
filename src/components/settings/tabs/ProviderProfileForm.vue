@@ -126,6 +126,7 @@ const opencodeModelDropdownOpen = ref(false)
 const opencodeModelSearch = ref('')
 const opencodeProviderDropdownOpen = ref(false)
 const opencodeProviderSearch = ref('')
+const opencodeProviderFilter = ref('')
 const comboboxInputRef = ref<HTMLElement | null>(null)
 const comboboxDropdownStyle = ref<Record<string, string>>({})
 const providerComboboxInputRef = ref<HTMLElement | null>(null)
@@ -297,7 +298,7 @@ const selectedOpenCodeProviderLabel = computed(() => {
 })
 
 const filteredProviders = computed(() => {
-  const query = opencodeProviderSearch.value.trim().toLowerCase()
+  const query = opencodeProviderFilter.value.trim().toLowerCase()
   if (!query) {
     return opencodeProviders.value
   }
@@ -325,6 +326,7 @@ function updateProviderDropdownPosition() {
 }
 
 function openProviderDropdown() {
+  opencodeProviderFilter.value = ''
   updateProviderDropdownPosition()
   opencodeProviderDropdownOpen.value = true
 }
@@ -335,18 +337,22 @@ function onProviderFocus() {
 }
 
 function onProviderInput(event: Event) {
-  opencodeProviderSearch.value = (event.target as HTMLInputElement).value
+  const value = (event.target as HTMLInputElement).value
+  opencodeProviderSearch.value = value
+  opencodeProviderFilter.value = value
   openProviderDropdown()
 }
 
 function onProviderBlur() {
   opencodeProviderDropdownOpen.value = false
+  opencodeProviderFilter.value = ''
   syncOpenCodeProviderSearch()
 }
 
 function toggleProviderDropdown() {
   if (opencodeProviderDropdownOpen.value) {
     opencodeProviderDropdownOpen.value = false
+    opencodeProviderFilter.value = ''
     syncOpenCodeProviderSearch()
     return
   }
@@ -358,6 +364,7 @@ function toggleProviderDropdown() {
 function selectOpenCodeProvider(provider: AuthProvider) {
   form.value.providerName = provider.id
   opencodeProviderSearch.value = provider.displayName
+  opencodeProviderFilter.value = ''
   opencodeProviderDropdownOpen.value = false
   handleOpenCodeProviderChange()
 }

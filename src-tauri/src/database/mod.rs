@@ -165,20 +165,6 @@ const INIT_SQL: &str = r#"
     );
     CREATE INDEX IF NOT EXISTS idx_cli_paths_name ON cli_paths(name);
 
-    -- 市场源配置表
-    CREATE TABLE IF NOT EXISTS market_sources (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        type TEXT NOT NULL DEFAULT 'github',
-        url_or_path TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'active',
-        enabled INTEGER NOT NULL DEFAULT 1,
-        last_synced_at TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_market_sources_name ON market_sources(name);
-
     -- 已安�?MCP 测试结果表（存储 CLI 配置文件中的 MCP 测试结果�?
     CREATE TABLE IF NOT EXISTS installed_mcp_test_results (
         id TEXT PRIMARY KEY,

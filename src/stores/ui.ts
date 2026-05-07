@@ -14,7 +14,6 @@ export type SettingsTab =
   | 'usageStats'
   | 'providerSwitch'
   | 'lsp'
-  | 'marketplace'
   | 'sessions'
   | 'unattended'
 

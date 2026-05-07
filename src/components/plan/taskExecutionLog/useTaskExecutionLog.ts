@@ -309,7 +309,18 @@ export function useTaskExecutionLog(options: UseTaskExecutionLogOptions) {
     let lastContentEntry: TimelineEntry | null = null
     let lastContentRaw = ''
 
+    const buildRuntimeFallbackUsage = (model?: string) => {
+      const resolvedModel = model?.trim() || resolvedModelId.value || ''
+      return resolvedModel
+        ? { model: resolvedModel }
+        : undefined
+    }
+
     return logs.value.reduce<TimelineEntry[]>((entries, log) => {
+      const logModel = typeof log.metadata?.model === 'string' && log.metadata.model.trim()
+        ? log.metadata.model.trim()
+        : undefined
+
       if (log.type === 'tool_result' || log.type === 'tool_input_delta') {
         return entries
       }
@@ -333,9 +344,12 @@ export function useTaskExecutionLog(options: UseTaskExecutionLogOptions) {
             type: 'thinking',
             content: '',
             timestamp: log.timestamp,
-            animate: isRunning.value
+            animate: isRunning.value,
+            runtimeFallbackUsage: buildRuntimeFallbackUsage(logModel)
           }
           entries.push(lastThinkingEntry)
+        } else if (logModel || !lastThinkingEntry.runtimeFallbackUsage?.model) {
+          lastThinkingEntry.runtimeFallbackUsage = buildRuntimeFallbackUsage(logModel)
         }
         return entries
       }
@@ -351,7 +365,8 @@ export function useTaskExecutionLog(options: UseTaskExecutionLogOptions) {
             type: 'thinking',
             content: log.content,
             timestamp: log.timestamp,
-            animate: isRunning.value
+            animate: isRunning.value,
+            runtimeFallbackUsage: buildRuntimeFallbackUsage(logModel)
           }
           entries.push(lastThinkingEntry)
         }
@@ -368,13 +383,17 @@ export function useTaskExecutionLog(options: UseTaskExecutionLogOptions) {
           lastContentEntry.content = displayContent
           lastContentEntry.timestamp = log.timestamp
           lastContentEntry.animate = isRunning.value
+          if (logModel || !lastContentEntry.runtimeFallbackUsage?.model) {
+            lastContentEntry.runtimeFallbackUsage = buildRuntimeFallbackUsage(logModel)
+          }
         } else if (displayContent) {
           lastContentEntry = {
             id: `entry-${log.id}`,
             type: 'content',
             content: displayContent,
             timestamp: log.timestamp,
-            animate: isRunning.value
+            animate: isRunning.value,
+            runtimeFallbackUsage: buildRuntimeFallbackUsage(logModel)
           }
           entries.push(lastContentEntry)
         }
@@ -394,7 +413,8 @@ export function useTaskExecutionLog(options: UseTaskExecutionLogOptions) {
             type: 'tool',
             toolCall,
             timestamp: log.timestamp,
-            animate: isRunning.value
+            animate: isRunning.value,
+            runtimeFallbackUsage: buildRuntimeFallbackUsage(logModel)
           })
         }
         return entries

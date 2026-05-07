@@ -13,7 +13,6 @@ import SessionManagementSettings from './tabs/SessionManagementSettings.vue'
 import AppUpdateSettings from './tabs/AppUpdateSettings.vue'
 import UnattendedSettings from './tabs/UnattendedSettings.vue'
 import AgentCliUsageSettings from './tabs/agentCliUsageSettings/AgentCliUsageSettings.vue'
-import MarketplacePage from '@/components/marketplace/MarketplacePage.vue'
 
 export interface SettingsTabDescriptor {
   id: SettingsTab
@@ -57,13 +56,6 @@ export const SETTINGS_TAB_DESCRIPTORS: SettingsTabDescriptor[] = [
     labelKey: 'settings.nav.unattended',
     icon: 'satellite',
     component: markRaw(UnattendedSettings),
-    layout: 'full'
-  },
-  {
-    id: 'marketplace',
-    labelKey: 'settings.nav.marketplace',
-    icon: 'store',
-    component: markRaw(MarketplacePage),
     layout: 'full'
   },
   {

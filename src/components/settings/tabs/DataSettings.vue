@@ -32,7 +32,6 @@ const exportOptions = reactive<ExportOptions>({
   include_agents: true,
   include_mcp_servers: true,
   include_cli_paths: true,
-  include_market_sources: true,
   include_app_settings: true
 })
 
@@ -43,7 +42,6 @@ const exportOptionItems = computed<ExportOptionItem[]>(() => [
   { key: 'include_agents', label: t('settings.data.statsAgents'), checked: exportOptions.include_agents },
   { key: 'include_mcp_servers', label: t('settings.data.statsMcpServers'), checked: exportOptions.include_mcp_servers },
   { key: 'include_cli_paths', label: t('settings.data.statsCliPaths'), checked: exportOptions.include_cli_paths },
-  { key: 'include_market_sources', label: t('settings.data.statsMarketSources'), checked: exportOptions.include_market_sources },
   { key: 'include_app_settings', label: t('settings.data.statsAppSettings'), checked: exportOptions.include_app_settings }
 ])
 
@@ -71,7 +69,6 @@ const importStatItems = computed<ImportStatItem[]>(() => {
     { key: 'agents_imported', label: t('settings.data.statsAgents'), value: importStats.value.agents_imported },
     { key: 'mcp_servers_imported', label: t('settings.data.statsMcpServers'), value: importStats.value.mcp_servers_imported },
     { key: 'cli_paths_imported', label: t('settings.data.statsCliPaths'), value: importStats.value.cli_paths_imported },
-    { key: 'market_sources_imported', label: t('settings.data.statsMarketSources'), value: importStats.value.market_sources_imported },
     { key: 'app_settings_imported', label: t('settings.data.statsAppSettings'), value: importStats.value.app_settings_imported }
   ]
 

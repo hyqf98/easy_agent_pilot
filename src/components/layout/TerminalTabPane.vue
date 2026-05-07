@@ -165,7 +165,8 @@ async function handleTerminalInput(data: string) {
       inputBuffer.value = inputBuffer.value.slice(0, -1)
       refreshSuggestion()
     }
-    await queueWrite('\u007F', true)
+    // 保留 xterm 在当前平台上生成的退格字节，避免在 macOS 上把 BS 强行改写成 DEL 后出现乱输字符。
+    await queueWrite(data, true)
     return
   }
 

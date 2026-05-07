@@ -13,15 +13,12 @@ import McpConfigTab from './tabs/McpConfigTab.vue'
 import SkillsConfigTab from './tabs/SkillsConfigTab.vue'
 import PluginsConfigTab from './tabs/PluginsConfigTab.vue'
 import CliConfigSyncModal from './modals/cliConfigSyncModal/CliConfigSyncModal.vue'
-import AddModePickerModal from './modals/AddModePickerModal.vue'
 import SkillEditModal from './modals/SkillEditModal.vue'
 import PluginEditModal from './modals/PluginEditModal.vue'
 import SkillCreateView from './skills/SkillCreateView.vue'
 import SkillDetailView from './views/SkillDetailView.vue'
 import PluginDetailView from './views/PluginDetailView.vue'
 import ProviderConfigEditorModal from '@/components/settings/provider-switch/ProviderConfigEditorModal.vue'
-import SkillGitInstallModal from '@/components/marketplace/skills/SkillGitInstallModal.vue'
-import PluginGitInstallModal from '@/components/marketplace/plugins/PluginGitInstallModal.vue'
 import { EaButton, EaIcon } from '@/components/common'
 import { useOverlayDismiss } from '@/composables/useOverlayDismiss'
 import type { CliSyncResult, CreateVisualSkillInput, SyncConfigType } from '@/stores/skillConfig'
@@ -41,10 +38,6 @@ const showSyncModal = ref(false)
 const syncType = ref<SyncConfigType>('mcp')
 const showSkillModal = ref(false)
 const showPluginModal = ref(false)
-const showSkillAddModeModal = ref(false)
-const showPluginAddModeModal = ref(false)
-const showSkillGitInstallModal = ref(false)
-const showPluginGitInstallModal = ref(false)
 const showSkillBuilder = ref(false)
 const isCreatingSkill = ref(false)
 const editingSkill = ref<UnifiedSkillConfig | null>(null)
@@ -153,10 +146,6 @@ async function handleSelectAgent(agent: any) {
   showSkillBuilder.value = false
   showSkillModal.value = false
   showPluginModal.value = false
-  showSkillAddModeModal.value = false
-  showPluginAddModeModal.value = false
-  showSkillGitInstallModal.value = false
-  showPluginGitInstallModal.value = false
   editingSkill.value = null
   editingPlugin.value = null
   await skillConfigStore.selectAgent(agent)
@@ -209,11 +198,6 @@ async function handleAddSkill() {
     return
   }
 
-  if (agent.type === 'cli' && (agent.provider === 'claude' || agent.provider === 'codex' || agent.provider === 'opencode')) {
-    showSkillAddModeModal.value = true
-    return
-  }
-
   await openSkillManualCreate(agent)
 }
 
@@ -228,40 +212,10 @@ async function openSkillManualCreate(agent: AgentConfig) {
   showSkillModal.value = true
 }
 
-async function handleSelectSkillAddMode(mode: string) {
-  const agent = skillConfigStore.selectedAgent
-  if (!agent) {
-    return
-  }
-
-  if (mode === 'git') {
-    showSkillGitInstallModal.value = true
-    return
-  }
-
-  await openSkillManualCreate(agent)
-}
-
-async function handleSkillGitInstallComplete() {
-  showSkillGitInstallModal.value = false
-  if (skillConfigStore.selectedAgent?.type === 'cli') {
-    await skillConfigStore.refreshCliConfigs()
-  }
-}
-
-function handleCloseSkillGitInstall() {
-  showSkillGitInstallModal.value = false
-}
-
 // Plugins 鎿嶄綔
 function handleAddPlugin() {
   const agent = skillConfigStore.selectedAgent
   if (!agent) {
-    return
-  }
-
-  if (agent.type === 'cli' && (agent.provider === 'claude' || agent.provider === 'codex' || agent.provider === 'opencode')) {
-    showPluginAddModeModal.value = true
     return
   }
 
@@ -272,72 +226,6 @@ function openPluginManualCreate() {
   editingPlugin.value = null
   showPluginModal.value = true
 }
-
-async function handleSelectPluginAddMode(mode: string) {
-  if (mode === 'git') {
-    showPluginGitInstallModal.value = true
-    return
-  }
-
-  openPluginManualCreate()
-}
-
-async function handlePluginGitInstallComplete() {
-  showPluginGitInstallModal.value = false
-  if (skillConfigStore.selectedAgent?.type === 'cli') {
-    await skillConfigStore.refreshCliConfigs()
-  }
-}
-
-function handleClosePluginGitInstall() {
-  showPluginGitInstallModal.value = false
-}
-
-const addModeOptions = computed(() => ({
-  skills: [
-    {
-      id: 'manual',
-      label: t('settings.sdkConfig.addMode.manualSkillLabel'),
-      description: t('settings.sdkConfig.addMode.manualSkillDescription'),
-      icon: 'lucide:wand-sparkles'
-    },
-    {
-      id: 'git',
-      label: t('settings.sdkConfig.addMode.gitSkillLabel'),
-      description: t('settings.sdkConfig.addMode.gitSkillDescription'),
-      icon: 'lucide:git-branch'
-    }
-  ],
-  plugins: selectedCliType.value
-    ? [
-        {
-          id: 'git',
-          label: t('settings.sdkConfig.addMode.gitPluginLabel'),
-          description: t('settings.sdkConfig.addMode.gitPluginDescription'),
-          icon: 'lucide:git-branch'
-        }
-      ]
-    : [
-        {
-          id: 'manual',
-          label: t('settings.sdkConfig.addMode.manualPluginLabel'),
-          description: t('settings.sdkConfig.addMode.manualPluginDescription'),
-          icon: 'lucide:puzzle'
-        },
-        {
-          id: 'git',
-          label: t('settings.sdkConfig.addMode.gitPluginLabel'),
-          description: t('settings.sdkConfig.addMode.gitPluginDescription'),
-          icon: 'lucide:git-branch'
-        }
-      ]
-}))
-
-const currentCliAgentId = computed(() =>
-  skillConfigStore.selectedAgent?.type === 'cli'
-    ? skillConfigStore.selectedAgent.id
-    : undefined
-)
 
 function handleViewSkillDetail(config: UnifiedSkillConfig) {
   skillConfigStore.viewSkillDetail(config)
@@ -604,22 +492,6 @@ function handleSyncCompleted(payload: { targetAgentId: string; result: CliSyncRe
       @completed="handleSyncCompleted"
     />
 
-    <AddModePickerModal
-      v-model:visible="showSkillAddModeModal"
-      :title="t('settings.sdkConfig.addMode.skillTitle')"
-      :description="t('settings.sdkConfig.addMode.skillDescription')"
-      :options="addModeOptions.skills"
-      @select="handleSelectSkillAddMode"
-    />
-
-    <AddModePickerModal
-      v-model:visible="showPluginAddModeModal"
-      :title="t('settings.sdkConfig.addMode.pluginTitle')"
-      :description="t('settings.sdkConfig.addMode.pluginDescription')"
-      :options="addModeOptions.plugins"
-      @select="handleSelectPluginAddMode"
-    />
-
     <SkillEditModal
       v-model:visible="showSkillModal"
       :config="editingSkill"
@@ -630,20 +502,6 @@ function handleSyncCompleted(payload: { targetAgentId: string; result: CliSyncRe
       v-model:visible="showPluginModal"
       :config="editingPlugin"
       @save="handleSavePlugin"
-    />
-
-    <SkillGitInstallModal
-      v-if="showSkillGitInstallModal"
-      :default-agent-id="currentCliAgentId"
-      @close="handleCloseSkillGitInstall"
-      @complete="handleSkillGitInstallComplete"
-    />
-
-    <PluginGitInstallModal
-      v-if="showPluginGitInstallModal"
-      :default-agent-id="currentCliAgentId"
-      @close="handleClosePluginGitInstall"
-      @complete="handlePluginGitInstallComplete"
     />
 
     <ProviderConfigEditorModal

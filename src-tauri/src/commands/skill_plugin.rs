@@ -847,22 +847,12 @@ pub fn delete_plugin_directory(plugin_path: String) -> Result<(), String> {
         );
     }
 
-    let is_codex_plugin = plugin_dir.starts_with(&codex_plugins_dir);
-    let plugin_name = plugin_dir
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_default();
-
     // 删除插件目录
     fs::remove_dir_all(&plugin_dir)
         .map_err(|e| format!("Failed to delete plugin directory: {}", e))?;
 
     prune_cli_installed_plugins_file(&plugin_dir)?;
     prune_app_installed_plugins_file(&plugin_dir)?;
-
-    if is_codex_plugin && !plugin_name.is_empty() {
-        crate::commands::plugins_market::remove_codex_personal_marketplace_plugin(&plugin_name)?;
-    }
 
     Ok(())
 }

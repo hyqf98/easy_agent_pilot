@@ -17,7 +17,6 @@ pub struct ExportData {
     pub agents: Vec<AgentExport>,
     pub mcp_servers: Vec<McpServerExport>,
     pub cli_paths: Vec<CliPathExport>,
-    pub market_sources: Vec<MarketSourceExport>,
     pub app_settings: Vec<AppSettingExport>,
     #[serde(default)]
     pub agent_cli_usage_records: Vec<AgentCliUsageRecordExport>,
@@ -103,19 +102,6 @@ pub struct CliPathExport {
     pub name: String,
     pub path: String,
     pub version: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct MarketSourceExport {
-    pub id: String,
-    pub name: String,
-    pub type_: String,
-    pub url_or_path: String,
-    pub status: String,
-    pub enabled: bool,
-    pub last_synced_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -431,18 +417,6 @@ pub fn get_data_management_stats() -> Result<DataManagementStats, String> {
     )? + query_size(
         &conn,
         "SELECT COALESCE(SUM(
-            LENGTH(COALESCE(id, '')) +
-            LENGTH(COALESCE(name, '')) +
-            LENGTH(COALESCE(type, '')) +
-            LENGTH(COALESCE(url_or_path, '')) +
-            LENGTH(COALESCE(status, '')) +
-            LENGTH(COALESCE(last_synced_at, '')) +
-            LENGTH(COALESCE(created_at, '')) +
-            LENGTH(COALESCE(updated_at, ''))
-        ), 0) FROM market_sources",
-    )? + query_size(
-        &conn,
-        "SELECT COALESCE(SUM(
             LENGTH(COALESCE(key, '')) +
             LENGTH(COALESCE(value, '')) +
             LENGTH(COALESCE(updated_at, ''))
@@ -534,8 +508,6 @@ pub fn export_all_data() -> Result<ExportData, String> {
     let mcp_servers = export_mcp_servers(&conn)?;
     // 导出 CLI 路径配置
     let cli_paths = export_cli_paths(&conn)?;
-    // 导出市场源配置
-    let market_sources = export_market_sources(&conn)?;
     // 导出应用设置
     let app_settings = export_app_settings(&conn)?;
     let agent_cli_usage_records = export_agent_cli_usage_records(&conn)?;
@@ -549,7 +521,6 @@ pub fn export_all_data() -> Result<ExportData, String> {
         agents,
         mcp_servers,
         cli_paths,
-        market_sources,
         app_settings,
         agent_cli_usage_records,
     })
@@ -735,32 +706,6 @@ fn export_cli_paths(conn: &Connection) -> Result<Vec<CliPathExport>, String> {
     Ok(cli_paths)
 }
 
-fn export_market_sources(conn: &Connection) -> Result<Vec<MarketSourceExport>, String> {
-    let mut stmt = conn
-        .prepare("SELECT id, name, type, url_or_path, status, enabled, last_synced_at, created_at, updated_at FROM market_sources ORDER BY created_at ASC")
-        .map_err(|e| e.to_string())?;
-
-    let market_sources = stmt
-        .query_map([], |row| {
-            Ok(MarketSourceExport {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                type_: row.get(2)?,
-                url_or_path: row.get(3)?,
-                status: row.get(4)?,
-                enabled: row.get::<_, i32>(5)? != 0,
-                last_synced_at: row.get(6)?,
-                created_at: row.get(7)?,
-                updated_at: row.get(8)?,
-            })
-        })
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-
-    Ok(market_sources)
-}
-
 fn export_app_settings(conn: &Connection) -> Result<Vec<AppSettingExport>, String> {
     let mut stmt = conn
         .prepare("SELECT key, value, updated_at FROM app_settings ORDER BY key ASC")
@@ -837,7 +782,6 @@ pub struct ImportResult {
     pub agents_imported: usize,
     pub mcp_servers_imported: usize,
     pub cli_paths_imported: usize,
-    pub market_sources_imported: usize,
     pub app_settings_imported: usize,
     pub agent_cli_usage_records_imported: usize,
 }
@@ -915,7 +859,6 @@ pub fn clear_all_data() -> Result<(), String> {
         ("agents", "DELETE FROM agents"),
         ("mcp_servers", "DELETE FROM mcp_servers"),
         ("cli_paths", "DELETE FROM cli_paths"),
-        ("market_sources", "DELETE FROM market_sources"),
         ("skills", "DELETE FROM skills"),
         ("themes", "DELETE FROM themes"),
         ("app_state", "DELETE FROM app_state"),
@@ -947,7 +890,6 @@ pub struct ExportOptions {
     pub include_agents: bool,
     pub include_mcp_servers: bool,
     pub include_cli_paths: bool,
-    pub include_market_sources: bool,
     pub include_app_settings: bool,
 }
 
@@ -960,7 +902,6 @@ impl Default for ExportOptions {
             include_agents: true,
             include_mcp_servers: true,
             include_cli_paths: true,
-            include_market_sources: true,
             include_app_settings: true,
         }
     }
@@ -1008,12 +949,6 @@ pub fn export_selected_data(options: ExportOptions) -> Result<ExportData, String
         vec![]
     };
 
-    let market_sources = if options.include_market_sources {
-        export_market_sources(&conn)?
-    } else {
-        vec![]
-    };
-
     let app_settings = if options.include_app_settings {
         export_app_settings(&conn)?
     } else {
@@ -1030,7 +965,6 @@ pub fn export_selected_data(options: ExportOptions) -> Result<ExportData, String
         agents,
         mcp_servers,
         cli_paths,
-        market_sources,
         app_settings,
         agent_cli_usage_records,
     })
@@ -1077,7 +1011,6 @@ pub fn import_data_from_file(file_path: String) -> Result<ImportResult, String> 
         agents_imported: 0,
         mcp_servers_imported: 0,
         cli_paths_imported: 0,
-        market_sources_imported: 0,
         app_settings_imported: 0,
         agent_cli_usage_records_imported: 0,
     };
@@ -1221,29 +1154,6 @@ pub fn import_data_from_file(file_path: String) -> Result<ImportResult, String> 
         );
         if res.is_ok() {
             result.cli_paths_imported += 1;
-        }
-    }
-
-    // 导入市场源配置
-    for source in &data.market_sources {
-        let enabled = if source.enabled { 1 } else { 0 };
-        let res = tx.execute(
-            "INSERT OR REPLACE INTO market_sources (id, name, type, url_or_path, status, enabled, last_synced_at, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            [
-                &source.id,
-                &source.name,
-                &source.type_,
-                &source.url_or_path,
-                &source.status,
-                &enabled.to_string(),
-                &source.last_synced_at.clone().unwrap_or_default(),
-                &source.created_at,
-                &source.updated_at,
-            ],
-        );
-        if res.is_ok() {
-            result.market_sources_imported += 1;
         }
     }
 

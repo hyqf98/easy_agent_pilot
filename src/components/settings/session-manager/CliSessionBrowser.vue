@@ -65,29 +65,28 @@ const getProjectName = (path: string) =>
       <div class="header-meta">
         <span class="cli-badge">{{ cliName || '-' }}</span>
         <span class="session-count">{{ sessions.length }} {{ t('settings.sessionManager.sessionCount') }}</span>
-        <span
+        <div
           v-if="selectedCount > 0"
-          class="selected-count"
+          class="header-actions"
         >
-          {{ t('settings.sessionManager.selectedCount', { n: selectedCount }) }}
-        </span>
-        <EaButton
-          v-if="sessions.length > 0"
-          type="ghost"
-          size="small"
-          @click="emit('toggleSelectAll')"
-        >
-          {{ allVisibleSelected ? t('settings.sessionManager.clearSelection') : t('settings.sessionManager.selectAll') }}
-        </EaButton>
-        <EaButton
-          v-if="sessions.length > 0"
-          type="danger"
-          size="small"
-          :disabled="selectedCount === 0"
-          @click="emit('requestDeleteSelected')"
-        >
-          {{ t('settings.sessionManager.batchDelete') }}
-        </EaButton>
+          <span class="selected-count">
+            {{ t('settings.sessionManager.selectedCount', { n: selectedCount }) }}
+          </span>
+          <EaButton
+            type="ghost"
+            size="small"
+            @click="emit('toggleSelectAll')"
+          >
+            {{ allVisibleSelected ? t('settings.sessionManager.clearSelection') : t('settings.sessionManager.selectAll') }}
+          </EaButton>
+          <EaButton
+            type="danger"
+            size="small"
+            @click="emit('requestDeleteSelected')"
+          >
+            {{ t('settings.sessionManager.batchDelete') }}
+          </EaButton>
+        </div>
       </div>
     </div>
 
@@ -251,6 +250,13 @@ const getProjectName = (path: string) =>
   flex-wrap: wrap;
   gap: var(--spacing-3);
   justify-content: flex-end;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
 }
 
 .cli-badge {
