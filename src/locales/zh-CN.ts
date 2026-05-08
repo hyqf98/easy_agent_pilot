@@ -1993,7 +1993,13 @@ const zhCN = {
     rollbackSuccessMessage: '{path} 已恢复到本次修改前的状态',
     rollbackFailedTitle: '回滚失败',
     editorRefreshWarningTitle: '编辑器未自动刷新',
-    editorRefreshWarningMessage: '当前文件在编辑器中有未保存内容，请手动确认或重新打开文件'
+    editorRefreshWarningMessage: '当前文件在编辑器中有未保存内容，请手动确认或重新打开文件',
+    before: '修改前',
+    after: '修改后',
+    prevChange: '上一个改动',
+    nextChange: '下一个改动',
+    acceptLeft: '接受左侧',
+    acceptRight: '接受右侧'
   }
 }
 

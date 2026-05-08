@@ -16,12 +16,12 @@ use super::abnormal_completion::{
 };
 use super::cli_common::{
     build_cli_failure_report, build_content_event, build_error_event, build_execution_summary,
-    build_system_event, build_timeout_error_message, describe_timeout_config, detect_cli_timeout,
-    emit_cli_event, extract_error_from_json_blob, extract_image_paths,
-    extract_result_content_from_json_blob, extract_runtime_system_notice,
+    build_system_event, build_timeout_error_message, classify_cli_completion_disposition,
+    describe_timeout_config, detect_cli_timeout, emit_cli_event, extract_error_from_json_blob,
+    extract_image_paths, extract_result_content_from_json_blob, extract_runtime_system_notice,
     extract_structured_output_from_json_blob, parse_json_blob_with_fallback, preview_text,
-    render_cli_message, shell_escape, timeout_config_for_execution_mode, CliExecutionMonitor,
-    NonImageAttachmentPromptMode,
+    read_cli_timeout_minutes, render_cli_message, shell_escape, timeout_config_for_execution_mode,
+    CliExecutionMonitor, NonImageAttachmentPromptMode,
 };
 use crate::commands::cli_support::{build_cli_launch_error_message, build_tokio_cli_command};
 use crate::commands::conversation::abort::{
@@ -572,10 +572,13 @@ impl AgentExecutionStrategy for CodexCliStrategy {
 
         let execution_started_at = Instant::now();
         let monitor = CliExecutionMonitor::new();
-        let timeout_config = timeout_config_for_execution_mode(request.execution_mode.as_deref());
+        let user_timeout = read_cli_timeout_minutes();
+        let timeout_config =
+            timeout_config_for_execution_mode(request.execution_mode.as_deref(), user_timeout);
         log_info!(
-            "Codex CLI timeout config: mode={}, {}",
+            "Codex CLI timeout config: mode={}, user_override={:?}, {}",
             request.execution_mode.as_deref().unwrap_or("chat"),
+            user_timeout,
             describe_timeout_config(timeout_config)
         );
         let mut child = cmd.spawn().map_err(|error| {
@@ -864,7 +867,7 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         };
         let elapsed = execution_started_at.elapsed();
         log_info!(
-            "CLI 执行完成，退出码: {:?}, 耗时: {:.2}s",
+            "CLI 进程已退出: exit_code={:?}, elapsed={:.2}s",
             status.code(),
             elapsed.as_secs_f64()
         );
@@ -893,6 +896,7 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         let finished_at = Instant::now();
         let summary = build_execution_summary(&monitor.snapshot(), finished_at);
         log_info!("CLI 执行摘要: {}", summary);
+        let abort_requested = should_abort(&session_id).await;
 
         let should_treat_failure_as_success =
             should_treat_process_failure_as_success(&stdout_outcome, &stderr_outcome);
@@ -906,13 +910,33 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         let should_complete_as_success = should_treat_failure_as_success
             || (detected_failure.is_none() && stdout_outcome.emitted_content);
         let execution_succeeded = status.success() || should_complete_as_success;
+        let completion_disposition = classify_cli_completion_disposition(
+            timeout_error_message.is_some(),
+            abort_requested,
+            status.code(),
+            should_complete_as_success,
+        );
+        let done_emitted =
+            timeout_error_message.is_none() && detected_failure.is_none() && execution_succeeded;
+        log_info!(
+            "CLI 终止判定: disposition={}, exit_code={:?}, abort_requested={}, timeout_triggered={}, should_complete_as_success={}, detected_failure={}, done_emitted={}, {}",
+            completion_disposition.as_str(),
+            status.code(),
+            abort_requested,
+            timeout_error_message.is_some(),
+            should_complete_as_success,
+            detected_failure.is_some(),
+            done_emitted,
+            summary
+        );
 
-        if timeout_error_message.is_none() && detected_failure.is_none() && execution_succeeded {
+        if done_emitted {
             let discovered_session_id = if resume_session_id.is_none() {
                 discover_codex_session_id(&codex_runtime_home, execution_started_at)
             } else {
                 resume_session_id.clone()
             };
+            let discovered_session_id_for_log = discovered_session_id.clone();
             if let Some(ref sid) = discovered_session_id {
                 log_info!("Codex session ID discovered: {}", sid);
             }
@@ -935,6 +959,11 @@ impl AgentExecutionStrategy for CodexCliStrategy {
                 cache_creation_input_tokens: None,
             };
             emit_cli_event(&app, &event_name, plan_id.as_ref(), &done_event);
+            log_info!(
+                "CLI done 事件已发送: disposition={}, external_session_id={:?}",
+                completion_disposition.as_str(),
+                discovered_session_id_for_log
+            );
         }
 
         // 注销进程 PID
@@ -2188,8 +2217,14 @@ mod tests {
 
         let env_map = load_codex_runtime_auth_env(&temp_dir);
 
-        assert_eq!(env_map.get("OPENAI_API_KEY").map(String::as_str), Some("sk-test"));
-        assert_eq!(env_map.get("CUSTOM_TOKEN").map(String::as_str), Some("token-value"));
+        assert_eq!(
+            env_map.get("OPENAI_API_KEY").map(String::as_str),
+            Some("sk-test")
+        );
+        assert_eq!(
+            env_map.get("CUSTOM_TOKEN").map(String::as_str),
+            Some("token-value")
+        );
         assert!(!env_map.contains_key("EMPTY_VALUE"));
         assert!(!env_map.contains_key("NUMBER_VALUE"));
 

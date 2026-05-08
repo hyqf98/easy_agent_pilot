@@ -63,6 +63,8 @@ uuid = { version = "1", features = ["v4"] }
 # HTTP 客户端
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 qrcode = "0.14"
+axum = "0.8"
+mime_guess = "2"
 
 # 并发
 parking_lot = "0.12"

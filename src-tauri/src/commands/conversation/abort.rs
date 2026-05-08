@@ -14,6 +14,10 @@ lazy_static::lazy_static! {
     static ref SESSION_PIDS: Arc<RwLock<HashMap<String, u32>>> = Arc::new(RwLock::new(HashMap::new()));
 }
 
+fn write_abort_log(level: &str, message: &str) {
+    crate::logging::write_log(level, "abort", message);
+}
+
 /// 获取或创建中断标志
 pub async fn get_abort_flag(session_id: &str) -> Arc<AtomicBool> {
     let flags = ABORT_FLAGS.read().await;
@@ -32,6 +36,16 @@ pub async fn get_abort_flag(session_id: &str) -> Arc<AtomicBool> {
 pub async fn set_abort_flag(session_id: &str, abort: bool) {
     let flag = get_abort_flag(session_id).await;
     flag.store(abort, Ordering::SeqCst);
+
+    if abort {
+        write_abort_log(
+            "INFO",
+            &format!(
+                "收到 CLI 中断请求: session={}, source=app_abort",
+                session_id
+            ),
+        );
+    }
 
     // 如果是设置中断（abort = true），同时杀死对应的进程
     if abort {
@@ -58,9 +72,9 @@ pub async fn clear_abort_flag(session_id: &str) {
 pub async fn register_session_pid(session_id: &str, pid: u32) {
     let mut pids = SESSION_PIDS.write().await;
     pids.insert(session_id.to_string(), pid);
-    println!(
-        "[INFO][abort] 注册进程 PID: session={}, pid={}",
-        session_id, pid
+    write_abort_log(
+        "INFO",
+        &format!("注册 CLI 进程 PID: session={}, pid={}", session_id, pid),
     );
 }
 
@@ -76,9 +90,12 @@ pub async fn kill_session_process(session_id: &str) {
     if let Some(&pid) = pids.get(session_id) {
         drop(pids); // 释放读锁
 
-        println!(
-            "[INFO][abort] 尝试杀死进程: session={}, pid={}",
-            session_id, pid
+        write_abort_log(
+            "INFO",
+            &format!(
+                "应用请求终止 CLI 进程: session={}, pid={}, source=app_abort",
+                session_id, pid
+            ),
         );
 
         // 使用系统命令杀死进程
@@ -95,14 +112,17 @@ pub async fn kill_session_process(session_id: &str) {
             match output {
                 Ok(output) => {
                     if output.status.success() {
-                        println!("[INFO][abort] 成功杀死进程: pid={}", pid);
+                        write_abort_log("INFO", &format!("成功终止 CLI 进程: pid={}", pid));
                     } else {
                         let stderr = String::from_utf8_lossy(&output.stderr);
-                        println!("[ERROR][abort] 杀死进程失败: pid={}, error={}", pid, stderr);
+                        write_abort_log(
+                            "ERROR",
+                            &format!("终止 CLI 进程失败: pid={}, error={}", pid, stderr),
+                        );
                     }
                 }
                 Err(e) => {
-                    println!("[ERROR][abort] 执行 taskkill 失败: {}", e);
+                    write_abort_log("ERROR", &format!("执行 taskkill 失败: {}", e));
                 }
             }
         }
@@ -122,17 +142,17 @@ pub async fn kill_session_process(session_id: &str) {
             match output {
                 Ok(output) => {
                     if output.status.success() {
-                        println!("[INFO][abort] 成功杀死进程 (macOS): pid={}", pid);
+                        write_abort_log("INFO", &format!("成功终止 CLI 进程 (macOS): pid={}", pid));
                     } else {
                         let stderr = String::from_utf8_lossy(&output.stderr);
-                        println!(
-                            "[ERROR][abort] 杀死进程失败 (macOS): pid={}, error={}",
-                            pid, stderr
+                        write_abort_log(
+                            "ERROR",
+                            &format!("终止 CLI 进程失败 (macOS): pid={}, error={}", pid, stderr),
                         );
                     }
                 }
                 Err(e) => {
-                    println!("[ERROR][abort] 执行 kill 失败 (macOS): {}", e);
+                    write_abort_log("ERROR", &format!("执行 kill 失败 (macOS): {}", e));
                 }
             }
         }
@@ -152,17 +172,17 @@ pub async fn kill_session_process(session_id: &str) {
             match output {
                 Ok(output) => {
                     if output.status.success() {
-                        println!("[INFO][abort] 成功杀死进程 (Linux): pid={}", pid);
+                        write_abort_log("INFO", &format!("成功终止 CLI 进程 (Linux): pid={}", pid));
                     } else {
                         let stderr = String::from_utf8_lossy(&output.stderr);
-                        println!(
-                            "[ERROR][abort] 杀死进程失败 (Linux): pid={}, error={}",
-                            pid, stderr
+                        write_abort_log(
+                            "ERROR",
+                            &format!("终止 CLI 进程失败 (Linux): pid={}, error={}", pid, stderr),
                         );
                     }
                 }
                 Err(e) => {
-                    println!("[ERROR][abort] 执行 kill 失败 (Linux): {}", e);
+                    write_abort_log("ERROR", &format!("执行 kill 失败 (Linux): {}", e));
                 }
             }
         }
@@ -170,5 +190,14 @@ pub async fn kill_session_process(session_id: &str) {
         // 清理 PID 记录
         let mut pids = SESSION_PIDS.write().await;
         pids.remove(session_id);
+    } else {
+        drop(pids);
+        write_abort_log(
+            "INFO",
+            &format!(
+                "收到 CLI 终止请求但未找到活跃 PID: session={}, source=app_abort",
+                session_id
+            ),
+        );
     }
 }

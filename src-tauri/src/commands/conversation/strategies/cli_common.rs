@@ -8,6 +8,7 @@ use tauri::{AppHandle, Emitter};
 use crate::commands::conversation::types::CliStreamEvent;
 use crate::commands::conversation::types::MessageInput;
 use crate::commands::plan_split::{record_plan_split_event, SplitStreamRecord};
+use crate::commands::support::open_db_connection;
 
 pub fn emit_cli_event(
     app: &AppHandle,
@@ -128,6 +129,7 @@ pub struct CliTimeoutConfig {
     pub startup: Duration,
     pub idle: Duration,
     pub hard: Duration,
+    pub disabled: bool,
 }
 
 impl CliTimeoutConfig {
@@ -136,6 +138,7 @@ impl CliTimeoutConfig {
             startup: Duration::from_secs(startup),
             idle: Duration::from_secs(idle),
             hard: Duration::from_secs(hard),
+            disabled: false,
         }
     }
 }
@@ -147,19 +150,57 @@ impl Default for CliTimeoutConfig {
     }
 }
 
-pub fn timeout_config_for_execution_mode(execution_mode: Option<&str>) -> CliTimeoutConfig {
+pub fn timeout_config_for_execution_mode(
+    execution_mode: Option<&str>,
+    user_timeout_minutes: Option<u64>,
+) -> CliTimeoutConfig {
+    if let Some(minutes) = user_timeout_minutes {
+        if minutes == 0 {
+            return CliTimeoutConfig {
+                startup: Duration::from_secs(0),
+                idle: Duration::from_secs(0),
+                hard: Duration::from_secs(0),
+                disabled: true,
+            };
+        }
+        let hard_secs = minutes * 60;
+        let startup_secs = (hard_secs / 24).max(60);
+        let idle_secs = (hard_secs / 8).max(120);
+        return CliTimeoutConfig {
+            startup: Duration::from_secs(startup_secs),
+            idle: Duration::from_secs(idle_secs),
+            hard: Duration::from_secs(hard_secs),
+            disabled: false,
+        };
+    }
     match execution_mode {
-        // 任务拆分可能要消化较长上下文并生成结构化结果，给更宽松的启动与总时长。
         Some("task_split") => CliTimeoutConfig::from_secs(600, 1_800, 14_400),
-        // 计划任务执行经常伴随大规模读写、构建和测试，保留更长的 idle/hard 窗口。
         Some("task_execution") => CliTimeoutConfig::from_secs(600, 3_600, 28_800),
-        // SOLO 协调执行会在结构化调度和真实执行间循环切换，按任务执行级别保留最长预算。
         Some("solo_execution") => CliTimeoutConfig::from_secs(600, 3_600, 28_800),
         _ => CliTimeoutConfig::default(),
     }
 }
 
+pub fn read_cli_timeout_minutes() -> Option<u64> {
+    let conn = match open_db_connection() {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+    let value: Option<String> = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'cliTimeoutMinutes'",
+            [],
+            |row| row.get(0),
+        )
+        .ok()
+        .flatten();
+    value.and_then(|v| v.parse::<u64>().ok())
+}
+
 pub fn describe_timeout_config(config: CliTimeoutConfig) -> String {
+    if config.disabled {
+        return "disabled(user_override=0)".to_string();
+    }
     format!(
         "startup={}s idle={}s hard={}s",
         config.startup.as_secs(),
@@ -229,6 +270,10 @@ pub fn detect_cli_timeout(
     config: CliTimeoutConfig,
     now: Instant,
 ) -> Option<CliTimeoutKind> {
+    if config.disabled {
+        return None;
+    }
+
     if now.duration_since(snapshot.started_at) >= config.hard {
         return Some(CliTimeoutKind::Hard);
     }
@@ -273,6 +318,52 @@ pub fn build_timeout_error_message(
             .map(|secs| format!("{secs:.1}s"))
             .unwrap_or_else(|| "none".to_string())
     )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CliCompletionDisposition {
+    TimedOut,
+    AppAbortRequested,
+    CleanExit,
+    NonZeroExitWithOutput,
+    NonZeroExitWithoutOutput,
+}
+
+impl CliCompletionDisposition {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::TimedOut => "timed_out",
+            Self::AppAbortRequested => "app_abort_requested",
+            Self::CleanExit => "clean_exit",
+            Self::NonZeroExitWithOutput => "non_zero_exit_with_output",
+            Self::NonZeroExitWithoutOutput => "non_zero_exit_without_output",
+        }
+    }
+}
+
+pub fn classify_cli_completion_disposition(
+    timeout_occurred: bool,
+    abort_requested: bool,
+    status_code: Option<i32>,
+    should_complete_as_success: bool,
+) -> CliCompletionDisposition {
+    if timeout_occurred {
+        return CliCompletionDisposition::TimedOut;
+    }
+
+    if abort_requested {
+        return CliCompletionDisposition::AppAbortRequested;
+    }
+
+    if status_code == Some(0) {
+        return CliCompletionDisposition::CleanExit;
+    }
+
+    if should_complete_as_success {
+        return CliCompletionDisposition::NonZeroExitWithOutput;
+    }
+
+    CliCompletionDisposition::NonZeroExitWithoutOutput
 }
 
 pub fn build_execution_summary(snapshot: &CliExecutionSnapshot, finished_at: Instant) -> String {
@@ -1087,6 +1178,7 @@ mod tests {
                 startup: Duration::from_secs(5),
                 idle: Duration::from_secs(30),
                 hard: Duration::from_secs(60),
+                disabled: false,
             },
             started_at + Duration::from_secs(6),
         );
@@ -1113,6 +1205,7 @@ mod tests {
                 startup: Duration::from_secs(5),
                 idle: Duration::from_secs(10),
                 hard: Duration::from_secs(60),
+                disabled: false,
             },
             first_event_at + Duration::from_secs(11),
         );
@@ -1147,20 +1240,35 @@ mod tests {
 
     #[test]
     fn chat_mode_uses_longer_hard_timeout_budget() {
-        let config = timeout_config_for_execution_mode(Some("chat"));
+        let config = timeout_config_for_execution_mode(Some("chat"), None);
 
         assert_eq!(config.startup, Duration::from_secs(600));
         assert_eq!(config.idle, Duration::from_secs(1_800));
         assert_eq!(config.hard, Duration::from_secs(14_400));
+        assert!(!config.disabled);
     }
 
     #[test]
     fn task_execution_mode_uses_largest_timeout_budget() {
-        let config = timeout_config_for_execution_mode(Some("task_execution"));
+        let config = timeout_config_for_execution_mode(Some("task_execution"), None);
 
         assert_eq!(config.startup, Duration::from_secs(600));
         assert_eq!(config.idle, Duration::from_secs(3_600));
         assert_eq!(config.hard, Duration::from_secs(28_800));
+        assert!(!config.disabled);
+    }
+
+    #[test]
+    fn user_timeout_zero_disables_timeout() {
+        let config = timeout_config_for_execution_mode(Some("chat"), Some(0));
+        assert!(config.disabled);
+    }
+
+    #[test]
+    fn user_timeout_overrides_default() {
+        let config = timeout_config_for_execution_mode(Some("chat"), Some(30));
+        assert!(!config.disabled);
+        assert_eq!(config.hard, Duration::from_secs(30 * 60));
     }
 
     #[test]
@@ -1168,6 +1276,25 @@ mod tests {
         let text = describe_timeout_config(CliTimeoutConfig::from_secs(5, 10, 15));
 
         assert_eq!(text, "startup=5s idle=10s hard=15s");
+    }
+
+    #[test]
+    fn timeout_description_shows_disabled() {
+        let config = timeout_config_for_execution_mode(Some("chat"), Some(0));
+        let text = describe_timeout_config(config);
+        assert!(text.contains("disabled"));
+    }
+
+    #[test]
+    fn completion_disposition_prefers_app_abort_over_exit_code() {
+        let disposition = classify_cli_completion_disposition(false, true, Some(1), true);
+        assert_eq!(disposition.as_str(), "app_abort_requested");
+    }
+
+    #[test]
+    fn completion_disposition_marks_non_zero_exit_with_output() {
+        let disposition = classify_cli_completion_disposition(false, false, Some(1), true);
+        assert_eq!(disposition.as_str(), "non_zero_exit_with_output");
     }
 
     #[test]

@@ -294,6 +294,10 @@ export class ConversationService {
     return messages.filter(message => !existing.has(message))
   }
 
+  private hasTrackedInjectedSystemMessages(sessionId: string): boolean {
+    return (this.dedupedInjectedSystemPrompts.get(sessionId)?.size ?? 0) > 0
+  }
+
   /**
    * 获取单例实例
    */
@@ -361,6 +365,10 @@ export class ConversationService {
     try {
       const existingUserMessageId = options?.existingUserMessageId?.trim()
       const existingSessionMessages = messageStore.messagesBySession(sessionId)
+      const hadPriorConversation = existingSessionMessages.some(message =>
+        (message.role === 'system' || message.role === 'user' || message.role === 'assistant')
+        && !message.compressionMetadata
+      )
       const userMessage = existingUserMessageId
         ? existingSessionMessages.find(message => message.id === existingUserMessageId && message.role === 'user')
         : undefined
@@ -481,26 +489,6 @@ export class ConversationService {
         })
       ])
 
-      const rawInjectedSystemMessages = (options?.injectedSystemMessages ?? [])
-        .map(message => message.trim())
-        .filter(message => message.length > 0)
-
-      const sessionScopedInjectedSystemMessages = options?.dedupeInjectedSystemMessagesBySession
-        ? this.filterSessionScopedInjectedMessages(sessionId, rawInjectedSystemMessages)
-        : rawInjectedSystemMessages
-      const imageAttachmentFallbackPrompt = this.buildImageAttachmentFallbackPrompt({
-        agent: executionAgent,
-        currentUserMessage: targetUserMessage,
-        mcpServers
-      })
-
-      const injectedSystemMessages = [
-        ...sessionScopedInjectedSystemMessages,
-        ...(projectMemoryPrompt ? [projectMemoryPrompt] : []),
-        ...(imageAttachmentFallbackPrompt ? [imageAttachmentFallbackPrompt] : []),
-        buildMainConversationFormRequestPrompt()
-      ]
-
       const session = sessionStore.sessions.find(s => s.id === sessionId)
       const sessionMessages = messageStore.messagesBySession(sessionId)
       const executionMessages = existingUserMessageId
@@ -510,6 +498,32 @@ export class ConversationService {
         session,
         executionAgent
       )
+
+      const rawInjectedSystemMessages = (options?.injectedSystemMessages ?? [])
+        .map(message => message.trim())
+        .filter(message => message.length > 0)
+      const imageAttachmentFallbackPrompt = this.buildImageAttachmentFallbackPrompt({
+        agent: executionAgent,
+        currentUserMessage: targetUserMessage,
+        mcpServers
+      })
+      const sessionScopedPromptCandidates = [
+        ...rawInjectedSystemMessages,
+        ...(projectMemoryPrompt ? [projectMemoryPrompt] : []),
+        ...(imageAttachmentFallbackPrompt ? [imageAttachmentFallbackPrompt] : []),
+        buildMainConversationFormRequestPrompt()
+      ]
+      const shouldTrackSessionScopedPrompts = Boolean(options?.dedupeInjectedSystemMessagesBySession)
+        || this.shouldReuseCliSession(executionAgent)
+      const shouldTreatRuntimeAsInitialized = Boolean(reusableCliSessionId) && hadPriorConversation
+      const shouldSkipRepeatedSessionScopedPrompts = shouldTreatRuntimeAsInitialized
+        && !this.hasTrackedInjectedSystemMessages(sessionId)
+      const injectedSystemMessages = shouldSkipRepeatedSessionScopedPrompts
+        ? []
+        : shouldTrackSessionScopedPrompts
+          ? this.filterSessionScopedInjectedMessages(sessionId, sessionScopedPromptCandidates)
+          : sessionScopedPromptCandidates
+
       const fullMessages = this.buildExecutionMessages(
         executionMessages,
         targetUserMessage,
@@ -585,8 +599,8 @@ export class ConversationService {
 
       // 执行对话
       await this.executeConversation(context, aiMessage, sessionId, targetProject?.id, fallbackContext)
-      if (options?.dedupeInjectedSystemMessagesBySession) {
-        this.markInjectedSystemMessages(sessionId, sessionScopedInjectedSystemMessages)
+      if (shouldTrackSessionScopedPrompts) {
+        this.markInjectedSystemMessages(sessionId, sessionScopedPromptCandidates)
       }
 
     } catch (error) {

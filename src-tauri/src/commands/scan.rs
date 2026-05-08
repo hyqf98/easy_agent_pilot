@@ -1515,23 +1515,55 @@ fn find_claude_session_file(session_id: &str) -> Result<Option<PathBuf>, String>
 
 fn find_codex_session_file(session_id: &str) -> Result<Option<PathBuf>, String> {
     let home_dir = dirs::home_dir().ok_or_else(|| "无法确定用户目录".to_string())?;
-    let sessions_dir = home_dir.join(".codex").join("sessions");
-    if !sessions_dir.exists() {
-        return Ok(None);
+    let mut search_dirs = Vec::new();
+
+    if let Ok(persistence_dir) = crate::commands::get_persistence_dir_path() {
+        search_dirs.push(persistence_dir.join("cache").join("codex-home").join("sessions"));
     }
 
-    let mut session_files = Vec::new();
-    collect_jsonl_files(&sessions_dir, &mut session_files);
-    for session_file in session_files {
-        let Some(file_stem) = session_file.file_stem().and_then(|value| value.to_str()) else {
+    search_dirs.push(home_dir.join(".codex").join("sessions"));
+
+    for sessions_dir in search_dirs {
+        if !sessions_dir.exists() {
             continue;
-        };
-        if file_stem == session_id {
-            return Ok(Some(session_file));
+        }
+
+        let mut session_files = Vec::new();
+        collect_jsonl_files(&sessions_dir, &mut session_files);
+        for session_file in session_files {
+            if extract_codex_session_id_from_file(&session_file).as_deref() == Some(session_id) {
+                return Ok(Some(session_file));
+            }
         }
     }
 
     Ok(None)
+}
+
+fn extract_codex_session_id_from_file(path: &Path) -> Option<String> {
+    let Ok(file) = std::fs::File::open(path) else {
+        return None;
+    };
+    let reader = std::io::BufReader::new(file);
+    for line in std::io::BufRead::lines(reader).take(10) {
+        let Ok(line) = line else {
+            continue;
+        };
+        let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if obj.get("type").and_then(|v| v.as_str()) == Some("session_meta") {
+            if let Some(id) = obj
+                .pointer("/payload/id")
+                .and_then(|v| v.as_str())
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+            {
+                return Some(id);
+            }
+        }
+    }
+    None
 }
 
 fn read_claude_session_usage_snapshot(
@@ -1541,7 +1573,8 @@ fn read_claude_session_usage_snapshot(
         return Ok(None);
     };
 
-    let file = fs::File::open(&session_file).map_err(|e| format!("无法读取 Claude 会话文件: {}", e))?;
+    let file =
+        fs::File::open(&session_file).map_err(|e| format!("无法读取 Claude 会话文件: {}", e))?;
     let reader = BufReader::new(file);
 
     let mut latest_model: Option<String> = None;
@@ -1619,7 +1652,8 @@ fn read_codex_session_usage_snapshot(
         return Ok(None);
     };
 
-    let file = fs::File::open(&session_file).map_err(|e| format!("无法读取 Codex 会话文件: {}", e))?;
+    let file =
+        fs::File::open(&session_file).map_err(|e| format!("无法读取 Codex 会话文件: {}", e))?;
     let reader = BufReader::new(file);
 
     let mut latest_model: Option<String> = None;
@@ -1635,7 +1669,10 @@ fn read_codex_session_usage_snapshot(
             continue;
         };
 
-        let event_type = json.get("type").and_then(|value| value.as_str()).unwrap_or_default();
+        let event_type = json
+            .get("type")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
         if event_type == "session_meta" {
             latest_model = json
                 .pointer("/payload/model")
@@ -1669,12 +1706,10 @@ fn read_codex_session_usage_snapshot(
             continue;
         };
 
-        let raw_input_tokens = usage_u64_to_i64(
-            usage.get("input_tokens").and_then(|value| value.as_u64()),
-        );
-        let raw_output_tokens = usage_u64_to_i64(
-            usage.get("output_tokens").and_then(|value| value.as_u64()),
-        );
+        let raw_input_tokens =
+            usage_u64_to_i64(usage.get("input_tokens").and_then(|value| value.as_u64()));
+        let raw_output_tokens =
+            usage_u64_to_i64(usage.get("output_tokens").and_then(|value| value.as_u64()));
         let cached_input_tokens = usage_u64_to_i64(
             usage
                 .get("cached_input_tokens")

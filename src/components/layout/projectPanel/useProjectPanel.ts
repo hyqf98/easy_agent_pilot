@@ -2,7 +2,7 @@ import { onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useProjectStore, type Project } from '@/stores/project'
 import { useUIStore } from '@/stores/ui'
-import { useFileEditorStore } from '@/modules/fileEditor'
+import { openProjectFileInWorkspace } from '@/modules/fileEditor'
 import { refreshProjectFileTreeView } from '@/components/fileTree'
 
 export interface ProjectPanelProps {
@@ -28,8 +28,6 @@ export function useProjectPanel() {
   const { t } = useI18n()
   const projectStore = useProjectStore()
   const uiStore = useUIStore()
-  const fileEditorStore = useFileEditorStore()
-
   const editingProject = ref<Project | null>(null)
   const showDeleteConfirm = ref(false)
   const deletingProject = ref<Project | null>(null)
@@ -124,7 +122,7 @@ export function useProjectPanel() {
   }
 
   const handleFileSelect = async (path: string, project: Project) => {
-    await fileEditorStore.openFile({
+    await openProjectFileInWorkspace({
       projectId: project.id,
       projectPath: project.path,
       filePath: path,

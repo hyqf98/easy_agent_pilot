@@ -640,9 +640,8 @@ onUnmounted(() => {
 }
 
 .rich-markdown-editor {
-  width: min(900px, 100%);
+  width: 100%;
   min-height: 100%;
-  margin: 0 auto;
   padding: 28px 32px 56px;
   color: var(--color-text-primary);
   line-height: 1.85;

@@ -27,6 +27,7 @@ pub struct FileOperationResult {
 
 /// 重命名文件输入
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RenameFileInput {
     pub old_path: String,
     pub new_name: String,
@@ -34,6 +35,7 @@ pub struct RenameFileInput {
 
 /// 移动文件输入
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MoveFileInput {
     pub source_path: String,
     pub target_path: String,

@@ -1,38 +1,21 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { EaIcon } from '@/components/common'
 import type { FileEditChangeType, FileEditRange } from '@/types/fileTrace'
 
 type DiffOpType = 'equal' | 'remove' | 'add'
-type DiffRowVariant = 'neutral' | 'removed' | 'added'
 
 interface DiffOp {
   type: DiffOpType
   text: string
 }
 
-interface DiffRow {
-  marker: '+' | '-' | '·'
+interface SideRow {
   lineNumber: number | null
   text: string
-  variant: DiffRowVariant
+  variant: 'neutral' | 'changed'
 }
-
-type DisplayDiffRow =
-  | (DiffRow & { type: 'row' })
-  | {
-    type: 'omitted'
-    count: number
-  }
-
-interface WindowSlice {
-  lines: string[]
-  startLine: number
-  truncated: boolean
-}
-
-const MAX_DIFF_LINES_WITHOUT_RANGE = 240
-const DIFF_CONTEXT_LINES = 4
-const COLLAPSE_CONTEXT_ROWS = 2
 
 const props = withDefaults(defineProps<{
   beforeContent: string
@@ -45,64 +28,29 @@ const props = withDefaults(defineProps<{
   rolledBack: false
 })
 
-const rootRef = ref<HTMLElement | null>(null)
-const showFullContext = ref(false)
+const emit = defineEmits<{
+  acceptLeft: []
+  acceptRight: []
+}>()
+
+const { t } = useI18n()
+const beforeScrollRef = ref<HTMLElement | null>(null)
+const afterScrollRef = ref<HTMLElement | null>(null)
+const activeChangeIndex = ref(-1)
 
 function normalizeLines(content: string): string[] {
-  if (!content) {
-    return []
-  }
-
+  if (!content) return []
   const lines = content.replace(/\r\n/g, '\n').split('\n')
-  if (lines[lines.length - 1] === '') {
-    lines.pop()
-  }
+  if (lines[lines.length - 1] === '') lines.pop()
   return lines
-}
-
-function sliceWindow(lines: string[], range: FileEditRange | null, context: number): WindowSlice {
-  if (range) {
-    if (lines.length <= 18) {
-      return {
-        lines,
-        startLine: 1,
-        truncated: false
-      }
-    }
-
-    const start = Math.max(0, range.startLine - 1 - context)
-    const end = Math.min(lines.length, range.endLine + context)
-
-    return {
-      lines: lines.slice(start, end),
-      startLine: start + 1,
-      truncated: start > 0 || end < lines.length
-    }
-  }
-
-  if (lines.length <= MAX_DIFF_LINES_WITHOUT_RANGE) {
-    return {
-      lines,
-      startLine: 1,
-      truncated: false
-    }
-  }
-
-  // 没有 focusRange 时只保留有限窗口，避免对整份大文件执行高成本 diff。
-  return {
-    lines: lines.slice(0, MAX_DIFF_LINES_WITHOUT_RANGE),
-    startLine: 1,
-    truncated: true
-  }
 }
 
 function buildDiffOps(beforeLines: string[], afterLines: string[]): DiffOp[] {
   const dp = Array.from({ length: beforeLines.length + 1 }, () =>
     Array<number>(afterLines.length + 1).fill(0)
   )
-
-  for (let i = beforeLines.length - 1; i >= 0; i -= 1) {
-    for (let j = afterLines.length - 1; j >= 0; j -= 1) {
+  for (let i = beforeLines.length - 1; i >= 0; i--) {
+    for (let j = afterLines.length - 1; j >= 0; j--) {
       if (beforeLines[i] === afterLines[j]) {
         dp[i][j] = dp[i + 1][j + 1] + 1
       } else {
@@ -110,629 +58,637 @@ function buildDiffOps(beforeLines: string[], afterLines: string[]): DiffOp[] {
       }
     }
   }
-
   const ops: DiffOp[] = []
   let i = 0
   let j = 0
-
   while (i < beforeLines.length && j < afterLines.length) {
     if (beforeLines[i] === afterLines[j]) {
       ops.push({ type: 'equal', text: beforeLines[i] })
-      i += 1
-      j += 1
-      continue
-    }
-
-    if (dp[i + 1][j] >= dp[i][j + 1]) {
+      i++
+      j++
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
       ops.push({ type: 'remove', text: beforeLines[i] })
-      i += 1
-      continue
+      i++
+    } else {
+      ops.push({ type: 'add', text: afterLines[j] })
+      j++
     }
-
-    ops.push({ type: 'add', text: afterLines[j] })
-    j += 1
   }
-
   while (i < beforeLines.length) {
     ops.push({ type: 'remove', text: beforeLines[i] })
-    i += 1
+    i++
   }
-
   while (j < afterLines.length) {
     ops.push({ type: 'add', text: afterLines[j] })
-    j += 1
+    j++
   }
-
   return ops
 }
 
-function buildBeforeRows(ops: DiffOp[], startLine: number): DiffRow[] {
-  const rows: DiffRow[] = []
-  let lineNumber = startLine
+interface PairRow {
+  before: SideRow
+  after: SideRow
+  isChanged: boolean
+}
 
-  for (const op of ops) {
-    if (op.type === 'add') {
-      continue
+function buildPairRows(ops: DiffOp[]): PairRow[] {
+  const rows: PairRow[] = []
+  let bLine = 1
+  let aLine = 1
+
+  let idx = 0
+  while (idx < ops.length) {
+    const op = ops[idx]
+    if (op.type === 'equal') {
+      rows.push({
+        before: { lineNumber: bLine++, text: op.text, variant: 'neutral' },
+        after: { lineNumber: aLine++, text: op.text, variant: 'neutral' },
+        isChanged: false
+      })
+      idx++
+    } else {
+      const removes: string[] = []
+      const adds: string[] = []
+      while (idx < ops.length && ops[idx].type === 'remove') {
+        removes.push(ops[idx].text)
+        idx++
+      }
+      while (idx < ops.length && ops[idx].type === 'add') {
+        adds.push(ops[idx].text)
+        idx++
+      }
+      const maxLen = Math.max(removes.length, adds.length)
+      for (let k = 0; k < maxLen; k++) {
+        const bText = k < removes.length ? removes[k] : ''
+        const aText = k < adds.length ? adds[k] : ''
+        const textsEqual = bText !== '' && aText !== '' && bText === aText
+        rows.push({
+          before: k < removes.length
+            ? { lineNumber: bLine++, text: bText, variant: textsEqual ? 'neutral' : 'changed' }
+            : { lineNumber: null, text: '', variant: 'neutral' },
+          after: k < adds.length
+            ? { lineNumber: aLine++, text: aText, variant: textsEqual ? 'neutral' : 'changed' }
+            : { lineNumber: null, text: '', variant: 'neutral' },
+          isChanged: !textsEqual
+        })
+      }
     }
-
-    rows.push({
-      marker: op.type === 'remove' ? '-' : '·',
-      lineNumber,
-      text: op.text,
-      variant: op.type === 'remove' ? 'removed' : 'neutral'
-    })
-    lineNumber += 1
   }
-
   return rows
 }
 
-function buildAfterRows(ops: DiffOp[], startLine: number): DiffRow[] {
-  const rows: DiffRow[] = []
-  let lineNumber = startLine
+const beforeLines = computed(() => normalizeLines(props.beforeContent))
+const afterLines = computed(() => normalizeLines(props.afterContent))
+const diffOps = computed(() => buildDiffOps(beforeLines.value, afterLines.value))
+const pairRows = computed(() => buildPairRows(diffOps.value))
 
-  for (const op of ops) {
-    if (op.type === 'remove') {
-      continue
-    }
-
-    rows.push({
-      marker: op.type === 'add' ? '+' : '·',
-      lineNumber,
-      text: op.text,
-      variant: op.type === 'add' ? 'added' : 'neutral'
-    })
-    lineNumber += 1
-  }
-
-  return rows
-}
-
-function collapseNeutralRows(rows: DiffRow[]): DisplayDiffRow[] {
-  if (showFullContext.value) {
-    return rows.map(row => ({ ...row, type: 'row' as const }))
-  }
-
-  const changedIndexes = rows
-    .map((row, index) => row.variant !== 'neutral' ? index : -1)
+const changedRowIndices = computed(() =>
+  pairRows.value
+    .map((row, index) => row.isChanged ? index : -1)
     .filter(index => index !== -1)
+)
 
-  if (changedIndexes.length === 0) {
-    return rows.map(row => ({ ...row, type: 'row' as const }))
-  }
-
-  const keepIndexes = new Set<number>()
-  for (const changedIndex of changedIndexes) {
-    for (
-      let index = Math.max(0, changedIndex - COLLAPSE_CONTEXT_ROWS);
-      index <= Math.min(rows.length - 1, changedIndex + COLLAPSE_CONTEXT_ROWS);
-      index += 1
-    ) {
-      keepIndexes.add(index)
-    }
-  }
-
-  const collapsed: DisplayDiffRow[] = []
-  let index = 0
-  while (index < rows.length) {
-    if (keepIndexes.has(index)) {
-      collapsed.push({ ...rows[index], type: 'row' })
-      index += 1
-      continue
-    }
-
-    let omittedCount = 0
-    while (index < rows.length && !keepIndexes.has(index)) {
-      omittedCount += 1
-      index += 1
-    }
-
-    collapsed.push({
-      type: 'omitted',
-      count: omittedCount
-    })
-  }
-
-  return collapsed
-}
-
-const jumpToFirstChange = async () => {
-  await nextTick()
-  const firstChangedRow = rootRef.value?.querySelector('.trace-diff-stack__row--changed')
-  if (!(firstChangedRow instanceof HTMLElement)) {
-    return
-  }
-
-  firstChangedRow.scrollIntoView({
-    block: 'center',
-    behavior: 'smooth'
-  })
-}
-
-const beforeWindow = computed(() => sliceWindow(normalizeLines(props.beforeContent), props.focusRange, DIFF_CONTEXT_LINES))
-const afterWindow = computed(() => sliceWindow(normalizeLines(props.afterContent), props.focusRange, DIFF_CONTEXT_LINES))
-const diffOps = computed(() => buildDiffOps(beforeWindow.value.lines, afterWindow.value.lines))
-const beforeRows = computed(() => buildBeforeRows(diffOps.value, beforeWindow.value.startLine))
-const afterRows = computed(() => buildAfterRows(diffOps.value, afterWindow.value.startLine))
-const beforeDisplayRows = computed(() => collapseNeutralRows(beforeRows.value))
-const afterDisplayRows = computed(() => collapseNeutralRows(afterRows.value))
-const isWindowTruncated = computed(() => beforeWindow.value.truncated || afterWindow.value.truncated)
 const diffStats = computed(() => diffOps.value.reduce((stats, op) => {
-  if (op.type === 'add') {
-    stats.added += 1
-  } else if (op.type === 'remove') {
-    stats.removed += 1
-  }
-
+  if (op.type === 'add') stats.added++
+  else if (op.type === 'remove') stats.removed++
   return stats
-}, {
-  added: 0,
-  removed: 0
-}))
+}, { added: 0, removed: 0 }))
 
-const displayAfterRows = computed(() => {
-  if (!props.rolledBack) {
-    return afterDisplayRows.value
+const hasChanges = computed(() => changedRowIndices.value.length > 0)
+
+const handleAcceptLeft = () => emit('acceptLeft')
+const handleAcceptRight = () => emit('acceptRight')
+
+function handleBeforeScroll() {
+  handleScrollSync()
+}
+
+function handleAfterScroll() {
+}
+
+function findNearestChangeIndex(): number {
+  const el = beforeScrollRef.value
+  const indices = changedRowIndices.value
+  if (!el || indices.length === 0) return -1
+
+  const viewportTop = el.scrollTop + el.clientHeight / 3
+
+  let bestIndex = 0
+  let bestDist = Infinity
+  for (let i = 0; i < indices.length; i++) {
+    const row = el.querySelector(`[data-row-index="${indices[i]}"]`) as HTMLElement | null
+    if (!row) continue
+    const dist = Math.abs(row.offsetTop - viewportTop)
+    if (dist < bestDist) {
+      bestDist = dist
+      bestIndex = i
+    }
   }
+  return bestIndex
+}
 
-  const lines = normalizeLines(props.afterContent)
-  return lines.map((text, index) => ({
-    type: 'row' as const,
-    marker: '·' as const,
-    lineNumber: index + 1,
-    text,
-    variant: 'neutral' as const
-  }))
-})
+function handleScrollSync() {
+  if (changedRowIndices.value.length === 0) return
+  activeChangeIndex.value = findNearestChangeIndex()
+}
+
+function scrollToRow(rowIndex: number) {
+  const row = beforeScrollRef.value?.querySelector(`[data-row-index="${rowIndex}"]`) as HTMLElement | null
+  if (!row || !beforeScrollRef.value) return
+  const top = row.offsetTop - (beforeScrollRef.value.clientHeight / 2) + (row.offsetHeight / 2)
+  beforeScrollRef.value.scrollTop = top
+  if (afterScrollRef.value) afterScrollRef.value.scrollTop = top
+}
+
+function handlePrevChange() {
+  if (!hasChanges.value) return
+  const current = findNearestChangeIndex()
+  const target = current > 0 ? current - 1 : 0
+  activeChangeIndex.value = target
+  scrollToRow(changedRowIndices.value[target])
+}
+
+function handleNextChange() {
+  if (!hasChanges.value) return
+  const current = findNearestChangeIndex()
+  const target = current < changedRowIndices.value.length - 1 ? current + 1 : changedRowIndices.value.length - 1
+  activeChangeIndex.value = target
+  scrollToRow(changedRowIndices.value[target])
+}
 </script>
 
 <template>
-  <div
-    ref="rootRef"
-    class="trace-diff-stack"
-  >
-    <div
-      v-if="!rolledBack && isWindowTruncated"
-      class="trace-diff-stack__notice"
-    >
-      当前仅展示局部窗口以保证大文件对比性能。
-    </div>
-    <div
-      v-if="!rolledBack && changeType === 'modify' && (diffStats.added > 0 || diffStats.removed > 0)"
-      class="trace-diff-stack__summary"
-    >
-      <span class="trace-diff-stack__summary-chip trace-diff-stack__summary-chip--removed">
-        - {{ diffStats.removed }} 行
-      </span>
-      <span class="trace-diff-stack__summary-chip trace-diff-stack__summary-chip--added">
-        + {{ diffStats.added }} 行
-      </span>
+  <div class="diff-view">
+    <div class="diff-view__header">
+      <span class="diff-view__stats diff-view__stats--remove">-{{ diffStats.removed }}</span>
+      <span class="diff-view__stats diff-view__stats--add">+{{ diffStats.added }}</span>
+
+      <span class="diff-view__spacer" />
+
       <button
-        class="trace-diff-stack__summary-action"
-        @click="showFullContext = !showFullContext"
+        class="diff-view__nav-btn"
+        :disabled="!hasChanges"
+        :title="t('trace.prevChange')"
+        @click="handlePrevChange"
       >
-        {{ showFullContext ? '折叠未改动区块' : '展开完整上下文' }}
+        <EaIcon
+          name="chevron-up"
+          :size="14"
+        />
       </button>
       <button
-        class="trace-diff-stack__summary-action"
-        @click="jumpToFirstChange"
+        class="diff-view__nav-btn"
+        :disabled="!hasChanges"
+        :title="t('trace.nextChange')"
+        @click="handleNextChange"
       >
-        跳到首个变更
+        <EaIcon
+          name="chevron-down"
+          :size="14"
+        />
       </button>
     </div>
 
-    <section
-      v-if="!rolledBack"
-      class="trace-diff-stack__panel"
-    >
-      <header class="trace-diff-stack__header trace-diff-stack__header--before">
-        <span>修改前</span>
-        <span class="trace-diff-stack__header-tag">
-          {{ changeType === 'create' ? '文件不存在' : '历史版本' }}
-        </span>
-      </header>
-
+    <div class="diff-view__body">
       <div
-        v-if="changeType === 'create'"
-        class="trace-diff-stack__empty"
+        ref="beforeScrollRef"
+        class="diff-view__panel diff-view__panel--before"
+        @scroll="handleBeforeScroll"
       >
-        创建文件前没有内容
-      </div>
-
-      <div
-        v-else
-        class="trace-diff-stack__rows"
-      >
+        <div class="diff-view__panel-head">
+          {{ t('trace.before') }}
+        </div>
         <div
-          v-for="(row, index) in beforeDisplayRows"
-          :key="`before-${index}-${row.type === 'row' ? row.lineNumber : `omitted-${row.count}`}`"
-          class="trace-diff-stack__row-wrap"
+          v-for="(row, index) in pairRows"
+          :key="`b-${index}`"
+          :data-row-index="index"
+          class="diff-view__row"
+          :class="{
+            'diff-view__row--changed': row.before.variant === 'changed',
+            'diff-view__row--empty': row.before.lineNumber === null,
+            'diff-view__row--active': activeChangeIndex >= 0 && changedRowIndices[activeChangeIndex] === index
+          }"
         >
-          <button
-            v-if="row.type === 'omitted'"
-            class="trace-diff-stack__omitted"
-            @click="showFullContext = true"
-          >
-            展开未改动 {{ row.count }} 行
-          </button>
-          <div
-            v-else
-            class="trace-diff-stack__row"
-            :class="{
-              'trace-diff-stack__row--removed': row.variant === 'removed',
-              'trace-diff-stack__row--neutral': row.variant === 'neutral',
-              'trace-diff-stack__row--changed': row.variant !== 'neutral'
-            }"
-          >
-            <span class="trace-diff-stack__marker">{{ row.marker }}</span>
-            <span class="trace-diff-stack__line">{{ row.lineNumber }}</span>
-            <code class="trace-diff-stack__code">{{ row.text || ' ' }}</code>
-          </div>
+          <span class="diff-view__num">{{ row.before.lineNumber ?? '' }}</span>
+          <pre class="diff-view__text">{{ row.before.text }}</pre>
         </div>
       </div>
-    </section>
 
-    <section class="trace-diff-stack__panel">
-      <header class="trace-diff-stack__header trace-diff-stack__header--after">
-        <span>{{ rolledBack ? '回滚后' : 'AI 修改后' }}</span>
-        <span class="trace-diff-stack__header-tag">
-          {{ rolledBack ? '已恢复到修改前' : (changeType === 'delete' ? '文件已删除' : '当前结果') }}
-        </span>
-      </header>
-
-      <div
-        v-if="changeType === 'delete'"
-        class="trace-diff-stack__empty trace-diff-stack__empty--danger"
-      >
-        这次改动会删除整个文件
-      </div>
-
-      <div
-        v-else
-        class="trace-diff-stack__rows"
-      >
-        <div
-          v-for="(row, index) in (rolledBack ? displayAfterRows : afterDisplayRows)"
-          :key="`after-${index}-${row.type === 'row' ? row.lineNumber : `omitted-${row.count}`}`"
-          class="trace-diff-stack__row-wrap"
+      <div class="diff-view__gutter">
+        <div class="diff-view__panel-head" />
+        <template
+          v-for="(row, index) in pairRows"
+          :key="`g-${index}`"
         >
-          <button
-            v-if="row.type === 'omitted'"
-            class="trace-diff-stack__omitted"
-            @click="showFullContext = true"
+          <div
+            v-if="row.isChanged && !rolledBack"
+            class="diff-view__gutter-cell"
           >
-            展开未改动 {{ row.count }} 行
-          </button>
+            <button
+              class="diff-view__arrow diff-view__arrow--left"
+              :title="t('trace.acceptLeft')"
+              @click="handleAcceptLeft"
+            >
+              <EaIcon
+                name="chevrons-left"
+                :size="12"
+              />
+            </button>
+            <button
+              class="diff-view__arrow diff-view__arrow--right"
+              :title="t('trace.acceptRight')"
+              @click="handleAcceptRight"
+            >
+              <EaIcon
+                name="chevrons-right"
+                :size="12"
+              />
+            </button>
+          </div>
           <div
             v-else
-            class="trace-diff-stack__row"
-            :class="{
-              'trace-diff-stack__row--added': row.variant === 'added',
-              'trace-diff-stack__row--neutral': row.variant === 'neutral',
-              'trace-diff-stack__row--changed': row.variant !== 'neutral'
-            }"
-          >
-            <span class="trace-diff-stack__marker">{{ row.marker }}</span>
-            <span class="trace-diff-stack__line">{{ row.lineNumber }}</span>
-            <code class="trace-diff-stack__code">{{ row.text || ' ' }}</code>
-          </div>
+            class="diff-view__gutter-cell"
+          />
+        </template>
+      </div>
+
+      <div
+        ref="afterScrollRef"
+        class="diff-view__panel diff-view__panel--after"
+        @scroll="handleAfterScroll"
+      >
+        <div class="diff-view__panel-head">
+          {{ t('trace.after') }}
+        </div>
+        <div
+          v-for="(row, index) in pairRows"
+          :key="`a-${index}`"
+          class="diff-view__row"
+          :class="{
+            'diff-view__row--changed': row.after.variant === 'changed',
+            'diff-view__row--empty': row.after.lineNumber === null,
+            'diff-view__row--active': activeChangeIndex >= 0 && changedRowIndices[activeChangeIndex] === index
+          }"
+        >
+          <span class="diff-view__num">{{ row.after.lineNumber ?? '' }}</span>
+          <pre class="diff-view__text">{{ row.after.text }}</pre>
         </div>
       </div>
-    </section>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.trace-diff-stack {
+.diff-view {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  min-height: 0;
   flex: 1;
-  padding: 16px;
-  overflow: auto;
-  background:
-    radial-gradient(circle at top right, rgba(59, 130, 246, 0.08), transparent 28%),
-    linear-gradient(180deg, color-mix(in srgb, var(--color-surface-hover) 72%, transparent), var(--color-surface));
-}
-
-.trace-diff-stack__notice {
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(59, 130, 246, 0.18);
-  background: rgba(59, 130, 246, 0.06);
-  color: var(--color-text-secondary);
-  font-size: 12px;
-}
-
-.trace-diff-stack__summary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.trace-diff-stack__summary-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 6px 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: color-mix(in srgb, var(--color-surface) 92%, white 8%);
-  color: var(--color-text-secondary);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.trace-diff-stack__summary-action:hover {
-  color: var(--color-text-primary);
-  border-color: rgba(59, 130, 246, 0.28);
-}
-
-.trace-diff-stack__summary-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  font-variant-numeric: tabular-nums;
-}
-
-.trace-diff-stack__summary-chip--removed {
-  color: #b91c1c;
-  background: rgba(254, 226, 226, 0.72);
-}
-
-.trace-diff-stack__summary-chip--added {
-  color: #15803d;
-  background: rgba(220, 252, 231, 0.76);
-}
-
-.trace-diff-stack__panel {
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  border-radius: 18px;
+  min-height: 0;
   overflow: hidden;
-  background: color-mix(in srgb, var(--color-surface) 94%, white 6%);
-  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.06);
+  background: var(--color-surface);
 }
 
-.trace-diff-stack__header {
-  position: sticky;
-  top: 0;
-  z-index: 1;
+.diff-view__header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 14px;
+  gap: 8px;
+  padding: 6px 12px;
   border-bottom: 1px solid rgba(148, 163, 184, 0.16);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.trace-diff-stack__header--before {
-  background: linear-gradient(180deg, rgba(254, 242, 242, 0.9), rgba(255, 255, 255, 0.96));
-  color: #991b1b;
-}
-
-.trace-diff-stack__header--after {
-  background: linear-gradient(180deg, rgba(240, 253, 244, 0.94), rgba(255, 255, 255, 0.96));
-  color: #166534;
-}
-
-.trace-diff-stack__header-tag {
-  font-size: 11px;
-  font-weight: 600;
-  opacity: 0.74;
-}
-
-.trace-diff-stack__rows {
-  overflow: auto;
-}
-
-.trace-diff-stack__row-wrap {
-  display: block;
-}
-
-.trace-diff-stack__row {
-  display: grid;
-  grid-template-columns: 24px 56px minmax(0, 1fr);
-  align-items: stretch;
-  min-height: 28px;
-  border-bottom: 1px solid rgba(226, 232, 240, 0.72);
   font-family: var(--font-family-mono);
   font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
 }
 
-.trace-diff-stack__row:last-child {
-  border-bottom: none;
+.diff-view__spacer {
+  flex: 1;
 }
 
-.trace-diff-stack__row--neutral {
-  background: color-mix(in srgb, var(--color-surface-hover) 78%, transparent);
+.diff-view__stats {
+  padding: 2px 8px;
+  border-radius: 4px;
 }
 
-.trace-diff-stack__row--removed {
-  background: rgba(254, 226, 226, 0.65);
+.diff-view__stats--remove {
+  color: #b91c1c;
+  background: rgba(254, 226, 226, 0.7);
 }
 
-.trace-diff-stack__row--added {
+.diff-view__stats--add {
+  color: #15803d;
   background: rgba(220, 252, 231, 0.7);
 }
 
-.trace-diff-stack__omitted {
-  width: 100%;
-  padding: 8px 12px;
-  border-bottom: 1px solid rgba(226, 232, 240, 0.72);
-  background: color-mix(in srgb, var(--color-surface-hover) 82%, transparent);
-  color: var(--color-text-secondary);
-  font-size: 12px;
-  text-align: left;
-}
-
-.trace-diff-stack__omitted:hover {
-  color: var(--color-text-primary);
-}
-
-.trace-diff-stack__marker,
-.trace-diff-stack__line {
+.diff-view__nav-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-right: 1px solid rgba(226, 232, 240, 0.8);
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.diff-view__nav-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--color-text-primary);
+  border-color: rgba(59, 130, 246, 0.3);
+}
+
+.diff-view__nav-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.diff-view__body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.diff-view__panel {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.diff-view__panel-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  line-height: 20px;
+  background: var(--color-surface);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  white-space: nowrap;
+}
+
+.diff-view__panel--before .diff-view__panel-head {
+  color: #991b1b;
+}
+
+.diff-view__panel--after .diff-view__panel-head {
+  color: #166534;
+}
+
+.diff-view__gutter {
+  flex-shrink: 0;
+  width: 44px;
+  overflow-y: hidden;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid rgba(148, 163, 184, 0.1);
+  border-right: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.diff-view__gutter .diff-view__panel-head {
+  background: rgba(148, 163, 184, 0.03);
+  border-bottom-color: rgba(148, 163, 184, 0.1);
+}
+
+.diff-view__gutter .diff-view__panel-head::after {
+  content: '\00a0';
+}
+
+.diff-view__gutter-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 20px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.04);
+  background: rgba(148, 163, 184, 0.03);
+}
+
+.diff-view__row {
+  display: flex;
+  align-items: stretch;
+  min-height: 20px;
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  line-height: 20px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.04);
+}
+
+.diff-view__row--changed {
+  background: rgba(254, 226, 226, 0.45);
+}
+
+.diff-view__panel--after .diff-view__row--changed {
+  background: rgba(220, 252, 231, 0.45);
+}
+
+.diff-view__row--empty {
+  background: rgba(148, 163, 184, 0.04);
+}
+
+.diff-view__row--active {
+  outline: 2px solid rgba(59, 130, 246, 0.3);
+  outline-offset: -2px;
+}
+
+.diff-view__arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.diff-view__arrow--left {
+  color: #b91c1c;
+}
+
+.diff-view__arrow--left:hover {
+  background: rgba(254, 226, 226, 0.6);
+  color: #991b1b;
+}
+
+.diff-view__arrow--right {
+  color: #15803d;
+}
+
+.diff-view__arrow--right:hover {
+  background: rgba(220, 252, 231, 0.6);
+  color: #166534;
+}
+
+.diff-view__num {
+  flex-shrink: 0;
+  width: 40px;
+  padding: 0 6px;
+  text-align: right;
   color: var(--color-text-tertiary);
   user-select: none;
+  border-right: 1px solid rgba(148, 163, 184, 0.08);
+  font-size: 11px;
 }
 
-.trace-diff-stack__marker {
-  font-weight: 800;
-}
-
-.trace-diff-stack__row--removed .trace-diff-stack__marker {
-  color: #dc2626;
-}
-
-.trace-diff-stack__row--added .trace-diff-stack__marker {
-  color: #16a34a;
-}
-
-.trace-diff-stack__code {
-  padding: 6px 12px;
+.diff-view__text {
+  flex: 1;
+  min-width: 0;
   margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
+  padding: 0 8px;
   color: var(--color-text-primary);
-  background: transparent;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  white-space: pre;
 }
 
-.trace-diff-stack__empty {
-  padding: 18px 16px;
-  font-size: 13px;
-  color: var(--color-text-secondary);
-  background: rgba(248, 250, 252, 0.84);
+:global([data-theme='dark']) .diff-view,
+:global(.dark) .diff-view {
+  background: rgba(15, 23, 42, 0.92);
 }
 
-.trace-diff-stack__empty--danger {
-  color: #b91c1c;
-  background: rgba(254, 242, 242, 0.86);
+:global([data-theme='dark']) .diff-view__header,
+:global(.dark) .diff-view__header {
+  border-bottom-color: rgba(71, 85, 105, 0.5);
 }
 
-:global([data-theme='dark']) .trace-diff-stack,
-:global(.dark) .trace-diff-stack {
-  background:
-    radial-gradient(circle at top right, rgba(96, 165, 250, 0.1), transparent 26%),
-    linear-gradient(180deg, rgba(15, 23, 42, 0.64), rgba(2, 6, 23, 0.84));
-}
-
-:global([data-theme='dark']) .trace-diff-stack__summary-chip,
-:global(.dark) .trace-diff-stack__summary-chip {
-  border-color: rgba(71, 85, 105, 0.55);
-}
-
-:global([data-theme='dark']) .trace-diff-stack__summary-action,
-:global(.dark) .trace-diff-stack__summary-action {
-  border-color: rgba(71, 85, 105, 0.52);
-  background: rgba(30, 41, 59, 0.92);
-  color: #cbd5e1;
-}
-
-:global([data-theme='dark']) .trace-diff-stack__summary-chip--removed,
-:global(.dark) .trace-diff-stack__summary-chip--removed {
+:global([data-theme='dark']) .diff-view__stats--remove,
+:global(.dark) .diff-view__stats--remove {
   color: #fecaca;
   background: rgba(127, 29, 29, 0.46);
 }
 
-:global([data-theme='dark']) .trace-diff-stack__summary-chip--added,
-:global(.dark) .trace-diff-stack__summary-chip--added {
+:global([data-theme='dark']) .diff-view__stats--add,
+:global(.dark) .diff-view__stats--add {
   color: #bbf7d0;
   background: rgba(20, 83, 45, 0.5);
 }
 
-:global([data-theme='dark']) .trace-diff-stack__panel,
-:global(.dark) .trace-diff-stack__panel {
+:global([data-theme='dark']) .diff-view__nav-btn,
+:global(.dark) .diff-view__nav-btn {
   border-color: rgba(71, 85, 105, 0.5);
-  background: rgba(15, 23, 42, 0.84);
-  box-shadow: 0 12px 28px rgba(2, 6, 23, 0.34);
+  background: rgba(30, 41, 59, 0.8);
+  color: #cbd5e1;
 }
 
-:global([data-theme='dark']) .trace-diff-stack__header,
-:global(.dark) .trace-diff-stack__header {
+:global([data-theme='dark']) .diff-view__nav-btn:hover:not(:disabled),
+:global(.dark) .diff-view__nav-btn:hover:not(:disabled) {
+  background: rgba(30, 41, 59, 0.95);
+  color: #f1f5f9;
+  border-color: rgba(96, 165, 250, 0.4);
+}
+
+:global([data-theme='dark']) .diff-view__panel-head,
+:global(.dark) .diff-view__panel-head {
+  background: rgba(15, 23, 42, 0.98);
   border-bottom-color: rgba(71, 85, 105, 0.5);
 }
 
-:global([data-theme='dark']) .trace-diff-stack__header--before,
-:global(.dark) .trace-diff-stack__header--before {
-  background: linear-gradient(180deg, rgba(127, 29, 29, 0.54), rgba(15, 23, 42, 0.92));
-  color: #fecaca;
+:global([data-theme='dark']) .diff-view__panel--before .diff-view__panel-head,
+:global(.dark) .diff-view__panel--before .diff-view__panel-head {
+  color: #fca5a5;
 }
 
-:global([data-theme='dark']) .trace-diff-stack__header--after,
-:global(.dark) .trace-diff-stack__header--after {
-  background: linear-gradient(180deg, rgba(20, 83, 45, 0.58), rgba(15, 23, 42, 0.92));
-  color: #bbf7d0;
+:global([data-theme='dark']) .diff-view__panel--after .diff-view__panel-head,
+:global(.dark) .diff-view__panel--after .diff-view__panel-head {
+  color: #86efac;
 }
 
-:global([data-theme='dark']) .trace-diff-stack__row,
-:global(.dark) .trace-diff-stack__row {
-  border-bottom-color: rgba(51, 65, 85, 0.72);
+:global([data-theme='dark']) .diff-view__gutter,
+:global(.dark) .diff-view__gutter {
+  border-left-color: rgba(71, 85, 105, 0.4);
+  border-right-color: rgba(71, 85, 105, 0.4);
 }
 
-:global([data-theme='dark']) .trace-diff-stack__row--neutral,
-:global(.dark) .trace-diff-stack__row--neutral {
-  background: rgba(15, 23, 42, 0.46);
+:global([data-theme='dark']) .diff-view__gutter .diff-view__panel-head,
+:global(.dark) .diff-view__gutter .diff-view__panel-head {
+  background: rgba(15, 23, 42, 0.5);
 }
 
-:global([data-theme='dark']) .trace-diff-stack__row--removed,
-:global(.dark) .trace-diff-stack__row--removed {
-  background: rgba(127, 29, 29, 0.34);
+:global([data-theme='dark']) .diff-view__row,
+:global(.dark) .diff-view__row {
+  border-bottom-color: rgba(51, 65, 85, 0.3);
 }
 
-:global([data-theme='dark']) .trace-diff-stack__row--added,
-:global(.dark) .trace-diff-stack__row--added {
-  background: rgba(20, 83, 45, 0.32);
+:global([data-theme='dark']) .diff-view__row--changed,
+:global(.dark) .diff-view__row--changed {
+  background: rgba(127, 29, 29, 0.22);
 }
 
-:global([data-theme='dark']) .trace-diff-stack__marker,
-:global([data-theme='dark']) .trace-diff-stack__line,
-:global(.dark) .trace-diff-stack__marker,
-:global(.dark) .trace-diff-stack__line {
-  border-right-color: rgba(51, 65, 85, 0.76);
+:global([data-theme='dark']) .diff-view__panel--after .diff-view__row--changed,
+:global(.dark) .diff-view__panel--after .diff-view__row--changed {
+  background: rgba(20, 83, 45, 0.22);
 }
 
-:global([data-theme='dark']) .trace-diff-stack__code,
-:global(.dark) .trace-diff-stack__code {
+:global([data-theme='dark']) .diff-view__row--empty,
+:global(.dark) .diff-view__row--empty {
+  background: rgba(30, 41, 59, 0.2);
+}
+
+:global([data-theme='dark']) .diff-view__row--active,
+:global(.dark) .diff-view__row--active {
+  outline-color: rgba(96, 165, 250, 0.35);
+}
+
+:global([data-theme='dark']) .diff-view__num,
+:global(.dark) .diff-view__num {
+  border-right-color: rgba(51, 65, 85, 0.5);
+  color: #64748b;
+}
+
+:global([data-theme='dark']) .diff-view__text,
+:global(.dark) .diff-view__text {
   color: #e2e8f0;
 }
 
-:global([data-theme='dark']) .trace-diff-stack__empty,
-:global(.dark) .trace-diff-stack__empty {
-  color: #cbd5e1;
-  background: rgba(15, 23, 42, 0.72);
+:global([data-theme='dark']) .diff-view__arrow--left,
+:global(.dark) .diff-view__arrow--left {
+  color: #fca5a5;
 }
 
-:global([data-theme='dark']) .trace-diff-stack__empty--danger,
-:global(.dark) .trace-diff-stack__empty--danger {
+:global([data-theme='dark']) .diff-view__arrow--left:hover,
+:global(.dark) .diff-view__arrow--left:hover {
+  background: rgba(127, 29, 29, 0.3);
   color: #fecaca;
-  background: rgba(127, 29, 29, 0.36);
+}
+
+:global([data-theme='dark']) .diff-view__arrow--right,
+:global(.dark) .diff-view__arrow--right {
+  color: #86efac;
+}
+
+:global([data-theme='dark']) .diff-view__arrow--right:hover,
+:global(.dark) .diff-view__arrow--right:hover {
+  background: rgba(20, 83, 45, 0.3);
+  color: #bbf7d0;
 }
 
 @media (max-width: 768px) {
-  .trace-diff-stack {
-    padding: 10px;
-  }
-
-  .trace-diff-stack__row {
-    grid-template-columns: 20px 44px minmax(0, 1fr);
+  .diff-view__row {
     font-size: 11px;
+    line-height: 18px;
+    min-height: 18px;
   }
 
-  .trace-diff-stack__header {
-    padding: 10px 12px;
+  .diff-view__num {
+    width: 30px;
+    font-size: 10px;
+  }
+
+  .diff-view__gutter {
+    width: 36px;
   }
 }
 </style>

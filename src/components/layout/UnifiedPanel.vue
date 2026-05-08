@@ -8,7 +8,7 @@ import { useUIStore } from '@/stores/ui'
 import { useAgentStore } from '@/stores/agent'
 import { useAgentTeamsStore } from '@/stores/agentTeams'
 import { useSessionView } from '@/composables'
-import { useFileEditorStore } from '@/modules/fileEditor'
+import { openProjectFileInWorkspace } from '@/modules/fileEditor'
 import { EaIcon, EaButton, EaSkeleton } from '@/components/common'
 import { ProjectCreateModal } from '@/components/project'
 import { refreshProjectFileTreeView } from '@/components/fileTree'
@@ -35,7 +35,6 @@ const layoutStore = useLayoutStore()
 const uiStore = useUIStore()
 const agentStore = useAgentStore()
 const agentTeamsStore = useAgentTeamsStore()
-const fileEditorStore = useFileEditorStore()
 const {
   openSessionTarget,
 } = useSessionView()
@@ -294,7 +293,7 @@ const saveSessionName = async (session: Session) => {
 const handleFileSelect = async (selectedPath: string, project: Project) => {
   projectStore.setCurrentProject(project.id)
 
-  await fileEditorStore.openFile({
+  await openProjectFileInWorkspace({
     projectId: project.id,
     projectPath: project.path,
     filePath: selectedPath

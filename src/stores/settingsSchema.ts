@@ -22,6 +22,7 @@ export interface AppSettings {
   autoCompressionEnabled: boolean
   cliFailureMaxRetries: number
   retryIntervalMinutes: number
+  cliTimeoutMinutes: number
 }
 
 type SettingsValue = AppSettings[keyof AppSettings]
@@ -47,7 +48,8 @@ export const defaultSettings: AppSettings = {
   compressionThreshold: 80,
   autoCompressionEnabled: true,
   cliFailureMaxRetries: 5,
-  retryIntervalMinutes: 5
+  retryIntervalMinutes: 5,
+  cliTimeoutMinutes: 0
 }
 
 export interface SettingsFieldCodec {
@@ -138,7 +140,8 @@ export const settingsFieldCodecs: SettingsFieldCodec[] = [
   integerCodec('compressionThreshold', defaultSettings.compressionThreshold),
   booleanCodec('autoCompressionEnabled'),
   integerCodec('cliFailureMaxRetries', defaultSettings.cliFailureMaxRetries),
-  integerCodec('retryIntervalMinutes', defaultSettings.retryIntervalMinutes)
+  integerCodec('retryIntervalMinutes', defaultSettings.retryIntervalMinutes),
+  integerCodec('cliTimeoutMinutes', defaultSettings.cliTimeoutMinutes)
 ]
 
 const settingsFieldCodecMap = new Map(

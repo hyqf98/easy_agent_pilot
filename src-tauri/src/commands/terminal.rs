@@ -7,6 +7,24 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
+macro_rules! log_info {
+    ($($arg:tt)*) => {
+        {
+            let message = format!($($arg)*);
+            crate::logging::write_log("INFO", "terminal", &message);
+        }
+    };
+}
+
+macro_rules! log_error {
+    ($($arg:tt)*) => {
+        {
+            let message = format!($($arg)*);
+            crate::logging::write_log("ERROR", "terminal", &message);
+        }
+    };
+}
+
 /// 终端面板的 PTY 会话输入参数。
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateTerminalSessionInput {
@@ -67,6 +85,27 @@ struct ShellLaunchConfig {
     args: Vec<String>,
 }
 
+fn shell_binary_name(shell_path: &str) -> String {
+    std::path::Path::new(shell_path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_else(|| shell_path.to_ascii_lowercase())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn resolve_unix_shell_args(program: &str) -> Vec<String> {
+    let shell_name = shell_binary_name(program);
+
+    match shell_name.as_str() {
+        // 登录 + 交互模式可以补齐 GUI 启动场景缺失的 PATH / alias / shell 初始化，
+        // 让 codex / claude / opencode 这类 TUI 命令按用户平时终端中的方式启动。
+        "bash" => vec!["--login".to_string(), "-i".to_string()],
+        "zsh" | "fish" => vec!["-l".to_string(), "-i".to_string()],
+        _ => vec!["-i".to_string()],
+    }
+}
+
 fn default_shell() -> String {
     #[cfg(target_os = "windows")]
     {
@@ -85,27 +124,30 @@ fn default_shell() -> String {
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "/bin/bash".to_string())
+            .unwrap_or_else(|| {
+                #[cfg(target_os = "macos")]
+                {
+                    "/bin/zsh".to_string()
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    "/bin/bash".to_string()
+                }
+            })
     }
 }
 
 fn resolve_shell_launch(shell_override: Option<&str>) -> ShellLaunchConfig {
-    if let Some(shell) = shell_override
+    let program = shell_override
         .map(str::trim)
         .filter(|value| !value.is_empty())
-    {
-        return ShellLaunchConfig {
-            program: shell.to_string(),
-            display_name: shell.to_string(),
-            args: Vec::new(),
-        };
-    }
-
-    let default_program = default_shell();
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(default_shell);
 
     #[cfg(target_os = "windows")]
     {
-        let normalized = default_program.to_ascii_lowercase();
+        let normalized = program.to_ascii_lowercase();
         let mut args = Vec::new();
 
         if normalized.contains("powershell") || normalized.contains("pwsh") {
@@ -116,8 +158,8 @@ fn resolve_shell_launch(shell_override: Option<&str>) -> ShellLaunchConfig {
         }
 
         return ShellLaunchConfig {
-            program: default_program.clone(),
-            display_name: default_program,
+            program: program.clone(),
+            display_name: program,
             args,
         };
     }
@@ -125,9 +167,9 @@ fn resolve_shell_launch(shell_override: Option<&str>) -> ShellLaunchConfig {
     #[cfg(not(target_os = "windows"))]
     {
         ShellLaunchConfig {
-            program: default_program.clone(),
-            display_name: default_program,
-            args: Vec::new(),
+            display_name: program.clone(),
+            args: resolve_unix_shell_args(&program),
+            program,
         }
     }
 }
@@ -152,6 +194,8 @@ fn build_change_directory_command(shell: &str, path: &str) -> String {
 fn configure_terminal_environment(command: &mut CommandBuilder) {
     // GUI 启动时不会继承终端里的环境变量，这里补齐 PTY 需要的基础终端能力和 UTF-8 locale。
     command.env("TERM", "xterm-256color");
+    command.env("COLORTERM", "truecolor");
+    command.env("TERM_PROGRAM", "easy-agent-pilot");
 
     #[cfg(not(target_os = "windows"))]
     {
@@ -261,7 +305,16 @@ pub fn create_terminal_session(
     let child = pair
         .slave
         .spawn_command(command)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| {
+            let message = error.to_string();
+            log_error!(
+                "创建 PTY 终端会话失败: shell={}, cwd={:?}, error={}",
+                shell_config.display_name,
+                input.cwd,
+                message
+            );
+            message
+        })?;
     let writer = pair
         .master
         .take_writer()
@@ -284,6 +337,14 @@ pub fn create_terminal_session(
         .sessions
         .lock()
         .insert(session_id.clone(), Arc::clone(&session));
+
+    log_info!(
+        "创建 PTY 终端会话: session={}, shell={}, args={:?}, cwd={:?}",
+        session_id,
+        shell_config.display_name,
+        shell_config.args,
+        input.cwd
+    );
 
     let app_handle = app.clone();
     let sessions = Arc::clone(&state.sessions);
@@ -313,6 +374,10 @@ pub fn create_terminal_session(
         }
 
         sessions.lock().remove(&read_session_id);
+        log_info!(
+            "PTY 终端会话自然结束: session={}, source=pty_eof",
+            read_session_id
+        );
         emit_terminal_exit(&app_handle, &read_session_id);
     });
 
@@ -407,11 +472,24 @@ pub fn close_terminal_session(
         return Ok(());
     };
 
+    log_info!(
+        "应用主动关闭 PTY 终端会话: session={}, source=app_close",
+        session_id
+    );
+
     session
         .child
         .lock()
         .kill()
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| {
+            let message = error.to_string();
+            log_error!(
+                "关闭 PTY 终端会话失败: session={}, source=app_close, error={}",
+                session_id,
+                message
+            );
+            message
+        })?;
     emit_terminal_exit(&app, &session_id);
     Ok(())
 }

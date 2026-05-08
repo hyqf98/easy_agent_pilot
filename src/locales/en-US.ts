@@ -2405,6 +2405,12 @@ Rules:
     rollbackSuccessMessage: '{path} has been restored to its state before this change',
     rollbackFailedTitle: 'Rollback failed',
     editorRefreshWarningTitle: 'Editor not refreshed',
-    editorRefreshWarningMessage: 'This file still has unsaved changes in the editor. Reopen it manually after reviewing the rollback.'
+    editorRefreshWarningMessage: 'This file still has unsaved changes in the editor. Reopen it manually after reviewing the rollback.',
+    before: 'Before',
+    after: 'After',
+    prevChange: 'Prev Change',
+    nextChange: 'Next Change',
+    acceptLeft: 'Accept Left',
+    acceptRight: 'Accept Right'
   }
 }

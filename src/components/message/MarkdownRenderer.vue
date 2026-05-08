@@ -7,7 +7,7 @@ import { useTypewriterText } from '@/composables/useTypewriterText'
 import { useProjectStore } from '@/stores/project'
 import { useUIStore } from '@/stores/ui'
 import { useNotificationStore } from '@/stores/notification'
-import { useFileEditorStore } from '@/modules/fileEditor'
+import { openProjectFileInWorkspace } from '@/modules/fileEditor'
 
 const props = withDefaults(defineProps<{
   content: string
@@ -20,7 +20,6 @@ const containerRef = ref<HTMLDivElement | null>(null)
 const projectStore = useProjectStore()
 const uiStore = useUIStore()
 const notificationStore = useNotificationStore()
-const fileEditorStore = useFileEditorStore()
 
 // 存储代码块原始内容，用于复制功能
 const codeBlockContents = ref(new Map<string, string>())
@@ -302,7 +301,7 @@ const handleLinkClick = async (e: MouseEvent): Promise<void> => {
         projectStore.setCurrentProject(fileTarget.projectId)
         uiStore.setAppMode('chat')
 
-        await fileEditorStore.openFile(fileTarget)
+        await openProjectFileInWorkspace(fileTarget)
         return
       }
 
