@@ -34,7 +34,6 @@
     "createUpdaterArtifacts": true,
     "targets": ["nsis", "dmg", "app", "deb", "appimage"],
     "resources": {
-      "../scripts/mcpmarket-fetcher.mjs": "scripts/mcpmarket-fetcher.mjs",
       "../node_modules/.pnpm/playwright-core@1.58.2/node_modules/playwright-core/": "playwright-core/"
     },
     "icon": [

@@ -149,6 +149,23 @@ fn build_change_directory_command(shell: &str, path: &str) -> String {
     format!("cd '{}'\r", escaped)
 }
 
+fn configure_terminal_environment(command: &mut CommandBuilder) {
+    // GUI 启动时不会继承终端里的环境变量，这里补齐 PTY 需要的基础终端能力和 UTF-8 locale。
+    command.env("TERM", "xterm-256color");
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let has_locale = ["LANG", "LC_ALL", "LC_CTYPE"]
+            .iter()
+            .any(|key| std::env::var_os(key).is_some());
+
+        if !has_locale {
+            command.env("LANG", "en_US.UTF-8");
+            command.env("LC_CTYPE", "en_US.UTF-8");
+        }
+    }
+}
+
 fn emit_terminal_data(app: &AppHandle, session_id: &str, data: String) {
     let _ = app.emit(
         "terminal:data",
@@ -239,6 +256,7 @@ pub fn create_terminal_session(
     {
         command.cwd(cwd);
     }
+    configure_terminal_environment(&mut command);
 
     let child = pair
         .slave

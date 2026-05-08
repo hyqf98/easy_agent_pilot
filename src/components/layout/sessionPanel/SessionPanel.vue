@@ -248,7 +248,10 @@ const {
               : t('session.batchSelectHint')
           }}
         </span>
-        <div class="session-batch-bar__actions">
+        <div
+          v-if="hasSelectedSessions"
+          class="session-batch-bar__actions"
+        >
           <EaButton
             type="secondary"
             size="small"

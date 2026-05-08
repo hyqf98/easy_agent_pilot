@@ -40,6 +40,7 @@ let resizeObserver: ResizeObserver | null = null
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 let queuedWrite = ''
 let writeChain = Promise.resolve()
+let pendingKeyOverride: string | null = null
 
 function isBackspaceInput(data: string) {
   return data === '\u007F' || data === '\u0008'
@@ -63,6 +64,11 @@ function resetSuggestionState() {
 }
 
 function refreshSuggestion() {
+  if (inputBuffer.value.trim().length < 2) {
+    suggestion.value = null
+    return
+  }
+
   if (!canSuggest.value) {
     suggestion.value = null
     return
@@ -216,6 +222,30 @@ function createTerminalTheme() {
   }
 }
 
+function resolveKeyOverride(data: string, event: KeyboardEvent) {
+  if (event.isComposing) {
+    return null
+  }
+
+  if (event.key === 'Backspace') {
+    return '\u007F'
+  }
+
+  if (event.key === 'Enter') {
+    return '\r'
+  }
+
+  if (event.key === 'Tab') {
+    return '\t'
+  }
+
+  if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    return event.key
+  }
+
+  return data
+}
+
 onMounted(async () => {
   if (!containerRef.value) {
     return
@@ -249,8 +279,13 @@ onMounted(async () => {
   xterm.loadAddon(fitAddon)
   xterm.loadAddon(new WebLinksAddon())
   xterm.open(containerRef.value)
+  xterm.onKey(({ key, domEvent }) => {
+    pendingKeyOverride = resolveKeyOverride(key, domEvent)
+  })
   xterm.onData((data) => {
-    void handleTerminalInput(data)
+    const nextData = pendingKeyOverride ?? data
+    pendingKeyOverride = null
+    void handleTerminalInput(nextData)
   })
 
   outputUnlisten = await listen<TerminalDataEvent>('terminal:data', (event) => {

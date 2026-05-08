@@ -356,7 +356,10 @@ watch(
         >
           {{ t('session.selectedCount', { count: selectedSessionCount }) }}
         </span>
-        <div class="session-batch-bar__actions">
+        <div
+          v-if="hasSelectedSessions"
+          class="session-batch-bar__actions"
+        >
           <button
             class="session-batch-bar__button"
             @click="allVisibleSessionsSelected ? clearSelectedSessions() : selectAllVisibleSessions()"
