@@ -135,6 +135,7 @@ jobs:
       - uses: tauri-apps/tauri-action@v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_OPTIONS: '--max-old-space-size=4096'
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'EasyAgentPilot ${{ github.ref_name }}'
