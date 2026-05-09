@@ -18,7 +18,7 @@ export type SettingsTab =
   | 'unattended'
 
 export type AppMode = 'chat' | 'plan' | 'solo' | 'memory'
-export type MainContentMode = 'chat' | 'fileEditor'
+export type MainContentMode = 'chat' | 'fileEditor' | 'officeViewer'
 
 export const useUIStore = defineStore('ui', () => {
   // State

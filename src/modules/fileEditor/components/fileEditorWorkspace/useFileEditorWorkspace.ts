@@ -44,6 +44,9 @@ export function useFileEditorWorkspace() {
   })
 
   const saveStatusText = computed(() => {
+    if (fileEditorStore.previewMode !== 'editor') {
+      return fileEditorStore.previewMode === 'image' ? '图片预览' : '只读'
+    }
     if (fileEditorStore.isLoading) return '正在加载文件...'
     if (fileEditorStore.isSaving) return '正在保存...'
     if (fileEditorStore.isDirty) return '未保存'

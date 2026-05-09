@@ -145,6 +145,8 @@ pub fn run() {
             commands::project::move_file,
             commands::file_editor::read_project_file,
             commands::file_editor::write_project_file,
+            commands::file_editor::write_binary_file,
+            commands::file_editor::read_binary_file,
             commands::file_editor::detect_file_language,
             commands::lsp::get_lsp_storage_dir,
             commands::lsp::list_lsp_servers,

@@ -1,8 +1,10 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
+import { readFile } from '@tauri-apps/plugin-fs'
 import { useNotificationStore } from '@/stores/notification'
 import { useUIStore } from '@/stores/ui'
 import { getErrorMessage } from '@/utils/api'
+import { isOfficeFile } from '@/modules/officeViewer/types'
 import { readProjectFile, writeProjectFile } from '../services/fileEditorService'
 import type { CompletionEntry, FileEditorOpenInput, MarkdownEditorMode, MonacoLanguageId } from '../types'
 import { resolveFileEditorLanguageState } from './languageState'
@@ -13,6 +15,48 @@ import {
   type FileEditorSelectionRange,
   UNSAVED_CHANGES_CONFIRM
 } from './storeShared'
+
+const IMAGE_EXTENSIONS = new Set([
+  'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg', 'ico', 'tif', 'tiff', 'avif'
+])
+
+const MIME_BY_EXT: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  bmp: 'image/bmp',
+  webp: 'image/webp',
+  svg: 'image/svg+xml',
+  ico: 'image/x-icon',
+  tif: 'image/tiff',
+  tiff: 'image/tiff',
+  avif: 'image/avif',
+}
+
+function getFileExtension(filePath: string): string {
+  const fileName = filePath.split(/[\\/]/).pop() ?? filePath
+  const lastDot = fileName.lastIndexOf('.')
+  if (lastDot < 0 || lastDot === fileName.length - 1) return ''
+  return fileName.slice(lastDot + 1).toLowerCase()
+}
+
+export function isImageFile(filePath: string): boolean {
+  return IMAGE_EXTENSIONS.has(getFileExtension(filePath))
+}
+
+function imageExtToMime(ext: string): string {
+  return MIME_BY_EXT[ext] ?? 'image/png'
+}
+
+let activeImageObjectUrl = ''
+
+function revokeActiveImageUrl(): void {
+  if (activeImageObjectUrl) {
+    URL.revokeObjectURL(activeImageObjectUrl)
+    activeImageObjectUrl = ''
+  }
+}
 
 export const useFileEditorStore = defineStore('fileEditor', () => {
   const uiStore = useUIStore()
@@ -36,6 +80,8 @@ export const useFileEditorStore = defineStore('fileEditor', () => {
   const isLoading = ref(false)
   const isSaving = ref(false)
   const loadError = ref<string | null>(null)
+  const previewMode = ref<'editor' | 'image' | 'unsupported'>('editor')
+  const imageUrl = ref('')
 
   const fileName = computed(() => resolveFileEditorName(activeFilePath.value))
 
@@ -77,6 +123,9 @@ export const useFileEditorStore = defineStore('fileEditor', () => {
     isLoading.value = false
     isSaving.value = false
     loadError.value = null
+    previewMode.value = 'editor'
+    imageUrl.value = ''
+    revokeActiveImageUrl()
   }
 
   const refreshActiveFileLanguage = async (): Promise<void> => {
@@ -94,6 +143,13 @@ export const useFileEditorStore = defineStore('fileEditor', () => {
   }
 
   const openFile = async (input: FileEditorOpenInput): Promise<boolean> => {
+    if (isOfficeFile(input.filePath)) {
+      const { useOfficeViewerStore } = await import('@/modules/officeViewer/stores/officeViewer')
+      const officeStore = useOfficeViewerStore()
+      uiStore.setMainContentMode('officeViewer')
+      return officeStore.openFile(input)
+    }
+
     if (
       activeFilePath.value === input.filePath &&
       activeProjectPath.value === input.projectPath &&
@@ -115,6 +171,45 @@ export const useFileEditorStore = defineStore('fileEditor', () => {
       return false
     }
 
+    if (isImageFile(input.filePath)) {
+      if (!canSwitchFile()) {
+        return false
+      }
+
+      revokeActiveImageUrl()
+      activeProjectId.value = input.projectId
+      activeProjectPath.value = input.projectPath
+      activeFilePath.value = input.filePath
+      content.value = ''
+      originalContent.value = ''
+      fileSizeBytes.value = 0
+      lineCount.value = 0
+      selectedText.value = ''
+      selectionRange.value = null
+      loadError.value = null
+      previewMode.value = 'image'
+      imageUrl.value = ''
+      languageId.value = 'plaintext'
+      strategyId.value = 'plaintext'
+      completionEntries.value = []
+      uiStore.setMainContentMode('fileEditor')
+
+      try {
+        const bytes = await readFile(input.filePath)
+        const ext = getFileExtension(input.filePath)
+        const mime = imageExtToMime(ext)
+        const blob = new Blob([bytes], { type: mime })
+        activeImageObjectUrl = URL.createObjectURL(blob)
+        imageUrl.value = activeImageObjectUrl
+      } catch (error) {
+        previewMode.value = 'unsupported'
+        imageUrl.value = ''
+        loadError.value = getErrorMessage(error)
+      }
+
+      return true
+    }
+
     const previousState = {
       activeProjectId: activeProjectId.value,
       activeProjectPath: activeProjectPath.value,
@@ -133,6 +228,7 @@ export const useFileEditorStore = defineStore('fileEditor', () => {
 
     isLoading.value = true
     loadError.value = null
+    previewMode.value = 'editor'
     activeProjectId.value = input.projectId
     activeProjectPath.value = input.projectPath
     activeFilePath.value = input.filePath
@@ -153,7 +249,6 @@ export const useFileEditorStore = defineStore('fileEditor', () => {
       strategyId.value = languageState.strategyId
       languageId.value = languageState.languageId
       completionEntries.value = languageState.completionEntries
-      // 大文件场景把文件规模暴露给编辑器组件，便于主动关闭高成本能力。
       fileSizeBytes.value = filePayload.sizeBytes
       lineCount.value = filePayload.lineCount
       selectedText.value = ''
@@ -162,6 +257,34 @@ export const useFileEditorStore = defineStore('fileEditor', () => {
       return true
     } catch (error) {
       const message = getErrorMessage(error)
+
+      if (message === 'UNSUPPORTED_IMAGE') {
+        previewMode.value = 'image'
+        loadError.value = null
+        try {
+          const bytes = await readFile(input.filePath)
+          const ext = getFileExtension(input.filePath)
+          const mime = imageExtToMime(ext)
+          const blob = new Blob([bytes], { type: mime })
+          revokeActiveImageUrl()
+          activeImageObjectUrl = URL.createObjectURL(blob)
+          imageUrl.value = activeImageObjectUrl
+        } catch {
+          previewMode.value = 'unsupported'
+          imageUrl.value = ''
+        }
+        return true
+      }
+
+      if (message === 'UNSUPPORTED_BINARY' || message.startsWith('UNSUPPORTED_BINARY:')) {
+        activeProjectId.value = input.projectId
+        activeProjectPath.value = input.projectPath
+        activeFilePath.value = input.filePath
+        previewMode.value = 'unsupported'
+        loadError.value = null
+        return true
+      }
+
       activeProjectId.value = previousState.activeProjectId
       activeProjectPath.value = previousState.activeProjectPath
       activeFilePath.value = previousState.activeFilePath
@@ -259,6 +382,8 @@ export const useFileEditorStore = defineStore('fileEditor', () => {
     isLoading,
     isSaving,
     loadError,
+    previewMode,
+    imageUrl,
     fileName,
     isDirty,
     hasActiveFile,

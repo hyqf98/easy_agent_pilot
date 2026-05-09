@@ -2,6 +2,8 @@
 import { computed, ref, onMounted, nextTick, watch, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSessionStore, type SessionStatus } from '@/stores/session'
+import { useProjectStore } from '@/stores/project'
+import { useLayoutStore } from '@/stores/layout'
 import { useWindowManagerStore } from '@/stores/windowManager'
 import { EaIcon } from '@/components/common'
 import { useMessage } from 'naive-ui'
@@ -9,6 +11,8 @@ import { useSessionView } from '@/composables'
 
 const { t } = useI18n()
 const sessionStore = useSessionStore()
+const projectStore = useProjectStore()
+const layoutStore = useLayoutStore()
 const windowManagerStore = useWindowManagerStore()
 const message = useMessage()
 const { openSessionTarget } = useSessionView()
@@ -139,12 +143,12 @@ const getStatusIcon = (status: SessionStatus): string => {
   }
 }
 
-// 切换到指定会话
 const switchToSession = async (sessionId: string) => {
   if (sessionId === sessionStore.currentSessionId) return
 
   if (sessionStore.isSessionOpen(sessionId)) {
     sessionStore.setCurrentSession(sessionId)
+    syncSidebarToSession(sessionId)
     return
   }
 
@@ -155,6 +159,18 @@ const switchToSession = async (sessionId: string) => {
   } finally {
     switchingTabId.value = null
   }
+}
+
+const syncSidebarToSession = (sessionId: string) => {
+  const session = sessionStore.sessions.find(s => s.id === sessionId)
+  if (!session?.projectId) return
+
+  projectStore.setCurrentProject(session.projectId)
+  if (!projectStore.isProjectExpanded(session.projectId)) {
+    projectStore.expandProject(session.projectId)
+  }
+  layoutStore.setProjectTab(session.projectId, 'sessions')
+  void sessionStore.loadSessions(session.projectId).catch(() => {})
 }
 
 // 关闭指定会话标签

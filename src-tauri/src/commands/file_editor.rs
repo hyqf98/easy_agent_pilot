@@ -4,6 +4,18 @@ use std::path::{Path, PathBuf};
 
 const MAX_EDITABLE_FILE_SIZE: u64 = 2 * 1024 * 1024;
 
+const IMAGE_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "bmp", "webp", "svg", "ico", "tif", "tiff", "avif",
+];
+
+const BINARY_EXTENSIONS: &[&str] = &[
+    "exe", "dll", "so", "dylib", "bin", "dat", "db", "sqlite", "sqlite3",
+    "zip", "tar", "gz", "bz2", "xz", "7z", "rar",
+    "woff", "woff2", "ttf", "otf", "eot",
+    "mp3", "mp4", "wav", "avi", "mov", "mkv", "flv", "wmv",
+    "pdf", "docx", "xlsx", "pptx",
+];
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DetectedLanguage {
@@ -172,11 +184,39 @@ fn detect_language_from_path(path: &str) -> DetectedLanguage {
     }
 }
 
+fn get_file_extension(file_path: &str) -> String {
+    let file_name = file_path.split(|c: char| c == '/' || c == '\\').last().unwrap_or(file_path);
+    let lower = file_name.to_lowercase();
+    let last_dot = lower.rfind('.');
+    match last_dot {
+        Some(pos) if pos < lower.len() - 1 => lower[pos + 1..].to_string(),
+        _ => String::new(),
+    }
+}
+
+fn is_image_extension(ext: &str) -> bool {
+    IMAGE_EXTENSIONS.contains(&ext)
+}
+
+fn is_known_binary_extension(ext: &str) -> bool {
+    BINARY_EXTENSIONS.contains(&ext)
+}
+
 #[tauri::command]
 pub fn read_project_file(
     project_path: String,
     file_path: String,
 ) -> Result<ProjectFileContent, String> {
+    let ext = get_file_extension(&file_path);
+
+    if is_image_extension(&ext) {
+        return Err("UNSUPPORTED_IMAGE".to_string());
+    }
+
+    if is_known_binary_extension(&ext) {
+        return Err("UNSUPPORTED_BINARY".to_string());
+    }
+
     let path = validate_project_file(&project_path, &file_path)?;
     let metadata = fs::metadata(&path).map_err(|e| format!("读取文件元信息失败: {}", e))?;
 
@@ -188,8 +228,13 @@ pub fn read_project_file(
         ));
     }
 
-    let content = fs::read_to_string(&path)
-        .map_err(|e| format!("读取文件失败（仅支持 UTF-8 文本文件）: {}", e))?;
+    let content = fs::read_to_string(&path).map_err(|_| {
+        if ext.is_empty() {
+            "UNSUPPORTED_BINARY".to_string()
+        } else {
+            format!("UNSUPPORTED_BINARY:{}", ext)
+        }
+    })?;
 
     Ok(ProjectFileContent {
         line_count: content.lines().count(),
@@ -207,6 +252,29 @@ pub fn write_project_file(
     let path = validate_project_file(&project_path, &file_path)?;
 
     fs::write(&path, content).map_err(|e| format!("写入文件失败: {}", e))
+}
+
+#[tauri::command]
+pub fn write_binary_file(file_path: String, data: Vec<u8>) -> Result<(), String> {
+    let path = resolve_path(&file_path)?;
+    println!("[write_binary_file] path = {:?}", path);
+    println!("[write_binary_file] data len = {} bytes", data.len());
+    if !data.is_empty() {
+        println!("[write_binary_file] first 20 bytes = {:?}", &data[..data.len().min(20)]);
+    }
+    fs::write(&path, &data).map_err(|e| format!("写入文件失败: {}", e))?;
+    let verify = fs::read(&path).map_err(|e| format!("回读验证失败: {}", e))?;
+    println!("[write_binary_file] verified: file on disk = {} bytes", verify.len());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn read_binary_file(file_path: String) -> Result<Vec<u8>, String> {
+    let path = resolve_path(&file_path)?;
+    if !path.exists() {
+        return Err(format!("文件不存在: {}", file_path));
+    }
+    fs::read(&path).map_err(|e| format!("读取文件失败: {}", e))
 }
 
 #[tauri::command]

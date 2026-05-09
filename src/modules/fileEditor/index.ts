@@ -1,4 +1,4 @@
-export { useFileEditorStore } from './stores/fileEditor'
+export { useFileEditorStore, isImageFile } from './stores/fileEditor'
 export { default as FileEditorWorkspace } from './components/fileEditorWorkspace/FileEditorWorkspace.vue'
 export { openProjectFileInWorkspace } from './services/openProjectFile'
 export { prewarmMonacoEditor } from './monaco/setup'

@@ -15,6 +15,7 @@ import { PlanModePanel } from '@/components/plan'
 import { MemoryModePanel } from '@/components/memory'
 import { SoloModePanel } from '@/components/solo'
 import { FileEditorWorkspace } from '@/modules/fileEditor'
+import { OfficeViewerWorkspace } from '@/modules/officeViewer'
 
 const layoutStore = useLayoutStore()
 const uiStore = useUIStore()
@@ -140,6 +141,10 @@ watch(
             </div>
             <FileEditorWorkspace
               v-show="uiStore.mainContentMode === 'fileEditor'"
+              class="main-layout__file-editor"
+            />
+            <OfficeViewerWorkspace
+              v-show="uiStore.mainContentMode === 'officeViewer'"
               class="main-layout__file-editor"
             />
           </div>

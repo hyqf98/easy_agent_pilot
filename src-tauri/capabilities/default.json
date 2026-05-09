@@ -21,6 +21,14 @@
     "shell:default",
     "fs:default",
     {
+      "identifier": "fs:allow-read-file",
+      "allow": [{ "path": "$HOME/**" }, { "path": "$DESKTOP/**" }, { "path": "$DOCUMENT/**" }, { "path": "$DOWNLOAD/**" }]
+    },
+    {
+      "identifier": "fs:allow-write-file",
+      "allow": [{ "path": "$HOME/**" }, { "path": "$DESKTOP/**" }, { "path": "$DOCUMENT/**" }, { "path": "$DOWNLOAD/**" }]
+    },
+    {
       "identifier": "fs:allow-watch",
       "allow": [{ "path": "$HOME/**" }, { "path": "$DESKTOP/**" }, { "path": "$DOCUMENT/**" }, { "path": "$DOWNLOAD/**" }]
     },
