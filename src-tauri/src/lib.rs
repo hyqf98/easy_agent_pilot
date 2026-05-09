@@ -244,6 +244,9 @@ pub fn run() {
             commands::runtime_log::read_runtime_log_file_command,
             commands::runtime_log::clear_runtime_log_files_command,
             commands::runtime_log::write_runtime_log_command,
+            commands::runtime_log::read_crash_log_command,
+            commands::runtime_log::write_crash_log_command,
+            commands::runtime_log::clear_crash_log_command,
             commands::scan::scan_cli_config,
             commands::scan::scan_claude_mcp_list,
             commands::scan::scan_cli_sessions,
@@ -300,6 +303,7 @@ pub fn run() {
             commands::conversation::executor::is_execution_session_active,
             commands::conversation::abort_cli_execution,
             commands::conversation::abort_sdk_execution,
+            commands::conversation::clear_session_abort_flag,
             // Plan Mode commands
             commands::plan::list_plans,
             commands::plan::get_plan,

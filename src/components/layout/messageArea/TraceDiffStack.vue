@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { EaIcon } from '@/components/common'
 import type { FileEditChangeType, FileEditRange } from '@/types/fileTrace'
@@ -36,6 +36,7 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const beforeScrollRef = ref<HTMLElement | null>(null)
 const afterScrollRef = ref<HTMLElement | null>(null)
+const gutterScrollRef = ref<HTMLElement | null>(null)
 const activeChangeIndex = ref(-1)
 
 function normalizeLines(content: string): string[] {
@@ -159,11 +160,22 @@ const hasChanges = computed(() => changedRowIndices.value.length > 0)
 const handleAcceptLeft = () => emit('acceptLeft')
 const handleAcceptRight = () => emit('acceptRight')
 
+function handleGutterWheel(event: WheelEvent) {
+  event.preventDefault()
+  if (beforeScrollRef.value) {
+    beforeScrollRef.value.scrollTop += event.deltaY
+  }
+}
+
 function handleBeforeScroll() {
   handleScrollSync()
 }
 
 function handleAfterScroll() {
+  if (!afterScrollRef.value) return
+  const top = afterScrollRef.value.scrollTop
+  if (beforeScrollRef.value) beforeScrollRef.value.scrollTop = top
+  if (gutterScrollRef.value) gutterScrollRef.value.scrollTop = top
 }
 
 function findNearestChangeIndex(): number {
@@ -198,6 +210,7 @@ function scrollToRow(rowIndex: number) {
   const top = row.offsetTop - (beforeScrollRef.value.clientHeight / 2) + (row.offsetHeight / 2)
   beforeScrollRef.value.scrollTop = top
   if (afterScrollRef.value) afterScrollRef.value.scrollTop = top
+  if (gutterScrollRef.value) gutterScrollRef.value.scrollTop = top
 }
 
 function handlePrevChange() {
@@ -215,6 +228,17 @@ function handleNextChange() {
   activeChangeIndex.value = target
   scrollToRow(changedRowIndices.value[target])
 }
+
+watch(pairRows, () => {
+  activeChangeIndex.value = -1
+  if (changedRowIndices.value.length === 0) return
+
+  nextTick(() => {
+    const firstChangeIndex = changedRowIndices.value[0]
+    activeChangeIndex.value = 0
+    scrollToRow(firstChangeIndex)
+  })
+}, { immediate: true })
 </script>
 
 <template>
@@ -274,7 +298,11 @@ function handleNextChange() {
         </div>
       </div>
 
-      <div class="diff-view__gutter">
+      <div
+        ref="gutterScrollRef"
+        class="diff-view__gutter"
+        @wheel="handleGutterWheel"
+      >
         <div class="diff-view__panel-head" />
         <template
           v-for="(row, index) in pairRows"
@@ -445,12 +473,17 @@ function handleNextChange() {
 .diff-view__gutter {
   flex-shrink: 0;
   width: 44px;
-  overflow-y: hidden;
+  overflow-y: auto;
   overflow-x: hidden;
   display: flex;
   flex-direction: column;
   border-left: 1px solid rgba(148, 163, 184, 0.1);
   border-right: 1px solid rgba(148, 163, 184, 0.1);
+  scrollbar-width: none;
+}
+
+.diff-view__gutter::-webkit-scrollbar {
+  display: none;
 }
 
 .diff-view__gutter .diff-view__panel-head {

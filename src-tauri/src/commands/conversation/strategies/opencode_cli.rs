@@ -278,6 +278,13 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
             .unwrap_or_else(|| "opencode".to_string());
         let model_id = request.model_id.clone();
         let working_directory = request.working_directory.clone();
+
+        log_info!(
+            "OpenCode CLI | session_id={} | model={} | cwd={}",
+            session_id,
+            model_id.as_deref().unwrap_or("default"),
+            working_directory.as_deref().unwrap_or("-")
+        );
         let mcp_servers = request.mcp_servers.clone();
         let messages = request.messages.clone();
         let extra_cli_args = request.extra_cli_args.clone();
@@ -328,7 +335,7 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
                 args.push("-f".to_string());
                 args.push(path.clone());
             }
-            log_info!("追加 OpenCode CLI 文件参数: -f x{}", file_paths.len());
+            log_debug!("追加 OpenCode CLI 文件参数: -f x{}", file_paths.len());
         }
 
         if !image_paths.is_empty() {
@@ -336,7 +343,7 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
                 args.push("-f".to_string());
                 args.push(path.clone());
             }
-            log_info!("追加 OpenCode CLI 图片参数: -f x{}", image_paths.len());
+            log_debug!("追加 OpenCode CLI 图片参数: -f x{}", image_paths.len());
         }
 
         let resolved_working_dir: Option<String> = working_directory
@@ -349,7 +356,6 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
 
         if let Some(ref work_dir) = resolved_working_dir {
             cmd.current_dir(work_dir);
-            log_info!("设置工作目录: {}", work_dir);
         }
 
         cmd.stdin(Stdio::piped())
@@ -359,28 +365,17 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
         if let Some(servers) = &mcp_servers {
             if !servers.is_empty() {
                 let mcp_config_env = build_opencode_mcp_config_env(servers);
-                log_info!(
-                    "OpenCode MCP 配置 (通过 OPENCODE_CONFIG_CONTENT): {}",
-                    mcp_config_env
-                );
                 cmd.env("OPENCODE_CONFIG_CONTENT", mcp_config_env);
             }
         }
 
         let full_command = build_full_opencode_command(&cli_path, &args, Some(input_text.len()));
-        log_info!("OpenCode CLI command: {}", full_command);
 
         let execution_started_at = Instant::now();
         let monitor = CliExecutionMonitor::new();
         let user_timeout = read_cli_timeout_minutes();
         let timeout_config =
             timeout_config_for_execution_mode(request.execution_mode.as_deref(), user_timeout);
-        log_info!(
-            "OpenCode CLI timeout config: mode={}, user_override={:?}, {}",
-            request.execution_mode.as_deref().unwrap_or("chat"),
-            user_timeout,
-            describe_timeout_config(timeout_config)
-        );
 
         let mut child = cmd.spawn().map_err(|error| {
             anyhow::anyhow!(build_cli_launch_error_message(
@@ -603,11 +598,6 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
             sleep(Duration::from_millis(250)).await;
         };
         let elapsed = execution_started_at.elapsed();
-        log_info!(
-            "OpenCode CLI 进程已退出: exit_code={:?}, elapsed={:.2}s",
-            status.code(),
-            elapsed.as_secs_f64()
-        );
 
         let stdout_outcome = stdout_handle.await?;
         let stderr_outcome = match stderr_handle.await {
@@ -625,7 +615,12 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
 
         let finished_at = Instant::now();
         let summary = build_execution_summary(&monitor.snapshot(), finished_at);
-        log_info!("OpenCode CLI 执行摘要: {}", summary);
+        log_info!(
+            "CLI 执行完成，退出码: {:?}, 耗时: {:.1}s, {}",
+            status.code(),
+            elapsed.as_secs_f64(),
+            summary
+        );
         let abort_requested = should_abort(&session_id).await;
 
         unregister_session_pid(&session_id).await;
@@ -650,17 +645,6 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
         );
         let done_emitted =
             timeout_error_message.is_none() && detected_failure.is_none() && execution_succeeded;
-        log_info!(
-            "OpenCode CLI 终止判定: disposition={}, exit_code={:?}, abort_requested={}, timeout_triggered={}, should_complete_as_success={}, detected_failure={}, done_emitted={}, {}",
-            completion_disposition.as_str(),
-            status.code(),
-            abort_requested,
-            timeout_error_message.is_some(),
-            should_complete_as_success,
-            detected_failure.is_some(),
-            done_emitted,
-            summary
-        );
 
         if done_emitted {
             let done_event = CliStreamEvent {
@@ -682,31 +666,26 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
                 cache_creation_input_tokens: None,
             };
             emit_cli_event(&app, &event_name, plan_id.as_ref(), &done_event);
-            log_info!(
-                "OpenCode CLI done 事件已发送: disposition={}",
-                completion_disposition.as_str()
-            );
         }
 
         clear_abort_flag(&session_id).await;
 
         if let Some(error_message) = timeout_error_message {
-            log_error!(
-                "{}",
-                build_cli_failure_report(
-                    "OpenCode",
-                    &session_id,
-                    &full_command,
-                    working_directory.as_deref(),
-                    &error_message,
-                    &summary,
-                    stdout_outcome.preview.as_deref(),
-                    stderr_outcome.preview.as_deref(),
-                    stdout_outcome.parse_error_count,
-                    stderr_outcome.ignored_warning_count,
-                )
+            let report = build_cli_failure_report(
+                "OpenCode",
+                "软件异常退出",
+                &session_id,
+                &full_command,
+                working_directory.as_deref(),
+                &error_message,
+                &summary,
+                stdout_outcome.preview.as_deref(),
+                stderr_outcome.preview.as_deref(),
+                stdout_outcome.parse_error_count,
+                stderr_outcome.ignored_warning_count,
             );
-            return Err(anyhow::anyhow!(error_message));
+            log_error!("{}", report);
+            return Err(anyhow::anyhow!(report));
         }
 
         if let Some(failure) = detected_failure {
@@ -714,30 +693,33 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
                 let error_event = build_error_event(&session_id, failure.message.clone());
                 emit_cli_event(&app, &event_name, plan_id.as_ref(), &error_event);
             }
-            log_error!(
-                "{}",
-                build_cli_failure_report(
-                    "OpenCode",
-                    &session_id,
-                    &full_command,
-                    working_directory.as_deref(),
-                    &failure.message,
-                    &summary,
-                    stdout_outcome.preview.as_deref(),
-                    stderr_outcome.preview.as_deref(),
-                    stdout_outcome.parse_error_count,
-                    stderr_outcome.ignored_warning_count,
-                )
+            let exit_cause = if abort_requested {
+                "软件异常退出"
+            } else {
+                "CLI异常退出"
+            };
+            let report = build_cli_failure_report(
+                "OpenCode",
+                exit_cause,
+                &session_id,
+                &full_command,
+                working_directory.as_deref(),
+                &failure.message,
+                &summary,
+                stdout_outcome.preview.as_deref(),
+                stderr_outcome.preview.as_deref(),
+                stdout_outcome.parse_error_count,
+                stderr_outcome.ignored_warning_count,
             );
-            return Err(anyhow::anyhow!(failure.message));
+            log_error!("{}", report);
+            return Err(anyhow::anyhow!(report));
         }
 
         if !status.success() {
             if should_complete_as_success {
                 log_info!(
-                    "忽略 OpenCode CLI 非零/空退出码：已收到有效输出，exit_code={:?}, {}",
-                    status.code(),
-                    summary
+                    "忽略非零退出码 {:?}（已收到有效输出）",
+                    status.code()
                 );
                 return Ok(());
             }
@@ -746,22 +728,21 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
                 status.code(),
                 summary
             );
-            log_error!(
-                "{}",
-                build_cli_failure_report(
-                    "OpenCode",
-                    &session_id,
-                    &full_command,
-                    working_directory.as_deref(),
-                    &failure_message,
-                    &summary,
-                    stdout_outcome.preview.as_deref(),
-                    stderr_outcome.preview.as_deref(),
-                    stdout_outcome.parse_error_count,
-                    stderr_outcome.ignored_warning_count,
-                )
+            let report = build_cli_failure_report(
+                "OpenCode",
+                "CLI异常退出",
+                &session_id,
+                &full_command,
+                working_directory.as_deref(),
+                &failure_message,
+                &summary,
+                stdout_outcome.preview.as_deref(),
+                stderr_outcome.preview.as_deref(),
+                stdout_outcome.parse_error_count,
+                stderr_outcome.ignored_warning_count,
             );
-            return Err(anyhow::anyhow!(failure_message));
+            log_error!("{}", report);
+            return Err(anyhow::anyhow!(report));
         }
 
         Ok(())

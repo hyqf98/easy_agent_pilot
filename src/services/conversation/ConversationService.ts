@@ -1,4 +1,5 @@
 import { MANUAL_STOP_ERROR_MARKER, useMessageStore, type Message, type MessageAttachment, type ToolCall } from '@/stores/message'
+import { invoke } from '@tauri-apps/api/core'
 import { useSessionStore, type Session } from '@/stores/session'
 import { useSessionExecutionStore, type ComposerMemoryReference } from '@/stores/sessionExecution'
 import { useProjectStore } from '@/stores/project'
@@ -261,6 +262,7 @@ export class ConversationService {
   private readonly cliRuntimeKeys = ['claude-cli', 'codex-cli', 'opencode-cli'] as const
   private readonly conversationRetryCount = new Map<string, number>()
   private readonly conversationRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly sendEpochs = new Map<string, number>()
 
   private constructor() {}
 
@@ -357,10 +359,14 @@ export class ConversationService {
     }
 
     // 开始发送状态
+    const epoch = (this.sendEpochs.get(sessionId) ?? 0) + 1
+    this.sendEpochs.set(sessionId, epoch)
     this.activeSendSessions.add(sessionId)
     sessionExecutionStore.startSending(sessionId)
     this.clearConversationRetryState(sessionId)
     sessionExecutionStore.clearCurrentRetryState(sessionId)
+
+    await invoke('clear_session_abort_flag', { sessionId }).catch(() => {})
 
     try {
       const existingUserMessageId = options?.existingUserMessageId?.trim()
@@ -597,23 +603,49 @@ export class ConversationService {
 
       await this.syncSessionExecutionBinding(sessionId, executionAgent)
 
-      // 执行对话
-      await this.executeConversation(context, aiMessage, sessionId, targetProject?.id, fallbackContext)
+      await this.executeConversation(context, aiMessage, sessionId, targetProject?.id, fallbackContext, epoch)
       if (shouldTrackSessionScopedPrompts) {
         this.markInjectedSystemMessages(sessionId, sessionScopedPromptCandidates)
       }
 
     } catch (error) {
-      this.finalizeSend(sessionId)
+      if (this.sendEpochs.get(sessionId) === epoch) {
+        this.finalizeSend(sessionId, epoch)
+      }
       throw error
     }
   }
 
-  private finalizeSend(sessionId: string) {
+  private finalizeSend(sessionId: string, expectedEpoch?: number) {
+    if (expectedEpoch !== undefined && this.sendEpochs.get(sessionId) !== expectedEpoch) {
+      return
+    }
     const sessionExecutionStore = useSessionExecutionStore()
     this.activeSendSessions.delete(sessionId)
     sessionExecutionStore.endSending(sessionId)
     void this.processQueuedMessages(sessionId)
+  }
+
+  forceResetSendingState(sessionId: string): void {
+    const messageStore = useMessageStore()
+    const sessionExecutionStore = useSessionExecutionStore()
+
+    agentExecutor.abort(sessionId)
+    this.clearConversationRetryState(sessionId)
+
+    const streamingMessageId = sessionExecutionStore.getExecutionState(sessionId).currentStreamingMessageId
+    if (streamingMessageId) {
+      messageStore.updateMessage(streamingMessageId, {
+        status: 'interrupted',
+        errorMessage: MANUAL_STOP_ERROR_MARKER
+      })
+    }
+
+    this.activeSendSessions.delete(sessionId)
+    sessionExecutionStore.endSending(sessionId)
+
+    const nextEpoch = (this.sendEpochs.get(sessionId) ?? 0) + 1
+    this.sendEpochs.set(sessionId, nextEpoch)
   }
 
   async drainQueue(sessionId: string): Promise<void> {
@@ -887,7 +919,8 @@ export class ConversationService {
     aiMessage: Message,
     sessionId: string,
     projectId?: string,
-    fallbackContext?: ConversationContext
+    fallbackContext?: ConversationContext,
+    epoch?: number
   ): Promise<void> {
     const messageStore = useMessageStore()
     const sessionStore = useSessionStore()
@@ -1306,7 +1339,7 @@ export class ConversationService {
           aiMessage,
           projectId
         )
-        this.finalizeSend(sessionId)
+        this.finalizeSend(sessionId, epoch)
         return
       }
 
@@ -1324,7 +1357,7 @@ export class ConversationService {
       markMetric('persistedAt')
       recordTimingSummary()
       recordUsageOnce(new Date().toISOString())
-      this.finalizeSend(sessionId)
+      this.finalizeSend(sessionId, epoch)
     }
 
     const detectCliFailure = (errorMessage?: string | null): CliFailureMatch | null => {
@@ -1620,7 +1653,6 @@ export class ConversationService {
               toolCalls.splice(0, toolCalls.length, ...finalizedToolCalls)
             }
             syncProcessingTimeNotice()
-            // 更新消息状态
             if (!shouldSurfaceExecutionFailure() && !isAiMessageInterrupted()) {
               bufferMessageUpdate({
                 status: 'completed',
@@ -1635,7 +1667,7 @@ export class ConversationService {
                 accumulatedContent.slice(0, 50)
               )
             }
-            this.finalizeSend(sessionId)
+            this.finalizeSend(sessionId, epoch)
           }
         })
       })
@@ -1664,7 +1696,7 @@ export class ConversationService {
       recordTimingSummary()
 
       // 兜底：部分后端/CLI 场景可能不会显式发出 done 事件，避免状态长期卡在“生成中”
-      if (sessionExecutionStore.getIsSending(sessionId)) {
+      if (sessionExecutionStore.getIsSending(sessionId) && !isAiMessageInterrupted()) {
         markMetric('doneAt')
         const finalizedToolCalls = finalizePendingToolCalls(toolCalls)
         if (finalizedToolCalls !== toolCalls) {
@@ -1690,7 +1722,7 @@ export class ConversationService {
         markMetric('persistedAt')
         recordTimingSummary()
         recordUsageOnce(new Date().toISOString())
-        this.finalizeSend(sessionId)
+        this.finalizeSend(sessionId, epoch)
       }
     } catch (error) {
       const errorMessage = getErrorMessage(error, '对话执行失败')
@@ -1734,7 +1766,7 @@ export class ConversationService {
           status: 'pending'
         })
 
-        return this.executeConversation(fallbackContext!, aiMessage, sessionId, projectId)
+        return this.executeConversation(fallbackContext!, aiMessage, sessionId, projectId, undefined, epoch)
       }
 
       if (isAiMessageInterrupted()) {
@@ -1749,7 +1781,7 @@ export class ConversationService {
         markMetric('persistedAt')
         recordTimingSummary()
         recordUsageOnce(new Date().toISOString())
-        this.finalizeSend(sessionId)
+        this.finalizeSend(sessionId, epoch)
         return
       }
 
@@ -1823,7 +1855,7 @@ export class ConversationService {
           createdAt: new Date().toISOString()
         })
         sessionExecutionStore.startSending(sessionId)
-        await this.executeConversation(context, aiMessage, sessionId, projectId)
+        await this.executeConversation(context, aiMessage, sessionId, projectId, undefined, undefined)
       } catch (retryError) {
         void writeFrontendRuntimeLog(
           'ERROR',
@@ -1989,7 +2021,7 @@ export class ConversationService {
    * @param sessionId 会话 ID
    * @param messageId 可选的消息 ID，用于更新消息状态
    */
-  abort(sessionId: string, messageId?: string): void
+  abort(sessionId: string, messageId?: string): Promise<void>
 
   /**
    * 中断当前执行（向后兼容）
@@ -2000,7 +2032,7 @@ export class ConversationService {
   /**
    * 中断执行的具体实现
    */
-  abort(sessionId?: string, messageId?: string): void {
+  async abort(sessionId?: string, messageId?: string): Promise<void> {
     const messageStore = useMessageStore()
     const sessionExecutionStore = useSessionExecutionStore()
 
@@ -2037,18 +2069,18 @@ export class ConversationService {
       }
 
       // 3. 更新会话执行状态
-      void this.resetSessionRuntimeAfterAbort(sessionId)
-        .catch((error) => {
-          console.warn('[ConversationService] Failed to reset runtime binding after abort:', error)
-        })
-        .finally(() => {
-          this.finalizeSend(sessionId)
-        })
+      try {
+        await this.resetSessionRuntimeAfterAbort(sessionId)
+      } catch (error) {
+        console.warn('[ConversationService] Failed to reset runtime binding after abort:', error)
+      } finally {
+        this.finalizeSend(sessionId)
+      }
     } else {
       // 向后兼容：中断所有正在执行的会话
       const runningIds = sessionExecutionStore.runningSessionIds
       for (const id of runningIds) {
-        this.abort(id)
+        await this.abort(id)
       }
     }
   }

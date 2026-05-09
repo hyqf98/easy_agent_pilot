@@ -1,6 +1,7 @@
 use crate::logging::{
-    clear_runtime_log_files, get_runtime_log_summary, list_runtime_log_files,
-    read_runtime_log_file, write_log, RuntimeLogFileInfo, RuntimeLogReadResult, RuntimeLogSummary,
+    clear_crash_log, clear_runtime_log_files, get_runtime_log_summary, list_runtime_log_files,
+    read_crash_log, read_runtime_log_file, write_crash_log, write_log, CrashLogStatus,
+    RuntimeLogFileInfo, RuntimeLogReadResult, RuntimeLogSummary,
 };
 
 #[tauri::command]
@@ -26,9 +27,6 @@ pub fn clear_runtime_log_files_command() -> Result<usize, String> {
     clear_runtime_log_files().map_err(|error| error.to_string())
 }
 
-/// 从前端补充写入一条运行时日志。
-///
-/// 主要用于记录前端已捕获但后端尚未落盘的异常，便于跨端链路排查。
 #[tauri::command]
 pub fn write_runtime_log_command(
     level: String,
@@ -37,4 +35,28 @@ pub fn write_runtime_log_command(
 ) -> Result<(), String> {
     write_log(level.trim(), target.trim(), message.trim());
     Ok(())
+}
+
+#[tauri::command]
+pub fn read_crash_log_command() -> Result<CrashLogStatus, String> {
+    read_crash_log().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn write_crash_log_command(
+    source: String,
+    message: String,
+    stack_trace: Option<String>,
+) -> Result<(), String> {
+    write_crash_log(
+        source.trim(),
+        message.trim(),
+        stack_trace.as_deref(),
+    );
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_crash_log_command() -> Result<bool, String> {
+    clear_crash_log().map_err(|error| error.to_string())
 }

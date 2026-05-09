@@ -247,6 +247,12 @@ export default {
     confirm: 'Continue Review',
     cancel: 'Not Now'
   },
+  crashNotification: {
+    title: 'Previous Crash Detected',
+    message: 'A {source} occurred during the last run ({time}): {detail}. Crash log has been recorded and can be viewed in Settings > Runtime Logs.',
+    rustPanic: 'backend crash',
+    jsError: 'frontend error'
+  },
 
   // Unified panel
   unified: {
@@ -373,6 +379,7 @@ export default {
     pendingLabel: 'Queued',
     pendingFailed: 'Queued failed',
     pendingEmpty: 'Empty message',
+    sendImmediately: 'Send Now',
     memoryReferencesTitle: 'Referenced memories',
     memorySuggestionEyebrow: 'Memory recall',
     memorySuggestionTitle: 'You mentioned these before. Bring them into this turn?',

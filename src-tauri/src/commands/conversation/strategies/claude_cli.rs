@@ -596,16 +596,13 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
         let model_id = request.model_id.clone();
         let working_directory = request.working_directory.clone();
 
-        // 调试日志：检查收到的消息
-        log_info!("收到的消息数量: {}", request.messages.len());
-        for (i, msg) in request.messages.iter().enumerate() {
-            log_info!(
-                "消息[{}]: role={}, content_len={}",
-                i,
-                msg.role,
-                msg.content.len()
-            );
-        }
+        log_info!(
+            "Claude CLI | session_id={} | model={} | cwd={}",
+            session_id,
+            model_id.as_deref().unwrap_or("default"),
+            working_directory.as_deref().unwrap_or("-")
+        );
+
         let allowed_tools = request.allowed_tools.clone();
         let cli_output_format = request
             .cli_output_format
@@ -667,7 +664,6 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
         if let Some(servers) = &mcp_servers {
             if !servers.is_empty() {
                 let mcp_config = build_mcp_config_json(servers);
-                log_info!("MCP 配置: {}", mcp_config);
                 let file = TempMcpConfigFile::create(&mcp_config).await?;
                 args.push("--mcp-config".to_string());
                 args.push(file.to_path_string());
@@ -700,15 +696,11 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
             .join("\n\n");
 
         let full_command = build_full_claude_command(&cli_path, &args);
-        log_info!("Claude CLI command: {}", full_command);
-        // 执行命令
         let command_args = args.clone();
         let mut cmd = build_tokio_cli_command(&cli_path, &command_args);
 
-        // 设置工作目录，确保文件读写操作在指定目录下进行
         if let Some(ref work_dir) = resolved_working_dir {
             cmd.current_dir(work_dir);
-            log_info!("设置工作目录: {}", work_dir);
         }
 
         cmd.stdin(Stdio::piped())
@@ -721,12 +713,6 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
         let user_timeout = read_cli_timeout_minutes();
         let timeout_config =
             timeout_config_for_execution_mode(request.execution_mode.as_deref(), user_timeout);
-        log_info!(
-            "Claude CLI timeout config: mode={}, user_override={:?}, {}",
-            request.execution_mode.as_deref().unwrap_or("chat"),
-            user_timeout,
-            describe_timeout_config(timeout_config)
-        );
         let mut child = cmd.spawn().map_err(|error| {
             anyhow::anyhow!(build_cli_launch_error_message(
                 "Claude",
@@ -1014,11 +1000,6 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
             sleep(Duration::from_millis(250)).await;
         };
         let elapsed = execution_started_at.elapsed();
-        log_info!(
-            "CLI 进程已退出: exit_code={:?}, elapsed={:.2}s",
-            status.code(),
-            elapsed.as_secs_f64()
-        );
 
         // 等待输出处理完成
         let stdout_outcome = stdout_handle.await?;
@@ -1037,7 +1018,12 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
 
         let finished_at = Instant::now();
         let summary = build_execution_summary(&monitor.snapshot(), finished_at);
-        log_info!("CLI 执行摘要: {}", summary);
+        log_info!(
+            "CLI 执行完成，退出码: {:?}, 耗时: {:.1}s, {}",
+            status.code(),
+            elapsed.as_secs_f64(),
+            summary
+        );
         let abort_requested = should_abort(&session_id).await;
 
         // 注销进程 PID
@@ -1063,17 +1049,6 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
         );
         let done_emitted =
             timeout_error_message.is_none() && detected_failure.is_none() && execution_succeeded;
-        log_info!(
-            "CLI 终止判定: disposition={}, exit_code={:?}, abort_requested={}, timeout_triggered={}, should_complete_as_success={}, detected_failure={}, done_emitted={}, {}",
-            completion_disposition.as_str(),
-            status.code(),
-            abort_requested,
-            timeout_error_message.is_some(),
-            should_complete_as_success,
-            detected_failure.is_some(),
-            done_emitted,
-            summary
-        );
 
         if done_emitted {
             let done_event = CliStreamEvent {
@@ -1095,10 +1070,6 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                 cache_creation_input_tokens: None,
             };
             emit_cli_event(&app, &event_name, plan_id.as_ref(), &done_event);
-            log_info!(
-                "CLI done 事件已发送: disposition={}",
-                completion_disposition.as_str()
-            );
         }
 
         // 清理中断标志
@@ -1106,22 +1077,21 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
         drop(mcp_config_file);
 
         if let Some(error_message) = timeout_error_message {
-            log_error!(
-                "{}",
-                build_cli_failure_report(
-                    "Claude",
-                    &session_id,
-                    &full_command,
-                    resolved_working_dir.as_deref(),
-                    &error_message,
-                    &summary,
-                    stdout_outcome.preview.as_deref(),
-                    stderr_outcome.preview.as_deref(),
-                    stdout_outcome.parse_error_count,
-                    stderr_outcome.ignored_warning_count,
-                )
+            let report = build_cli_failure_report(
+                "Claude",
+                "软件异常退出",
+                &session_id,
+                &full_command,
+                resolved_working_dir.as_deref(),
+                &error_message,
+                &summary,
+                stdout_outcome.preview.as_deref(),
+                stderr_outcome.preview.as_deref(),
+                stdout_outcome.parse_error_count,
+                stderr_outcome.ignored_warning_count,
             );
-            return Err(anyhow::anyhow!(error_message));
+            log_error!("{}", report);
+            return Err(anyhow::anyhow!(report));
         }
 
         if let Some(failure) = detected_failure {
@@ -1129,50 +1099,52 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                 let error_event = build_error_event(&session_id, failure.message.clone());
                 emit_cli_event(&app, &event_name, plan_id.as_ref(), &error_event);
             }
-            log_error!(
-                "{}",
-                build_cli_failure_report(
-                    "Claude",
-                    &session_id,
-                    &full_command,
-                    resolved_working_dir.as_deref(),
-                    &failure.message,
-                    &summary,
-                    stdout_outcome.preview.as_deref(),
-                    stderr_outcome.preview.as_deref(),
-                    stdout_outcome.parse_error_count,
-                    stderr_outcome.ignored_warning_count,
-                )
+            let exit_cause = if abort_requested {
+                "软件异常退出"
+            } else {
+                "CLI异常退出"
+            };
+            let report = build_cli_failure_report(
+                "Claude",
+                exit_cause,
+                &session_id,
+                &full_command,
+                resolved_working_dir.as_deref(),
+                &failure.message,
+                &summary,
+                stdout_outcome.preview.as_deref(),
+                stderr_outcome.preview.as_deref(),
+                stdout_outcome.parse_error_count,
+                stderr_outcome.ignored_warning_count,
             );
-            return Err(anyhow::anyhow!(failure.message));
+            log_error!("{}", report);
+            return Err(anyhow::anyhow!(report));
         }
 
         if !status.success() {
             if should_complete_as_success {
                 log_info!(
-                    "忽略 CLI 非零/空退出码：已收到有效输出，exit_code={:?}, {}",
-                    status.code(),
-                    summary
+                    "忽略非零退出码 {:?}（已收到有效输出）",
+                    status.code()
                 );
                 return Ok(());
             }
             let failure_message = format!("CLI 执行失败，退出码: {:?}, {}", status.code(), summary);
-            log_error!(
-                "{}",
-                build_cli_failure_report(
-                    "Claude",
-                    &session_id,
-                    &full_command,
-                    resolved_working_dir.as_deref(),
-                    &failure_message,
-                    &summary,
-                    stdout_outcome.preview.as_deref(),
-                    stderr_outcome.preview.as_deref(),
-                    stdout_outcome.parse_error_count,
-                    stderr_outcome.ignored_warning_count,
-                )
+            let report = build_cli_failure_report(
+                "Claude",
+                "CLI异常退出",
+                &session_id,
+                &full_command,
+                resolved_working_dir.as_deref(),
+                &failure_message,
+                &summary,
+                stdout_outcome.preview.as_deref(),
+                stderr_outcome.preview.as_deref(),
+                stdout_outcome.parse_error_count,
+                stderr_outcome.ignored_warning_count,
             );
-            return Err(anyhow::anyhow!(failure_message));
+            log_error!("{}", report);
+            return Err(anyhow::anyhow!(report));
         }
 
         Ok(())

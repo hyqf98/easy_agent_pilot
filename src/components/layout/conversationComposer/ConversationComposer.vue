@@ -104,6 +104,7 @@ const {
   retryQueuedMessage,
   rootRef,
   saveQueuedMessageEdit,
+  sendImmediatelyQueuedMessage,
   selectedModelId,
   selectAgent,
   selectModel,
@@ -376,6 +377,17 @@ defineExpose({
             </div>
           </div>
           <div class="conversation-composer__queue-actions">
+            <button
+              v-if="editingQueuedDraftId !== draft.id"
+              class="conversation-composer__queue-action"
+              :title="t('message.sendImmediately')"
+              @click="sendImmediatelyQueuedMessage(draft.id)"
+            >
+              <EaIcon
+                name="send"
+                :size="12"
+              />
+            </button>
             <button
               v-if="editingQueuedDraftId !== draft.id"
               class="conversation-composer__queue-action"

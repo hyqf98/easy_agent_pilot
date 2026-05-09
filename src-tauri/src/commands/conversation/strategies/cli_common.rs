@@ -398,6 +398,7 @@ pub fn build_execution_summary(snapshot: &CliExecutionSnapshot, finished_at: Ins
 
 pub fn build_cli_failure_report(
     provider: &str,
+    exit_cause: &str,
     session_id: &str,
     command: &str,
     working_directory: Option<&str>,
@@ -410,6 +411,7 @@ pub fn build_cli_failure_report(
 ) -> String {
     let mut segments = vec![
         format!("{provider} CLI failure"),
+        format!("cause={}", exit_cause),
         format!("session_id={session_id}"),
         format!("reason={}", preview_text(failure_reason, 240)),
         format!("summary={summary}"),
@@ -442,8 +444,8 @@ pub fn build_cli_failure_report(
         .filter(|value| !value.is_empty())
     {
         segments.push(format!(
-            "stdout_preview={}",
-            preview_text(stdout_preview, 240)
+            "stdout_last={}",
+            preview_text(stdout_preview, 300)
         ));
     }
 
@@ -452,8 +454,8 @@ pub fn build_cli_failure_report(
         .filter(|value| !value.is_empty())
     {
         segments.push(format!(
-            "stderr_preview={}",
-            preview_text(stderr_preview, 240)
+            "stderr_last={}",
+            preview_text(stderr_preview, 500)
         ));
     }
 
@@ -1154,9 +1156,9 @@ fn extract_tool_output_from_result(parsed: &serde_json::Value) -> Option<String>
 #[cfg(test)]
 mod tests {
     use super::{
-        build_timeout_error_message, describe_timeout_config, detect_cli_timeout,
-        extract_runtime_system_notice, timeout_config_for_execution_mode, CliExecutionSnapshot,
-        CliTimeoutConfig, CliTimeoutKind,
+        build_timeout_error_message, classify_cli_completion_disposition,
+        describe_timeout_config, detect_cli_timeout, extract_runtime_system_notice,
+        timeout_config_for_execution_mode, CliExecutionSnapshot, CliTimeoutConfig, CliTimeoutKind,
     };
     use std::time::{Duration, Instant};
 

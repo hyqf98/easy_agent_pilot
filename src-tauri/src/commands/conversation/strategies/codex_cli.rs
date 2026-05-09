@@ -413,8 +413,6 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         let session_id = request.session_id.clone();
         let event_name = self.kind().event_name(&session_id);
 
-        log_info!("开始执行 Codex CLI, session_id: {}", session_id);
-
         // 重置中断标志
         set_abort_flag(&session_id, false).await;
 
@@ -429,6 +427,13 @@ impl AgentExecutionStrategy for CodexCliStrategy {
             .cli_output_format
             .clone()
             .unwrap_or_else(|| "stream-json".to_string());
+
+        log_info!(
+            "Codex CLI | session_id={} | model={} | cwd={}",
+            session_id,
+            model_id.as_deref().unwrap_or("default"),
+            working_directory.as_deref().unwrap_or("-")
+        );
         let json_schema = request.json_schema.clone();
         let extra_cli_args = request.extra_cli_args.clone();
         let messages = request.messages.clone();
@@ -490,7 +495,7 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         // Codex CLI 0.115.x 不支持 `--mcp-config`，MCP 需要依赖其原生配置文件。
         if let Some(servers) = &mcp_servers {
             if !servers.is_empty() {
-                log_info!(
+                log_debug!(
                     "检测到 {} 个 MCP 配置；当前 Codex CLI 版本不注入 --mcp-config，改为依赖本地 Codex 配置文件",
                     servers.len()
                 );
@@ -512,7 +517,7 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         if let Some(custom_args) = &extra_cli_args {
             if !custom_args.is_empty() {
                 args.extend(custom_args.iter().cloned());
-                log_info!("追加自定义 CLI 参数: {:?}", custom_args);
+                log_debug!("追加自定义 CLI 参数: {:?}", custom_args);
             }
         }
 
@@ -523,7 +528,7 @@ impl AgentExecutionStrategy for CodexCliStrategy {
                 args.push("-i".to_string());
                 args.push(path.clone());
             }
-            log_info!("追加 Codex CLI 图片参数: -i x{}", image_paths.len());
+            log_debug!("追加 Codex CLI 图片参数: -i x{}", image_paths.len());
         }
 
         // 构建输入消息
@@ -540,7 +545,6 @@ impl AgentExecutionStrategy for CodexCliStrategy {
 
         // 构建完整命令（用于日志）
         let full_command = build_full_codex_command(&cli_path, &global_args, &args);
-        log_info!("Codex CLI command: {}", full_command);
 
         // 执行命令
         let mut command_args = global_args.clone();
@@ -553,7 +557,6 @@ impl AgentExecutionStrategy for CodexCliStrategy {
             let trimmed_dir = working_dir.trim();
             if !trimmed_dir.is_empty() {
                 cmd.current_dir(trimmed_dir);
-                log_info!("设置工作目录: {}", trimmed_dir);
             }
         }
 
@@ -565,22 +568,13 @@ impl AgentExecutionStrategy for CodexCliStrategy {
 
         for (env_key, env_value) in load_codex_runtime_auth_env(&codex_runtime_home) {
             cmd.env(&env_key, &env_value);
-            log_info!("注入 Codex 认证环境变量: {}", env_key);
         }
-
-        log_info!("设置 CODEX_HOME: {}", codex_runtime_home.to_string_lossy());
 
         let execution_started_at = Instant::now();
         let monitor = CliExecutionMonitor::new();
         let user_timeout = read_cli_timeout_minutes();
         let timeout_config =
             timeout_config_for_execution_mode(request.execution_mode.as_deref(), user_timeout);
-        log_info!(
-            "Codex CLI timeout config: mode={}, user_override={:?}, {}",
-            request.execution_mode.as_deref().unwrap_or("chat"),
-            user_timeout,
-            describe_timeout_config(timeout_config)
-        );
         let mut child = cmd.spawn().map_err(|error| {
             anyhow::anyhow!(build_cli_launch_error_message(
                 "Codex",
@@ -866,11 +860,6 @@ impl AgentExecutionStrategy for CodexCliStrategy {
             sleep(Duration::from_millis(250)).await;
         };
         let elapsed = execution_started_at.elapsed();
-        log_info!(
-            "CLI 进程已退出: exit_code={:?}, elapsed={:.2}s",
-            status.code(),
-            elapsed.as_secs_f64()
-        );
 
         // 等待输出处理完成
         let stdout_outcome = match stdout_handle.await {
@@ -895,7 +884,12 @@ impl AgentExecutionStrategy for CodexCliStrategy {
 
         let finished_at = Instant::now();
         let summary = build_execution_summary(&monitor.snapshot(), finished_at);
-        log_info!("CLI 执行摘要: {}", summary);
+        log_info!(
+            "CLI 执行完成，退出码: {:?}, 耗时: {:.1}s, {}",
+            status.code(),
+            elapsed.as_secs_f64(),
+            summary
+        );
         let abort_requested = should_abort(&session_id).await;
 
         let should_treat_failure_as_success =
@@ -918,17 +912,6 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         );
         let done_emitted =
             timeout_error_message.is_none() && detected_failure.is_none() && execution_succeeded;
-        log_info!(
-            "CLI 终止判定: disposition={}, exit_code={:?}, abort_requested={}, timeout_triggered={}, should_complete_as_success={}, detected_failure={}, done_emitted={}, {}",
-            completion_disposition.as_str(),
-            status.code(),
-            abort_requested,
-            timeout_error_message.is_some(),
-            should_complete_as_success,
-            detected_failure.is_some(),
-            done_emitted,
-            summary
-        );
 
         if done_emitted {
             let discovered_session_id = if resume_session_id.is_none() {
@@ -959,11 +942,9 @@ impl AgentExecutionStrategy for CodexCliStrategy {
                 cache_creation_input_tokens: None,
             };
             emit_cli_event(&app, &event_name, plan_id.as_ref(), &done_event);
-            log_info!(
-                "CLI done 事件已发送: disposition={}, external_session_id={:?}",
-                completion_disposition.as_str(),
-                discovered_session_id_for_log
-            );
+            if let Some(ref sid) = discovered_session_id_for_log {
+                log_info!("Codex session ID: {}", sid);
+            }
         }
 
         // 注销进程 PID
@@ -975,22 +956,21 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         drop(schema_file);
 
         if let Some(error_message) = timeout_error_message {
-            log_error!(
-                "{}",
-                build_cli_failure_report(
-                    "Codex",
-                    &session_id,
-                    &full_command,
-                    working_directory.as_deref(),
-                    &error_message,
-                    &summary,
-                    stdout_outcome.preview.as_deref(),
-                    stderr_outcome.preview.as_deref(),
-                    stdout_outcome.parse_error_count,
-                    stderr_outcome.ignored_warning_count,
-                )
+            let report = build_cli_failure_report(
+                "Codex",
+                "软件异常退出",
+                &session_id,
+                &full_command,
+                working_directory.as_deref(),
+                &error_message,
+                &summary,
+                stdout_outcome.preview.as_deref(),
+                stderr_outcome.preview.as_deref(),
+                stdout_outcome.parse_error_count,
+                stderr_outcome.ignored_warning_count,
             );
-            return Err(anyhow::anyhow!(error_message));
+            log_error!("{}", report);
+            return Err(anyhow::anyhow!(report));
         }
 
         if let Some(failure) = detected_failure {
@@ -998,31 +978,34 @@ impl AgentExecutionStrategy for CodexCliStrategy {
                 let error_event = build_error_event(&session_id, failure.message.clone());
                 emit_cli_event(&app, &event_name, plan_id.as_ref(), &error_event);
             }
-            log_error!(
-                "{}",
-                build_cli_failure_report(
-                    "Codex",
-                    &session_id,
-                    &full_command,
-                    working_directory.as_deref(),
-                    &failure.message,
-                    &summary,
-                    stdout_outcome.preview.as_deref(),
-                    stderr_outcome.preview.as_deref(),
-                    stdout_outcome.parse_error_count,
-                    stderr_outcome.ignored_warning_count,
-                )
+            let exit_cause = if abort_requested {
+                "软件异常退出"
+            } else {
+                "CLI异常退出"
+            };
+            let report = build_cli_failure_report(
+                "Codex",
+                exit_cause,
+                &session_id,
+                &full_command,
+                working_directory.as_deref(),
+                &failure.message,
+                &summary,
+                stdout_outcome.preview.as_deref(),
+                stderr_outcome.preview.as_deref(),
+                stdout_outcome.parse_error_count,
+                stderr_outcome.ignored_warning_count,
             );
-            return Err(anyhow::anyhow!(failure.message));
+            log_error!("{}", report);
+            return Err(anyhow::anyhow!(report));
         }
 
         if !status.success() {
             if should_complete_as_success {
-                log_info!(
-                    "忽略 CLI 非零/空退出码：已收到有效输出，exit_code={:?}, {}",
-                    status.code(),
-                    summary
-                );
+            log_info!(
+                "忽略非零退出码 {:?}（已收到有效输出）",
+                status.code()
+            );
                 return Ok(());
             }
             let failure_message = format!(
@@ -1030,22 +1013,21 @@ impl AgentExecutionStrategy for CodexCliStrategy {
                 status.code(),
                 summary
             );
-            log_error!(
-                "{}",
-                build_cli_failure_report(
-                    "Codex",
-                    &session_id,
-                    &full_command,
-                    working_directory.as_deref(),
-                    &failure_message,
-                    &summary,
-                    stdout_outcome.preview.as_deref(),
-                    stderr_outcome.preview.as_deref(),
-                    stdout_outcome.parse_error_count,
-                    stderr_outcome.ignored_warning_count,
-                )
+            let report = build_cli_failure_report(
+                "Codex",
+                "CLI异常退出",
+                &session_id,
+                &full_command,
+                working_directory.as_deref(),
+                &failure_message,
+                &summary,
+                stdout_outcome.preview.as_deref(),
+                stderr_outcome.preview.as_deref(),
+                stdout_outcome.parse_error_count,
+                stderr_outcome.ignored_warning_count,
             );
-            return Err(anyhow::anyhow!(failure_message));
+            log_error!("{}", report);
+            return Err(anyhow::anyhow!(report));
         }
 
         Ok(())

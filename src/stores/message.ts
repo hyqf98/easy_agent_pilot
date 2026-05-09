@@ -771,6 +771,21 @@ export const useMessageStore = defineStore('message', () => {
           undefined,
           restoredOccupancy ?? undefined
         )
+      } else if (sessionProvider && session) {
+        const snapshot = await readSessionCliUsageSnapshot(session)
+        if (snapshot) {
+          const occupancy = snapshot.contextWindowOccupancy
+            ?? (snapshot.inputTokens + snapshot.outputTokens)
+          tokenStore.updateRealtimeTokens(
+            sessionId,
+            snapshot.inputTokens || undefined,
+            snapshot.outputTokens || undefined,
+            snapshot.model,
+            occupancy || undefined
+          )
+        } else {
+          tokenStore.clearRealtimeTokens(sessionId)
+        }
       } else {
         tokenStore.clearRealtimeTokens(sessionId)
       }

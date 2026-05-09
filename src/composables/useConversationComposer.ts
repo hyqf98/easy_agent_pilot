@@ -1784,6 +1784,93 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     }
   }
 
+  const sendImmediatelyQueuedMessage = async (draftId: string) => {
+    const sessionId = currentSessionId.value
+    if (!sessionId) {
+      return
+    }
+
+    const state = sessionExecutionStore.getExecutionState(sessionId)
+    const draft = state.queuedMessages.find(item => item.id === draftId)
+    if (!draft || draft.status !== 'queued') {
+      return
+    }
+
+    if (state.isSending || state.isStreaming || state.isQueueDraining) {
+      conversationService.forceResetSendingState(sessionId)
+    }
+
+    sessionExecutionStore.removeQueuedMessage(sessionId, draftId)
+
+    const sessionStore = useSessionStore()
+    const targetSession = sessionStore.sessions.find(session => session.id === sessionId) || null
+    const expert = resolveExpertById(draft.expertId, agentTeamsStore.experts)
+    const runtime = resolveExpertRuntime(expert, agentStore.agents)
+    const executionAgent = runtime?.agent
+      ? {
+          ...runtime.agent,
+          modelId: draft.modelId || runtime.modelId || runtime.agent.modelId
+        }
+      : null
+
+    if (!expert || !executionAgent) {
+      sessionExecutionStore.restoreQueuedMessage(sessionId, { ...draft, status: 'failed', errorMessage: '未找到可用专家运行时' })
+      return
+    }
+
+    const availability = conversationService.isAgentAvailable(executionAgent)
+    if (!availability.available) {
+      sessionExecutionStore.restoreQueuedMessage(sessionId, { ...draft, status: 'failed', errorMessage: availability.reason || '当前专家运行时不可用' })
+      return
+    }
+
+    dispatchingSessionId.value = sessionId
+
+    try {
+      if (targetSession?.expertId !== expert.id || targetSession?.agentId !== executionAgent.id) {
+        await sessionStore.updateSession(sessionId, {
+          expertId: expert.id,
+          agentId: executionAgent.id,
+          agentType: executionAgent.provider || executionAgent.type || 'claude',
+          cliSessionId: '',
+          cliSessionProvider: ''
+        })
+      }
+
+      await conversationService.sendMessage(
+        sessionId,
+        draft.content,
+        executionAgent.id,
+        targetSession?.projectId,
+        draft.attachments,
+        {
+          workingDirectory: currentWorkingDirectory.value || currentProjectPath.value || undefined,
+          modelId: draft.modelId || undefined,
+          injectedSystemMessages: [buildExpertSystemPrompt(expert.prompt)],
+          previewContent: draft.displayContent,
+          memoryReferencesToPersist: draft.memoryReferences ?? []
+        }
+      )
+    } catch (error) {
+      console.error('Failed to send queued message immediately:', error)
+      const normalizedError = error instanceof Error
+        ? error
+        : new Error(getErrorMessage(error, '立即发送失败'))
+      void writeFrontendRuntimeLog(
+        'ERROR',
+        'conversation-composer',
+        `sendImmediatelyQueuedMessage failed | sessionId=${sessionId} | draftId=${draftId} | error=${normalizedError.message}`,
+        error
+      )
+      notificationStore.smartError('立即发送失败', normalizedError)
+      sessionExecutionStore.endSending(sessionId)
+    } finally {
+      if (dispatchingSessionId.value === sessionId) {
+        dispatchingSessionId.value = null
+      }
+    }
+  }
+
   const getExecutionAgentConfig = () => {
     if (!currentAgent.value) {
       return null
@@ -2463,6 +2550,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     renderLayerRef,
     restorePendingImages,
     retryQueuedMessage,
+    sendImmediatelyQueuedMessage,
     selectedModelId,
     selectAgent,
     selectModel,

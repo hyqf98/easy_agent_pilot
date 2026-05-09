@@ -91,14 +91,31 @@ export abstract class BaseAgentStrategy implements AgentStrategy {
     const execution = this.createExecution(context.sessionId)
 
     try {
+      const registeredAt = Date.now()
+
       execution.unlistenStream = await listen<BackendStreamEvent>(
         this.getEventName(context.sessionId),
         (event) => {
           const streamEvent = this.transformEvent(event.payload)
-          if (streamEvent) {
-            this.recordEventState(execution.eventState, streamEvent)
-            onEvent(streamEvent)
+          if (!streamEvent) {
+            return
           }
+
+          if (
+            streamEvent.type === 'done'
+            && !execution.eventState.sawMeaningfulOutput
+            && Date.now() - registeredAt < 200
+          ) {
+            console.warn('[AI Execute] dropping stale done event', {
+              provider: this.name,
+              sessionId: context.sessionId,
+              elapsedMs: Date.now() - registeredAt
+            })
+            return
+          }
+
+          this.recordEventState(execution.eventState, streamEvent)
+          onEvent(streamEvent)
         }
       )
 

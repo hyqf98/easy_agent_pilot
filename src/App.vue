@@ -15,9 +15,11 @@ import { usePlanStore } from './stores/plan'
 import { useTaskStore } from './stores/task'
 import { useTaskExecutionStore } from './stores/taskExecution'
 import { useUnattendedStore } from './stores/unattended'
+import { useNotificationStore } from './stores/notification'
 import { useConfirmDialog, useWindowEvents } from './composables'
 import { useMiniPanelShortcut } from './composables/useMiniPanelShortcut'
 import { createMockUpdaterAdapter } from './services/appUpdate'
+import { readCrashLog, writeCrashLog, clearCrashLog } from './services/runtimeLog/crashLog'
 import { SettingsModal } from './components/settings'
 import { EaToast, EaLoadingOverlay, EaConfirmDialog } from './components/common'
 
@@ -34,9 +36,65 @@ const planStore = usePlanStore()
 const taskStore = useTaskStore()
 const taskExecutionStore = useTaskExecutionStore()
 const unattendedStore = useUnattendedStore()
+const notificationStore = useNotificationStore()
 const confirmDialog = useConfirmDialog()
 const confirmDialogState = confirmDialog.state
 const { t, locale } = useI18n()
+
+function installGlobalCrashHandlers() {
+  const originalOnError = window.onerror
+  window.onerror = (event, source, lineno, colno, error) => {
+    const message = typeof event === 'string' ? event : String(event)
+    const location = source ? `${source}:${lineno}:${colno}` : 'unknown'
+    const stackTrace = error?.stack ?? undefined
+    void writeCrashLog('js-error', `${message}\nLocation: ${location}`, stackTrace)
+    if (originalOnError) {
+      return originalOnError(event, source, lineno, colno, error)
+    }
+    return false
+  }
+
+  window.addEventListener('unhandledrejection', (event: PromiseRejectionEvent) => {
+    const reason = event.reason
+    const message = reason instanceof Error ? reason.message : String(reason)
+    const stackTrace = reason instanceof Error ? reason.stack : undefined
+    void writeCrashLog('js-unhandled-rejection', message, stackTrace)
+  })
+}
+
+async function checkAndNotifyCrashOnStartup() {
+  if (!windowManagerStore.isMainWindow) {
+    return
+  }
+
+  try {
+    const status = await readCrashLog()
+    if (!status.hasCrashLog || status.entries.length === 0) {
+      return
+    }
+
+    const latestEntry = status.entries[status.entries.length - 1]
+    const sourceLabel = latestEntry.source === 'rust-panic'
+      ? t('crashNotification.rustPanic')
+      : t('crashNotification.jsError')
+    const timeLabel = latestEntry.timestamp
+      ? new Date(latestEntry.timestamp).toLocaleString(locale.value === 'zh-CN' ? 'zh-CN' : 'en-US')
+      : ''
+
+    notificationStore.warning(
+      t('crashNotification.title'),
+      t('crashNotification.message', {
+        source: sourceLabel,
+        time: timeLabel,
+        detail: latestEntry.message.slice(0, 200)
+      })
+    )
+
+    await clearCrashLog()
+  } catch {
+    // crash log is best-effort, never block startup
+  }
+}
 
 useWindowEvents()
 useMiniPanelShortcut()
@@ -207,6 +265,8 @@ async function promptInterruptedPlanRecovery(projectId: string | null) {
 }
 
 onMounted(async () => {
+  installGlobalCrashHandlers()
+
   await windowManagerStore.initWindowContext()
   await themeStore.loadTheme()
   await settingsStore.loadSettings()
@@ -266,6 +326,8 @@ onMounted(async () => {
   }
 
   await promptInterruptedPlanRecovery(projectStore.currentProjectId)
+
+  await checkAndNotifyCrashOnStartup()
 
   if (windowManagerStore.isMainWindow) {
     registerDevAppUpdateHooks()

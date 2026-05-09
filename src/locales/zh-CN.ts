@@ -170,9 +170,15 @@ const zhCN = {
   planRecovery: {
     ...enUS.planRecovery,
     title: '检测到中断的计划执行',
-    message: '计划“{name}”在 {time} 前仍有执行中的任务。是否跳转到计划面板继续查看？',
+    message: '计划"{name}"在 {time} 前仍有执行中的任务。是否跳转到计划面板继续查看？',
     confirm: '继续查看',
     cancel: '暂不处理'
+  },
+  crashNotification: {
+    title: '检测到上次异常退出',
+    message: '上次运行时发生了 {source}（{time}）：{detail}。崩溃日志已记录，可在"设置 > 运行日志"中查看。',
+    rustPanic: '后端崩溃',
+    jsError: '前端异常'
   },
   unified: {
     sessions: '会话',
@@ -288,6 +294,7 @@ const zhCN = {
     pendingLabel: '待发送',
     pendingFailed: '发送失败',
     pendingEmpty: '空消息',
+    sendImmediately: '立即发送',
     memoryReferencesTitle: '已引用记忆',
     memorySuggestionEyebrow: '记忆召回',
     memorySuggestionTitle: '你之前提过这些内容，要不要带上？',

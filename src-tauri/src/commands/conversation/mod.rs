@@ -73,3 +73,10 @@ pub async fn abort_sdk_execution(session_id: String) -> Result<(), String> {
     set_abort_flag(&session_id, true).await;
     Ok(())
 }
+
+/// 清除中断标志（新执行开始前调用，防止残留标志影响新执行）
+#[tauri::command]
+pub async fn clear_session_abort_flag(session_id: String) -> Result<(), String> {
+    abort::clear_abort_flag(&session_id).await;
+    Ok(())
+}

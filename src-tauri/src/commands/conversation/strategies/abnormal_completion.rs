@@ -130,7 +130,12 @@ pub fn classify_cli_completion(
 ) -> Option<CliCompletionFailure> {
     let has_primary_response = has_primary_response_content(fragments);
 
+    // Pass 1: structured sources (stdout JSON — Content, Error, ToolResult, System)
+    // These are controlled-format errors the CLI intentionally reported.
     for fragment in fragments {
+        if fragment.source == CliTextSource::Stderr {
+            continue;
+        }
         if is_shared_benign_stderr_warning(&fragment.text) {
             continue;
         }
@@ -163,10 +168,48 @@ pub fn classify_cli_completion(
         }
     }
 
+    // Pass 2: stderr source → retryable by default
+    //
+    // Stderr contains unstructured OS/process-level errors: pipe closures, Rust panics,
+    // OS error codes, locale-dependent messages (e.g. Windows Chinese error text), etc.
+    // These are inherently platform-dependent and cannot be reliably matched by string
+    // patterns. Instead of maintaining an ever-growing list of error messages across all
+    // platforms and languages, we treat ANY error-like stderr content as a retryable
+    // infrastructure failure — because:
+    //   1. If the CLI has a meaningful error to report (auth, config, model-not-found),
+    //      it reports it through structured stdout JSON, not raw stderr.
+    //   2. Raw stderr errors are almost always transient infrastructure issues
+    //      (pipe closure, process crash, encoding error, signal, etc.).
+    //   3. False-positive retry (retrying when it won't help) is far less harmful than
+    //      false-negative (refusing to retry a transient issue).
+    if !has_primary_response {
+        for fragment in fragments {
+            if fragment.source != CliTextSource::Stderr {
+                continue;
+            }
+            if is_shared_benign_stderr_warning(&fragment.text) {
+                continue;
+            }
+
+            let normalized = normalize_text(&fragment.text);
+            if normalized.is_empty() {
+                continue;
+            }
+
+            if contains_error_context(&normalized) {
+                return Some(build_failure(
+                    provider,
+                    CliCompletionFailureKind::Retryable,
+                    &fragment.text,
+                ));
+            }
+        }
+    }
+
     if emitted_error && !has_primary_response {
         return Some(build_failure(
             provider,
-            CliCompletionFailureKind::NonRetryable,
+            CliCompletionFailureKind::Retryable,
             "CLI emitted an error event without a structured failure summary.",
         ));
     }
@@ -458,6 +501,56 @@ mod tests {
             ];
 
         let failure = classify_cli_completion("Codex", &fragments, true).expect("should classify");
+
+        assert_eq!(failure.kind, CliCompletionFailureKind::Retryable);
+    }
+
+    #[test]
+    fn classifies_windows_pipe_closure_as_retryable() {
+        let fragments = vec![CliTextFragment::new(
+            CliTextSource::Stderr,
+            "failed printing to stdout: 管道正在被关闭。 (os error 232)",
+        )
+        .expect("fragment")];
+
+        let failure =
+            classify_cli_completion("Codex", &fragments, true).expect("should classify");
+
+        assert_eq!(failure.kind, CliCompletionFailureKind::Retryable);
+    }
+
+    #[test]
+    fn classifies_windows_english_pipe_closure_as_retryable() {
+        let fragments = vec![CliTextFragment::new(
+            CliTextSource::Stderr,
+            "failed printing to stdout: Broken pipe (os error 232)",
+        )
+        .expect("fragment")];
+
+        let failure =
+            classify_cli_completion("Codex", &fragments, true).expect("should classify");
+
+        assert_eq!(failure.kind, CliCompletionFailureKind::Retryable);
+    }
+
+    #[test]
+    fn classifies_any_unknown_stderr_error_as_retryable() {
+        let fragments = vec![CliTextFragment::new(
+            CliTextSource::Stderr,
+            "thread 'main' panicked: fatal runtime error",
+        )
+        .expect("fragment")];
+
+        let failure =
+            classify_cli_completion("Codex", &fragments, false).expect("should classify");
+
+        assert_eq!(failure.kind, CliCompletionFailureKind::Retryable);
+    }
+
+    #[test]
+    fn classifies_cli_emitted_error_without_fragments_as_retryable() {
+        let failure =
+            classify_cli_completion("Codex", &[], true).expect("should classify");
 
         assert_eq!(failure.kind, CliCompletionFailureKind::Retryable);
     }

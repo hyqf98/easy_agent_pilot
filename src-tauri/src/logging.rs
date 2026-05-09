@@ -12,9 +12,27 @@ static PANIC_HOOK_INSTALLED: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false))
 
 const LOG_FILE_PREFIX: &str = "app-";
 const LOG_FILE_SUFFIX: &str = ".log";
+const CRASH_LOG_FILE: &str = "crash.log";
 const DEFAULT_TAIL_LINES: usize = 500;
 const MAX_TAIL_LINES: usize = 5_000;
 const TAIL_READ_CHUNK_BYTES: usize = 8 * 1024;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CrashLogEntry {
+    pub timestamp: String,
+    pub source: String,
+    pub message: String,
+    pub stack_trace: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CrashLogStatus {
+    pub has_crash_log: bool,
+    pub crash_log_path: Option<String>,
+    pub entries: Vec<CrashLogEntry>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -138,7 +156,27 @@ pub fn init_runtime_logging() -> Result<()> {
     if !*installed {
         let previous_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |panic_info| {
-            write_log("ERROR", "panic", &panic_info.to_string());
+            let payload = panic_info
+                .payload()
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    panic_info
+                        .payload()
+                        .downcast_ref::<String>()
+                        .cloned()
+                })
+                .unwrap_or_else(|| "unknown panic payload".to_string());
+
+            let location = panic_info
+                .location()
+                .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()))
+                .unwrap_or_else(|| "unknown location".to_string());
+
+            let full_message = format!("PANIC: {}\nLocation: {}", payload, location);
+
+            write_log("ERROR", "panic", &full_message);
+            write_crash_log("rust-panic", &full_message, None);
             previous_hook(panic_info);
         }));
         *installed = true;
@@ -247,4 +285,108 @@ pub fn clear_runtime_log_files() -> Result<usize> {
     }
 
     Ok(removed)
+}
+
+fn get_crash_log_path() -> Result<PathBuf> {
+    Ok(get_log_dir()?.join(CRASH_LOG_FILE))
+}
+
+pub fn write_crash_log(source: &str, message: &str, stack_trace: Option<&str>) {
+    let Ok(path) = get_crash_log_path() else {
+        return;
+    };
+
+    let timestamp = Local::now().to_rfc3339();
+    let trace_section = stack_trace
+        .map(|trace| format!("\n[stack]\n{}", trace))
+        .unwrap_or_default();
+    let entry = format!(
+        "--- CRASH ---\n[time] {}\n[source] {}\n[message] {}{}\n--- END ---\n\n",
+        timestamp, source, message, trace_section
+    );
+
+    let _guard = LOG_WRITE_LOCK.lock().expect("log writer poisoned");
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = file.write_all(entry.as_bytes());
+    }
+}
+
+pub fn read_crash_log() -> Result<CrashLogStatus> {
+    let path = get_crash_log_path()?;
+    if !path.exists() {
+        return Ok(CrashLogStatus {
+            has_crash_log: false,
+            crash_log_path: None,
+            entries: Vec::new(),
+        });
+    }
+
+    let content = fs::read_to_string(&path)?;
+    let mut entries = Vec::new();
+
+    for block in content.split("--- CRASH ---") {
+        let block = block.trim();
+        if block.is_empty() {
+            continue;
+        }
+
+        let mut timestamp = String::new();
+        let mut source = String::new();
+        let mut message = String::new();
+        let mut stack_trace: Option<String> = None;
+
+        let mut in_stack = false;
+        let mut stack_lines: Vec<String> = Vec::new();
+
+        for line in block.lines() {
+            let line = line.trim();
+            if line == "--- END ---" {
+                break;
+            }
+            if line == "[stack]" {
+                in_stack = true;
+                continue;
+            }
+            if in_stack {
+                stack_lines.push(line.to_string());
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("[time] ") {
+                timestamp = rest.to_string();
+            } else if let Some(rest) = line.strip_prefix("[source] ") {
+                source = rest.to_string();
+            } else if let Some(rest) = line.strip_prefix("[message] ") {
+                message = rest.to_string();
+            }
+        }
+
+        if !stack_lines.is_empty() {
+            stack_trace = Some(stack_lines.join("\n"));
+        }
+
+        if !message.is_empty() {
+            entries.push(CrashLogEntry {
+                timestamp,
+                source,
+                message,
+                stack_trace,
+            });
+        }
+    }
+
+    Ok(CrashLogStatus {
+        has_crash_log: true,
+        crash_log_path: Some(path.to_string_lossy().to_string()),
+        entries,
+    })
+}
+
+pub fn clear_crash_log() -> Result<bool> {
+    let path = get_crash_log_path()?;
+    if path.exists() {
+        fs::remove_file(&path)?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
 }
