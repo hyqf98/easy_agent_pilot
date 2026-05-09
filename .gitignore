@@ -31,3 +31,7 @@ dist-ssr
 screenshots/
 src-tauri/data/
 data/
+
+# Claude / GitNexus auto-generated skills
+.claude/skills/generated/
+.claude/skills/gitnexus/
