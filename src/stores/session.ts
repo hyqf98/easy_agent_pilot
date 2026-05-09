@@ -356,7 +356,6 @@ export const useSessionStore = defineStore('session', () => {
         sessions.value.splice(index, 1)
       }
 
-      // 清理该会话的执行状态
       const sessionExecutionStore = useSessionExecutionStore()
       sessionExecutionStore.clearExecutionState(id)
 
@@ -366,14 +365,11 @@ export const useSessionStore = defineStore('session', () => {
 
       useAiEditTraceStore().resetSession(id)
 
-      // 从打开列表中移除
       const openIndex = openSessionIds.value.indexOf(id)
       if (openIndex !== -1) {
-        openSessionIds.value.splice(openIndex, 1)
-      }
-
-      if (currentSessionId.value === id) {
-        currentSessionId.value = null
+        releaseSessionResources(id)
+        const nextOpenSessionIds = openSessionIds.value.filter(sessionId => sessionId !== id)
+        finalizeOpenSessionsUpdate(nextOpenSessionIds)
       }
     } catch (error) {
       console.error('Failed to delete session:', error)
