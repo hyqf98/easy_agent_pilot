@@ -1244,7 +1244,8 @@ pub fn sync_opencode_models(
         return Err("未配置 OpenCode Provider，请先在配置切换中设置 Provider".to_string());
     }
 
-    let cli_path = crate::commands::cli_support::find_cli_executable("opencode", &[])
+    let scan_paths = crate::commands::cli::get_scan_paths_public();
+    let cli_path = crate::commands::cli_support::find_cli_executable("opencode", &scan_paths)
         .ok_or_else(|| "未找到 opencode CLI".to_string())?;
 
     let output =
@@ -1359,7 +1360,8 @@ pub struct SyncAllOpencodeModelsInput {
 pub fn sync_all_opencode_models(
     input: SyncAllOpencodeModelsInput,
 ) -> Result<Vec<AgentModelConfig>, String> {
-    let cli_path = crate::commands::cli_support::find_cli_executable("opencode", &[])
+    let scan_paths = crate::commands::cli::get_scan_paths_public();
+    let cli_path = crate::commands::cli_support::find_cli_executable("opencode", &scan_paths)
         .ok_or_else(|| "未找到 opencode CLI，请确认已安装 opencode".to_string())?;
 
     let output = crate::commands::cli_support::run_cli_command(&cli_path, &["models", "--verbose"])
@@ -1417,7 +1419,8 @@ pub fn sync_all_opencode_models(
 
 #[tauri::command]
 pub fn list_opencode_provider_models() -> Result<Vec<OpencodeProviderModels>, String> {
-    let cli_path = crate::commands::cli_support::find_cli_executable("opencode", &[])
+    let scan_paths = crate::commands::cli::get_scan_paths_public();
+    let cli_path = crate::commands::cli_support::find_cli_executable("opencode", &scan_paths)
         .ok_or_else(|| "未找到 opencode CLI".to_string())?;
 
     let output = crate::commands::cli_support::run_cli_command(&cli_path, &["models"])
