@@ -76,6 +76,9 @@ once_cell = "1.19"
 # 系统信息
 sysinfo = "0.33"
 
+# 跨平台可执行文件查找（Windows 自动处理 PATHEXT/.cmd/.bat）
+which = "7"
+
 # Futures
 futures = "0.3"
 

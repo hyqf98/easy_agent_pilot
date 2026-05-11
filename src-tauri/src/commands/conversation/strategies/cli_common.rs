@@ -705,6 +705,8 @@ fn normalize_cli_path_for_display(path: PathBuf) -> String {
 
         return rendered.replace('\\', "/");
     }
+
+    rendered
 }
 
 pub fn extract_runtime_system_notice(json: &serde_json::Value) -> Option<String> {

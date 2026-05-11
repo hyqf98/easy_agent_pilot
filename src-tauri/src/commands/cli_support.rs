@@ -213,10 +213,18 @@ pub fn find_cli_executables(cli_name: &str, extra_dirs: &[PathBuf]) -> Vec<PathB
         return Vec::new();
     }
 
-    let dirs = collect_search_dirs(extra_dirs);
     let mut seen = HashSet::new();
     let mut matches = Vec::new();
 
+    if let Ok(iter) = which::which_all(cli_name) {
+        for resolved in iter {
+            if seen.insert(resolved.clone()) {
+                matches.push(resolved);
+            }
+        }
+    }
+
+    let dirs = collect_search_dirs(extra_dirs);
     for dir in dirs {
         if !dir.exists() || !dir.is_dir() {
             continue;
@@ -242,6 +250,18 @@ pub fn find_cli_executable(cli_name: &str, extra_dirs: &[PathBuf]) -> Option<Pat
     find_cli_executables(cli_name, extra_dirs)
         .into_iter()
         .next()
+}
+
+pub fn resolve_cli_executable(cli_path: &Path) -> PathBuf {
+    if cli_path.is_absolute() || cli_path.components().count() > 1 {
+        return cli_path.to_path_buf();
+    }
+
+    if let Some(resolved) = cli_path.to_str().and_then(|s| which::which(s).ok()) {
+        return resolved;
+    }
+
+    cli_path.to_path_buf()
 }
 
 #[cfg(target_os = "windows")]
@@ -325,17 +345,18 @@ fn configure_cli_tokio_command_env(command: &mut TokioCommand, cli_path: &Path) 
 
 #[cfg(target_os = "windows")]
 pub fn run_cli_command(cli_path: &Path, args: &[&str]) -> std::io::Result<Output> {
-    let cli_str = cli_path.to_str().unwrap_or_default();
+    let resolved = resolve_cli_executable(cli_path);
+    let cli_str = resolved.to_str().unwrap_or_default();
     if needs_cmd_wrapper(cli_str) {
         let mut command = Command::new("cmd.exe");
         configure_windows_std_command(&mut command);
-        configure_cli_std_command_env(&mut command, cli_path);
+        configure_cli_std_command_env(&mut command, &resolved);
         command.arg("/C").arg(cli_str).args(args);
         command.output()
     } else {
-        let mut command = Command::new(cli_path);
+        let mut command = Command::new(&resolved);
         configure_windows_std_command(&mut command);
-        configure_cli_std_command_env(&mut command, cli_path);
+        configure_cli_std_command_env(&mut command, &resolved);
         command.args(args);
         command.output()
     }
@@ -343,18 +364,21 @@ pub fn run_cli_command(cli_path: &Path, args: &[&str]) -> std::io::Result<Output
 
 #[cfg(not(target_os = "windows"))]
 pub fn run_cli_command(cli_path: &Path, args: &[&str]) -> std::io::Result<Output> {
-    let mut command = Command::new(cli_path);
-    configure_cli_std_command_env(&mut command, cli_path);
+    let resolved = resolve_cli_executable(cli_path);
+    let mut command = Command::new(&resolved);
+    configure_cli_std_command_env(&mut command, &resolved);
     command.args(args);
     command.output()
 }
 
 #[cfg(target_os = "windows")]
 pub fn build_tokio_cli_command(cli_path: &str, args: &[String]) -> TokioCommand {
-    let (executable, wrapped_args) = wrap_for_windows(cli_path, args);
+    let resolved = resolve_cli_executable(Path::new(cli_path));
+    let resolved_str = resolved.to_str().unwrap_or(cli_path);
+    let (executable, wrapped_args) = wrap_for_windows(resolved_str, args);
     let mut command = TokioCommand::new(&executable);
     configure_windows_tokio_command(&mut command);
-    configure_cli_tokio_command_env(&mut command, Path::new(cli_path));
+    configure_cli_tokio_command_env(&mut command, &resolved);
     command.args(&wrapped_args);
     command
 }
@@ -422,8 +446,9 @@ pub fn build_cli_launch_error_message(
 
 #[cfg(not(target_os = "windows"))]
 pub fn build_tokio_cli_command(cli_path: &str, args: &[String]) -> TokioCommand {
-    let mut command = TokioCommand::new(cli_path);
-    configure_cli_tokio_command_env(&mut command, Path::new(cli_path));
+    let resolved = resolve_cli_executable(Path::new(cli_path));
+    let mut command = TokioCommand::new(&resolved);
+    configure_cli_tokio_command_env(&mut command, &resolved);
     command.args(args);
     command
 }
@@ -434,12 +459,17 @@ pub fn get_cli_version(cli_path: &Path) -> Option<String> {
         return None;
     }
 
+    let resolved = resolve_cli_executable(cli_path);
+    if resolved.is_absolute() && (!resolved.exists() || resolved.is_dir()) {
+        return None;
+    }
+
     for args in [
         ["--version"].as_slice(),
         ["-v"].as_slice(),
         ["version"].as_slice(),
     ] {
-        let output = run_cli_command_with_timeout(cli_path, args);
+        let output = run_cli_command_with_timeout(&resolved, args);
         let output = match output {
             Some(o) => o,
             None => continue,
