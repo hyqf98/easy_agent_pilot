@@ -197,6 +197,7 @@ pub fn read_cli_timeout_minutes() -> Option<u64> {
     value.and_then(|v| v.parse::<u64>().ok())
 }
 
+#[allow(dead_code)]
 pub fn describe_timeout_config(config: CliTimeoutConfig) -> String {
     if config.disabled {
         return "disabled(user_override=0)".to_string();
@@ -330,6 +331,7 @@ pub enum CliCompletionDisposition {
 }
 
 impl CliCompletionDisposition {
+    #[allow(dead_code)]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::TimedOut => "timed_out",
@@ -703,8 +705,6 @@ fn normalize_cli_path_for_display(path: PathBuf) -> String {
 
         return rendered.replace('\\', "/");
     }
-
-    rendered
 }
 
 pub fn extract_runtime_system_notice(json: &serde_json::Value) -> Option<String> {

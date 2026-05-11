@@ -46,6 +46,7 @@ import { resolveSessionAgent, resolveSessionAgentId } from '@/utils/sessionAgent
 import { resolveAttachmentPreviewUrl } from '@/utils/attachmentPreview'
 import { formatAgentModelLabel } from '@/utils/agentModelLabel'
 import type { MemorySuggestion, MemorySuggestionSourceType } from '@/types/memory'
+import { getProviderReasoningEfforts, type ReasoningEffortLevel, type ReasoningEffortOption } from '@/types/reasoning'
 import {
   buildExpertSystemPrompt,
   resolveExpertById,
@@ -272,6 +273,9 @@ export function useConversationComposer(options: UseConversationComposerOptions)
   const isModelDropdownOpen = ref(false)
   const modelDropdownRef = ref<HTMLElement | null>(null)
   const selectedModelId = ref<string>('')
+  const selectedReasoningEffort = ref<ReasoningEffortLevel | ''>('')
+  const isReasoningDropdownOpen = ref(false)
+  const reasoningDropdownRef = ref<HTMLElement | null>(null)
   const textareaRef = ref<HTMLTextAreaElement | null>(null)
   const fileInputRef = ref<HTMLInputElement | null>(null)
   const renderLayerRef = ref<HTMLDivElement | null>(null)
@@ -383,6 +387,16 @@ export function useConversationComposer(options: UseConversationComposerOptions)
   })
 
   const presetModelOptions = computed(() => modelOptions.value)
+
+  const reasoningEffortOptions = computed<ReasoningEffortOption[]>(() => {
+    const provider = currentAgent.value?.provider || inferAgentProvider(currentAgent.value)
+    if (!provider) return []
+    const efforts = getProviderReasoningEfforts(provider)
+    return efforts.map(effort => ({
+      value: effort,
+      label: t(`reasoning.${effort}`)
+    }))
+  })
 
   const inputText = computed({
     get: () => currentSessionId.value ? sessionExecutionStore.getInputText(currentSessionId.value) : '',
@@ -1050,8 +1064,10 @@ export function useConversationComposer(options: UseConversationComposerOptions)
         || configs.find(config => config.isDefault && config.enabled)
         || configs.find(config => config.enabled)
       selectedModelId.value = defaultModel?.modelId || ''
+      selectedReasoningEffort.value = ''
     } else {
       selectedModelId.value = ''
+      selectedReasoningEffort.value = ''
     }
   }, { immediate: true })
 
@@ -1142,10 +1158,11 @@ export function useConversationComposer(options: UseConversationComposerOptions)
   })
 
   useSafeOutsideClick(
-    () => [agentDropdownRef.value, modelDropdownRef.value],
+    () => [agentDropdownRef.value, modelDropdownRef.value, reasoningDropdownRef.value],
     () => {
       isAgentDropdownOpen.value = false
       isModelDropdownOpen.value = false
+      isReasoningDropdownOpen.value = false
     }
   )
 
@@ -1159,6 +1176,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     isAgentDropdownOpen.value = !isAgentDropdownOpen.value
     if (isAgentDropdownOpen.value) {
       isModelDropdownOpen.value = false
+      isReasoningDropdownOpen.value = false
     }
   }
 
@@ -1200,6 +1218,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     isModelDropdownOpen.value = !isModelDropdownOpen.value
     if (isModelDropdownOpen.value) {
       isAgentDropdownOpen.value = false
+      isReasoningDropdownOpen.value = false
     }
   }
 
@@ -1229,6 +1248,24 @@ export function useConversationComposer(options: UseConversationComposerOptions)
   const getModelLabel = (modelId: string) => {
     const model = modelOptions.value.find(item => item.value === modelId)
     return model ? model.label : modelId || '使用默认模型'
+  }
+
+  const toggleReasoningDropdown = () => {
+    isReasoningDropdownOpen.value = !isReasoningDropdownOpen.value
+    if (isReasoningDropdownOpen.value) {
+      isAgentDropdownOpen.value = false
+      isModelDropdownOpen.value = false
+    }
+  }
+
+  const selectReasoningEffort = (effort: ReasoningEffortLevel | '') => {
+    selectedReasoningEffort.value = effort
+    isReasoningDropdownOpen.value = false
+  }
+
+  const getReasoningEffortLabel = (effort: ReasoningEffortLevel | '') => {
+    if (!effort) return t('reasoning.label')
+    return t(`reasoning.${effort}`)
   }
 
   const handleOpenCompress = () => {
@@ -1989,6 +2026,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
         {
           workingDirectory: currentWorkingDirectory.value || undefined,
           modelId: selectedModelId.value.trim() || undefined,
+          reasoningEffort: selectedReasoningEffort.value || undefined,
           injectedSystemMessages: [
             buildExpertSystemPrompt(expert.prompt)
           ],
@@ -2529,12 +2567,14 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     isAgentDropdownOpen,
     isCompressing,
     isModelDropdownOpen,
+    isReasoningDropdownOpen,
     isSending,
     isUploadingImages,
     mentionSearchText,
     mentionStart,
     messageCount,
     modelDropdownRef,
+    reasoningDropdownRef,
     openAttachmentPicker,
     parsedInputText,
     pendingImages,
@@ -2542,6 +2582,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     previewMemorySuggestion,
     presetModelOptions,
     queuedMessages,
+    reasoningEffortOptions,
     currentMemoryPreview,
     removeImage,
     removeMemoryReferenceFromDraft,
@@ -2552,8 +2593,10 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     retryQueuedMessage,
     sendImmediatelyQueuedMessage,
     selectedModelId,
+    selectedReasoningEffort,
     selectAgent,
     selectModel,
+    selectReasoningEffort,
     shouldShowCompressButton,
     showCompressionDialog,
     showCdPathSuggestions,
@@ -2569,6 +2612,8 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     shouldShowMemorySuggestions,
     toggleAgentDropdown,
     toggleModelDropdown,
+    toggleReasoningDropdown,
+    getReasoningEffortLabel,
     tokenUsage,
     visibleMemorySuggestions,
     clearMemoryPreview,

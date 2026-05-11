@@ -2419,5 +2419,17 @@ Rules:
     nextChange: 'Next Change',
     acceptLeft: 'Accept Left',
     acceptRight: 'Accept Right'
+  },
+
+  reasoning: {
+    label: 'Reasoning',
+    default: 'Default',
+    none: 'None',
+    minimal: 'Minimal',
+    low: 'Low',
+    medium: 'Medium',
+    high: 'High',
+    xhigh: 'Extra High',
+    max: 'Max'
   }
 }

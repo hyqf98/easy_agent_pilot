@@ -204,7 +204,8 @@ export abstract class BaseAgentStrategy implements AgentStrategy {
       extraCliArgs: context.extraCliArgs,
       executionMode: context.executionMode,
       responseMode: context.responseMode,
-      resumeSessionId: context.resumeSessionId
+      resumeSessionId: context.resumeSessionId,
+      reasoningEffort: context.reasoningEffort
     })
   }
 

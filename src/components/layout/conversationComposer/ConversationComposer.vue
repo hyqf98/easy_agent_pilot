@@ -50,6 +50,7 @@ const {
   fileMentionPosition,
   focusInput,
   getModelLabel,
+  getReasoningEffortLabel,
   handleCancelCompress,
   handleCdPathSelect,
   handleConfirmCompress,
@@ -80,6 +81,7 @@ const {
   isMemorySuggestionLoading,
   isMiniPanel,
   isModelDropdownOpen,
+  isReasoningDropdownOpen,
   isQueueCollapsed,
   isSending,
   isUploadingImages,
@@ -87,6 +89,7 @@ const {
   mentionStart,
   messageCount,
   modelDropdownRef,
+  reasoningDropdownRef,
   openAttachmentPicker,
   parsedInputText,
   pendingImages,
@@ -94,6 +97,7 @@ const {
   previewMemorySuggestion,
   scheduleClearMemoryPreview,
   presetModelOptions,
+  reasoningEffortOptions,
   queuedDraftEditText,
   queuedMessages,
   removeImage,
@@ -106,8 +110,10 @@ const {
   saveQueuedMessageEdit,
   sendImmediatelyQueuedMessage,
   selectedModelId,
+  selectedReasoningEffort,
   selectAgent,
   selectModel,
+  selectReasoningEffort,
   setQueuedDraftEditorRef,
   shouldShowCompressButton,
   shouldShowMemorySuggestionEmptyState,
@@ -127,6 +133,7 @@ const {
   textareaRef,
   toggleAgentDropdown,
   toggleModelDropdown,
+  toggleReasoningDropdown,
   toggleQueueCollapsed,
   tokenUsage,
   visibleMemorySuggestions
@@ -560,6 +567,55 @@ defineExpose({
                   @click="selectModel(model.value)"
                 >
                   {{ model.label }}
+                </div>
+              </div>
+            </Transition>
+          </div>
+
+          <!-- 推理等级选择器 -->
+          <div
+            v-if="currentAgent && reasoningEffortOptions.length > 0"
+            ref="reasoningDropdownRef"
+            class="composer-chip composer-chip--dropdown"
+            :class="{
+              'composer-chip--main': isMainPanel,
+              'composer-chip--open': isReasoningDropdownOpen
+            }"
+          >
+            <button
+              class="composer-chip__button"
+              @click="toggleReasoningDropdown"
+            >
+              <EaIcon
+                name="brain"
+                :size="11"
+              />
+              <span>{{ getReasoningEffortLabel(selectedReasoningEffort) }}</span>
+              <EaIcon
+                :name="isReasoningDropdownOpen ? 'chevron-up' : 'chevron-down'"
+                :size="9"
+              />
+            </button>
+            <Transition name="dropdown">
+              <div
+                v-if="isReasoningDropdownOpen"
+                class="composer-chip__menu"
+              >
+                <div
+                  class="composer-chip__option composer-chip__option--reset"
+                  :class="{ 'composer-chip__option--selected': !selectedReasoningEffort }"
+                  @click="selectReasoningEffort('')"
+                >
+                  {{ t('reasoning.default') }}
+                </div>
+                <div
+                  v-for="option in reasoningEffortOptions"
+                  :key="option.value"
+                  class="composer-chip__option"
+                  :class="{ 'composer-chip__option--selected': option.value === selectedReasoningEffort }"
+                  @click="selectReasoningEffort(option.value)"
+                >
+                  {{ option.label }}
                 </div>
               </div>
             </Transition>

@@ -17,7 +17,7 @@ use super::abnormal_completion::{
 use super::cli_common::{
     build_cli_failure_report, build_content_event, build_error_event, build_execution_summary,
     build_system_event, build_timeout_error_message, classify_cli_completion_disposition,
-    describe_timeout_config, detect_cli_timeout, emit_cli_event, extract_error_from_json_blob,
+    detect_cli_timeout, emit_cli_event, extract_error_from_json_blob,
     extract_image_paths, extract_result_content_from_json_blob, extract_runtime_system_notice,
     extract_structured_output_from_json_blob, parse_json_blob_with_fallback, preview_text,
     read_cli_timeout_minutes, render_cli_message, shell_escape, timeout_config_for_execution_mode,
@@ -421,6 +421,7 @@ impl AgentExecutionStrategy for CodexCliStrategy {
             .clone()
             .unwrap_or_else(|| "codex".to_string());
         let model_id = request.model_id.clone();
+        let reasoning_effort = request.reasoning_effort.clone();
         let working_directory = request.working_directory.clone();
         let allowed_tools = request.allowed_tools.clone();
         let cli_output_format = request
@@ -429,9 +430,10 @@ impl AgentExecutionStrategy for CodexCliStrategy {
             .unwrap_or_else(|| "stream-json".to_string());
 
         log_info!(
-            "Codex CLI | session_id={} | model={} | cwd={}",
+            "Codex CLI 启动 | session_id={} | model={} | effort={} | cwd={}",
             session_id,
             model_id.as_deref().unwrap_or("default"),
+            reasoning_effort.as_deref().unwrap_or("default"),
             working_directory.as_deref().unwrap_or("-")
         );
         let json_schema = request.json_schema.clone();
@@ -482,6 +484,14 @@ impl AgentExecutionStrategy for CodexCliStrategy {
             let trimmed = model_id.trim();
             if !trimmed.is_empty() && trimmed != "default" {
                 args.push("--model".to_string());
+                args.push(trimmed.to_string());
+            }
+        }
+
+        if let Some(effort) = &reasoning_effort {
+            let trimmed = effort.trim();
+            if !trimmed.is_empty() {
+                args.push("--reasoning-effort".to_string());
                 args.push(trimmed.to_string());
             }
         }
@@ -595,12 +605,12 @@ impl AgentExecutionStrategy for CodexCliStrategy {
 
         let stdin_write_handle = Some(tokio::spawn(async move {
             if let Err(error) = stdin.write_all(stdin_payload.as_bytes()).await {
-                log_error!("[stdin] failed to write prompt: {}", error);
+                    log_error!("[stdin] 写入 Codex CLI stdin 失败: {} | source=app_infra", error);
                 return;
             }
 
             if let Err(error) = stdin.shutdown().await {
-                log_error!("[stdin] failed to close stdin: {}", error);
+                    log_error!("[stdin] 关闭 Codex CLI stdin 失败: {} | source=app_infra", error);
             }
         }));
 
@@ -685,12 +695,12 @@ impl AgentExecutionStrategy for CodexCliStrategy {
             // 非流式 JSON 输出处理
             let mut reader = tokio::io::BufReader::new(stdout);
             let mut full_output = String::new();
-            if let Err(error) = reader.read_to_string(&mut full_output).await {
-                log_error!("[stdout] 读取失败: {}", error);
+            if let Err(_error) = reader.read_to_string(&mut full_output).await {
+                log_error!("[stdout] Codex CLI stdout 读取失败 | source=io_error");
                 return StdoutReadOutcome::none();
             }
-            log_info!(
-                "[stdout] 已读取完成，长度 {} 字符",
+            log_debug!(
+                "[stdout] 非流式输出已读取, 长度={} 字符",
                 full_output.chars().count()
             );
 
@@ -700,7 +710,7 @@ impl AgentExecutionStrategy for CodexCliStrategy {
 
             let normalized = full_output.trim();
             if normalized.is_empty() {
-                log_error!("[stdout] 输出为空");
+                log_error!("[stdout] Codex CLI 输出为空 | source=cli_process");
                 return StdoutReadOutcome::none();
             }
 
@@ -817,7 +827,7 @@ impl AgentExecutionStrategy for CodexCliStrategy {
                     preview_text(&error_msg, 240)
                 );
             } else if outcome.ignored_warning_count > 0 {
-                log_info!(
+                log_debug!(
                     "[stderr] ignored {} benign warning(s)",
                     outcome.ignored_warning_count
                 );
@@ -865,32 +875,53 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         let stdout_outcome = match stdout_handle.await {
             Ok(outcome) => outcome,
             Err(error) => {
-                log_error!("[stdout] 任务等待失败: {}", error);
+                log_error!("[stdout] Codex CLI stdout 读取任务失败: {} | source=app_infra", error);
                 StdoutReadOutcome::none()
             }
         };
         let stderr_outcome = match stderr_handle.await {
             Ok(outcome) => outcome,
             Err(error) => {
-                log_error!("[stderr] 任务等待失败: {}", error);
+                log_error!("[stderr] Codex CLI stderr 读取任务失败: {} | source=app_infra", error);
                 StderrReadOutcome::none()
             }
         };
         if let Some(handle) = stdin_write_handle {
             if let Err(error) = handle.await {
-                log_error!("[stdin] task join failed: {}", error);
+                log_error!("[stdin] Codex CLI stdin 任务失败: {} | source=app_infra", error);
             }
         }
 
         let finished_at = Instant::now();
         let summary = build_execution_summary(&monitor.snapshot(), finished_at);
-        log_info!(
-            "CLI 执行完成，退出码: {:?}, 耗时: {:.1}s, {}",
-            status.code(),
-            elapsed.as_secs_f64(),
-            summary
-        );
+
         let abort_requested = should_abort(&session_id).await;
+
+        unregister_session_pid(&session_id).await;
+
+        if abort_requested {
+            log_info!(
+                "Codex CLI 被应用终止 | session_id={} | 耗时={:.1}s | {}",
+                session_id,
+                elapsed.as_secs_f64(),
+                summary
+            );
+        } else if timeout_error_message.is_some() {
+            log_info!(
+                "Codex CLI 超时退出 | session_id={} | 耗时={:.1}s | {}",
+                session_id,
+                elapsed.as_secs_f64(),
+                summary
+            );
+        } else {
+            log_info!(
+                "Codex CLI 正常退出 | session_id={} | 退出码={:?} | 耗时={:.1}s | {}",
+                session_id,
+                status.code(),
+                elapsed.as_secs_f64(),
+                summary
+            );
+        }
 
         let should_treat_failure_as_success =
             should_treat_process_failure_as_success(&stdout_outcome, &stderr_outcome);
@@ -904,7 +935,7 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         let should_complete_as_success = should_treat_failure_as_success
             || (detected_failure.is_none() && stdout_outcome.emitted_content);
         let execution_succeeded = status.success() || should_complete_as_success;
-        let completion_disposition = classify_cli_completion_disposition(
+        let _completion_disposition = classify_cli_completion_disposition(
             timeout_error_message.is_some(),
             abort_requested,
             status.code(),
@@ -919,10 +950,6 @@ impl AgentExecutionStrategy for CodexCliStrategy {
             } else {
                 resume_session_id.clone()
             };
-            let discovered_session_id_for_log = discovered_session_id.clone();
-            if let Some(ref sid) = discovered_session_id {
-                log_info!("Codex session ID discovered: {}", sid);
-            }
             let done_event = CliStreamEvent {
                 event_type: "done".to_string(),
                 session_id: session_id.clone(),
@@ -942,13 +969,7 @@ impl AgentExecutionStrategy for CodexCliStrategy {
                 cache_creation_input_tokens: None,
             };
             emit_cli_event(&app, &event_name, plan_id.as_ref(), &done_event);
-            if let Some(ref sid) = discovered_session_id_for_log {
-                log_info!("Codex session ID: {}", sid);
-            }
         }
-
-        // 注销进程 PID
-        unregister_session_pid(&session_id).await;
 
         // 清理中断标志
         clear_abort_flag(&session_id).await;
@@ -2028,7 +2049,7 @@ fn extract_text_value(value: Option<&serde_json::Value>) -> Option<String> {
 
 /// 解析非流式 JSON blob 输出
 fn parse_codex_json_blob_output(session_id: &str, output: &str) -> Option<CliStreamEvent> {
-    log_info!(
+    log_debug!(
         "[parse] 开始解析 JSON blob, 长度: {}",
         output.chars().count()
     );
@@ -2041,12 +2062,10 @@ fn parse_codex_json_blob_output(session_id: &str, output: &str) -> Option<CliStr
         }
     };
 
-    if let Ok(pretty) = serde_json::to_string_pretty(&parsed) {
-        log_info!(
-            "[parse] JSON blob 解析成功, preview={}",
-            preview_text(&pretty, 320)
-        );
-    }
+    log_debug!(
+        "[parse] JSON blob 解析成功, preview={}",
+        preview_text(&serde_json::to_string_pretty(&parsed).unwrap_or_default(), 320)
+    );
 
     if let Some(content) = extract_runtime_system_notice(&parsed) {
         return Some(attach_external_session_id(
@@ -2055,9 +2074,8 @@ fn parse_codex_json_blob_output(session_id: &str, output: &str) -> Option<CliStr
         ));
     }
 
-    // 尝试提取结构化输出
     if let Some(content) = extract_structured_output_from_json_blob(&parsed) {
-        log_info!(
+        log_debug!(
             "[parse] 提取到 structured_output, 长度: {}",
             content.chars().count()
         );
@@ -2067,18 +2085,16 @@ fn parse_codex_json_blob_output(session_id: &str, output: &str) -> Option<CliStr
         ));
     }
 
-    // 尝试提取错误
     if let Some(error) = extract_error_from_json_blob(&parsed) {
-        log_info!("[parse] 提取到 error: {}", error);
+        log_info!("[parse] Codex CLI 返回错误: {}", error);
         return Some(attach_external_session_id(
             build_error_event(session_id, error),
             &parsed,
         ));
     }
 
-    // 尝试提取结果内容
     if let Some(content) = extract_result_content_from_json_blob(&parsed) {
-        log_info!(
+        log_debug!(
             "[parse] 提取到 result.content, 长度: {}",
             content.chars().count()
         );
@@ -2088,16 +2104,15 @@ fn parse_codex_json_blob_output(session_id: &str, output: &str) -> Option<CliStr
         ));
     }
 
-    // 返回原始 JSON
     if let Ok(raw_json) = serde_json::to_string(&parsed) {
-        log_info!("[parse] 返回原始 JSON, 长度: {}", raw_json.chars().count());
+        log_debug!("[parse] 返回原始 JSON, 长度: {}", raw_json.chars().count());
         return Some(attach_external_session_id(
             build_content_event(session_id, raw_json),
             &parsed,
         ));
     }
 
-    log_info!("[parse] 未提取到标准字段，放弃结构化解析");
+    log_debug!("[parse] 未提取到标准字段，放弃结构化解析");
     None
 }
 

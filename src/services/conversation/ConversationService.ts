@@ -10,6 +10,7 @@ import { useMemoryStore } from '@/stores/memory'
 import { useAgentTeamsStore } from '@/stores/agentTeams'
 import { agentExecutor } from './AgentExecutor'
 import type { ConversationContext, McpServerConfig, StreamEvent } from './strategies/types'
+import type { ReasoningEffortLevel } from '@/types/reasoning'
 import { buildConversationMessages } from './buildConversationMessages'
 import { loadMountedMemoryPrompt } from '@/services/memory/mountedMemoryPrompt'
 import type { FileEditTrace } from '@/types/fileTrace'
@@ -323,6 +324,7 @@ export class ConversationService {
     options?: {
       workingDirectory?: string
       modelId?: string
+      reasoningEffort?: string
       injectedSystemMessages?: string[]
       dedupeInjectedSystemMessagesBySession?: boolean
       previewContent?: string
@@ -591,7 +593,8 @@ export class ConversationService {
         mcpServers: mcpServers.length > 0 ? mcpServers : undefined,
         executionMode: 'chat',
         responseMode: 'stream_text',
-        resumeSessionId: reusableCliSessionId
+        resumeSessionId: reusableCliSessionId,
+        reasoningEffort: options?.reasoningEffort as ReasoningEffortLevel | undefined
       }
       const fallbackContext = reusableCliSessionId
         ? {

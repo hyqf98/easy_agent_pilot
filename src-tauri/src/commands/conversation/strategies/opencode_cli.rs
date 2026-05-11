@@ -13,7 +13,7 @@ use super::abnormal_completion::{
 use super::cli_common::{
     build_cli_failure_report, build_content_event, build_error_event, build_execution_summary,
     build_system_event, build_timeout_error_message, classify_cli_completion_disposition,
-    describe_timeout_config, detect_cli_timeout, emit_cli_event, extract_file_paths,
+    detect_cli_timeout, emit_cli_event, extract_file_paths,
     extract_image_paths, preview_text, read_cli_timeout_minutes, render_cli_message, shell_escape,
     timeout_config_for_execution_mode, CliExecutionMonitor, NonImageAttachmentPromptMode,
 };
@@ -280,7 +280,7 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
         let working_directory = request.working_directory.clone();
 
         log_info!(
-            "OpenCode CLI | session_id={} | model={} | cwd={}",
+            "OpenCode CLI 启动 | session_id={} | model={} | cwd={}",
             session_id,
             model_id.as_deref().unwrap_or("default"),
             working_directory.as_deref().unwrap_or("-")
@@ -398,12 +398,12 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
 
             Some(tokio::spawn(async move {
                 if let Err(error) = stdin.write_all(stdin_payload.as_bytes()).await {
-                    log_error!("[stdin] failed to write prompt: {}", error);
+                    log_error!("[stdin] 写入 OpenCode CLI stdin 失败: {} | source=app_infra", error);
                     return;
                 }
 
                 if let Err(error) = stdin.shutdown().await {
-                    log_error!("[stdin] failed to close stdin: {}", error);
+                    log_error!("[stdin] 关闭 OpenCode CLI stdin 失败: {} | source=app_infra", error);
                 }
             }))
         };
@@ -555,7 +555,7 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
                     preview_text(&error_msg, 240)
                 );
             } else if outcome.ignored_warning_count > 0 {
-                log_info!(
+                log_debug!(
                     "[stderr] ignored {} benign warning(s)",
                     outcome.ignored_warning_count
                 );
@@ -603,27 +603,46 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
         let stderr_outcome = match stderr_handle.await {
             Ok(outcome) => outcome,
             Err(error) => {
-                log_error!("[stderr] 任务等待失败: {}", error);
+                log_error!("[stderr] OpenCode CLI stderr 读取任务失败: {} | source=app_infra", error);
                 StderrReadOutcome::none()
             }
         };
         if let Some(handle) = stdin_write_handle {
             if let Err(error) = handle.await {
-                log_error!("[stdin] task join failed: {}", error);
+                log_error!("[stdin] OpenCode CLI stdin 任务失败: {} | source=app_infra", error);
             }
         }
 
         let finished_at = Instant::now();
         let summary = build_execution_summary(&monitor.snapshot(), finished_at);
-        log_info!(
-            "CLI 执行完成，退出码: {:?}, 耗时: {:.1}s, {}",
-            status.code(),
-            elapsed.as_secs_f64(),
-            summary
-        );
+
         let abort_requested = should_abort(&session_id).await;
 
         unregister_session_pid(&session_id).await;
+
+        if abort_requested {
+            log_info!(
+                "OpenCode CLI 被应用终止 | session_id={} | 耗时={:.1}s | {}",
+                session_id,
+                elapsed.as_secs_f64(),
+                summary
+            );
+        } else if timeout_error_message.is_some() {
+            log_info!(
+                "OpenCode CLI 超时退出 | session_id={} | 耗时={:.1}s | {}",
+                session_id,
+                elapsed.as_secs_f64(),
+                summary
+            );
+        } else {
+            log_info!(
+                "OpenCode CLI 正常退出 | session_id={} | 退出码={:?} | 耗时={:.1}s | {}",
+                session_id,
+                status.code(),
+                elapsed.as_secs_f64(),
+                summary
+            );
+        }
 
         let should_treat_failure_as_success =
             should_treat_process_failure_as_success(&stdout_outcome, &stderr_outcome);
@@ -637,7 +656,7 @@ impl AgentExecutionStrategy for OpenCodeCliStrategy {
         let should_complete_as_success = should_treat_failure_as_success
             || (detected_failure.is_none() && stdout_outcome.emitted_content);
         let execution_succeeded = status.success() || should_complete_as_success;
-        let completion_disposition = classify_cli_completion_disposition(
+        let _completion_disposition = classify_cli_completion_disposition(
             timeout_error_message.is_some(),
             abort_requested,
             status.code(),

@@ -1,6 +1,7 @@
 import type { AgentConfig } from '@/stores/agent'
 import type { Message, MessageAttachment } from '@/stores/message'
 import type { FileEditTrace } from '@/types/fileTrace'
+import type { ReasoningEffortLevel } from '@/types/reasoning'
 
 /**
  */
@@ -59,6 +60,7 @@ export interface ConversationContext {
   jsonSchema?: string
   extraCliArgs?: string[]
   resumeSessionId?: string
+  reasoningEffort?: ReasoningEffortLevel
 }
 
 /**
@@ -209,6 +211,7 @@ export interface ExecutionRequest {
   executionMode?: 'chat' | 'task_split' | 'task_execution' | 'solo_execution'
   responseMode?: 'stream_text' | 'json_once'
   resumeSessionId?: string
+  reasoningEffort?: ReasoningEffortLevel
 }
 
 export interface MessageInput {

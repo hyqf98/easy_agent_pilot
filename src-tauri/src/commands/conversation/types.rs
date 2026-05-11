@@ -50,6 +50,8 @@ pub struct CliExecutionRequest {
     pub mcp_servers: Option<Vec<McpServerConfig>>,
     /// 恢复已存在的 CLI 会话 ID
     pub resume_session_id: Option<String>,
+    /// 推理等级 (none/minimal/low/medium/high/xhigh/max)
+    pub reasoning_effort: Option<String>,
 }
 
 /// SDK 执行请求
@@ -122,6 +124,8 @@ pub struct ExecutionRequest {
     pub response_mode: Option<String>,
     /// 恢复已存在的 CLI 会话 ID
     pub resume_session_id: Option<String>,
+    /// 推理等级 (none/minimal/low/medium/high/xhigh/max)
+    pub reasoning_effort: Option<String>,
 }
 
 impl ExecutionRequest {
@@ -148,6 +152,7 @@ impl ExecutionRequest {
             execution_mode: None,
             response_mode: None,
             resume_session_id: request.resume_session_id,
+            reasoning_effort: request.reasoning_effort,
         }
     }
 
@@ -174,6 +179,7 @@ impl ExecutionRequest {
             execution_mode: None,
             response_mode: None,
             resume_session_id: None,
+            reasoning_effort: None,
         }
     }
 }

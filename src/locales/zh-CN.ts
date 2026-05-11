@@ -2007,6 +2007,18 @@ const zhCN = {
     nextChange: '下一个改动',
     acceptLeft: '接受左侧',
     acceptRight: '接受右侧'
+  },
+
+  reasoning: {
+    label: '推理等级',
+    default: '默认',
+    none: '无',
+    minimal: '极低',
+    low: '低',
+    medium: '中',
+    high: '高',
+    xhigh: '极高',
+    max: '最大'
   }
 }
 

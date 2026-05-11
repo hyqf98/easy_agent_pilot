@@ -85,6 +85,7 @@ struct ShellLaunchConfig {
     args: Vec<String>,
 }
 
+#[allow(dead_code)]
 fn shell_binary_name(shell_path: &str) -> String {
     std::path::Path::new(shell_path)
         .file_name()

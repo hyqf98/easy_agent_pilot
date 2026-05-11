@@ -1,6 +1,7 @@
 import type { AgentConfig, AgentProvider, AgentType } from '@/stores/agent'
 import { inferAgentProvider, normalizeCliCommand } from '@/stores/agent'
 import { appendClaudeMcpAllowedTools } from '@/utils/mcpServerConfig'
+import type { ReasoningEffortLevel } from '@/types/reasoning'
 import type { ConversationContext, ExecutionRequest } from './strategies/types'
 
 export type AgentRuntimeKey = 'claude-cli' | 'codex-cli' | 'opencode-cli' | 'claude-sdk' | 'codex-sdk'
@@ -166,6 +167,7 @@ interface BuildAgentExecutionRequestOptions {
   systemPrompt?: string
   maxTokens?: number
   resumeSessionId?: string
+  reasoningEffort?: ReasoningEffortLevel
 }
 
 export function buildAgentExecutionRequest(
@@ -205,6 +207,7 @@ export function buildAgentExecutionRequest(
     mcpServers: options.mcpServers,
     executionMode: options.executionMode ?? 'chat',
     responseMode: options.responseMode ?? 'stream_text',
-    resumeSessionId: options.resumeSessionId
+    resumeSessionId: options.resumeSessionId,
+    reasoningEffort: options.reasoningEffort
   }
 }
