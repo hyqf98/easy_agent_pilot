@@ -1,12 +1,16 @@
 import { spawn } from 'node:child_process'
 
-const command = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
-const child = spawn(command, ['build'], {
+const pnpmEntry = process.env.npm_execpath
+const command = pnpmEntry ? process.execPath : 'pnpm'
+const args = pnpmEntry ? [pnpmEntry, 'build'] : ['build']
+
+const child = spawn(command, args, {
   stdio: 'inherit',
   env: {
     ...process.env,
     NODE_OPTIONS: '--max-old-space-size=4096'
-  }
+  },
+  shell: !pnpmEntry && process.platform === 'win32'
 })
 
 child.on('exit', (code, signal) => {

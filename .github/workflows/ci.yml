@@ -56,16 +56,13 @@ jobs:
       matrix:
         include:
           - platform: 'macos-latest'
-            args: '--target aarch64-apple-darwin'
-            rust_target: 'aarch64-apple-darwin'
-          - platform: 'macos-15-intel'
-            args: '--target x86_64-apple-darwin'
-            rust_target: 'x86_64-apple-darwin'
+            args: '--target universal-apple-darwin --bundles dmg'
+            rust_target: 'aarch64-apple-darwin,x86_64-apple-darwin'
           - platform: 'ubuntu-22.04'
-            args: ''
+            args: '--bundles deb'
             rust_target: ''
           - platform: 'windows-latest'
-            args: ''
+            args: '--bundles nsis'
             rust_target: ''
 
     runs-on: ${{ matrix.platform }}

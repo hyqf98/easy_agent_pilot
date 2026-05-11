@@ -32,7 +32,7 @@
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": true,
-    "targets": ["nsis", "dmg", "app", "deb", "appimage"],
+    "targets": ["nsis", "dmg", "deb"],
     "resources": {
       "../node_modules/.pnpm/playwright-core@1.58.2/node_modules/playwright-core/": "playwright-core/"
     },
@@ -68,9 +68,6 @@
     "linux": {
       "deb": {
         "depends": ["libwebkit2gtk-4.1-0"]
-      },
-      "appimage": {
-        "bundleMediaFramework": false
       }
     }
   },

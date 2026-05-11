@@ -15,16 +15,13 @@ jobs:
       matrix:
         include:
           - platform: 'macos-latest'
-            args: '--target aarch64-apple-darwin'
-            rust_target: 'aarch64-apple-darwin'
-          - platform: 'macos-15-intel'
-            args: '--target x86_64-apple-darwin'
-            rust_target: 'x86_64-apple-darwin'
+            args: '--target universal-apple-darwin --bundles dmg'
+            rust_target: 'aarch64-apple-darwin,x86_64-apple-darwin'
           - platform: 'ubuntu-22.04'
-            args: ''
+            args: '--bundles deb'
             rust_target: ''
           - platform: 'windows-latest'
-            args: ''
+            args: '--bundles nsis'
             rust_target: ''
 
     runs-on: ${{ matrix.platform }}
@@ -38,7 +35,7 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: install dependencies (macos only)
         if: startsWith(matrix.platform, 'macos')
@@ -144,17 +141,17 @@ jobs:
             ## EasyAgentPilot ${{ github.ref_name }}
 
             ### Downloads
-            - **macOS**: Use the `.dmg` installer. Choose `aarch64` for Apple Silicon and `x64` for Intel.
+            - **macOS**: Use the universal `.dmg` installer for both Apple Silicon and Intel.
             - **Windows**: Use the `-setup.exe` installer.
-            - **Linux**: Use `.deb` for Ubuntu/Debian, or `.AppImage` for Arch Linux and other portable distributions.
+            - **Linux**: Use the `.deb` installer.
 
             ### Supported Platforms
             - macOS 10.13+
             - Windows 10+
             - Ubuntu 20.04+, Debian 11+, Fedora 36+, Arch Linux
 
-            In-app auto update becomes visible after this draft release is published and `latest.json` is available.
           releaseDraft: true
           prerelease: false
-          includeUpdaterJson: true
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
           args: ${{ matrix.args }}
