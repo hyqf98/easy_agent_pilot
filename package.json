@@ -1,11 +1,12 @@
 {
   "name": "easy-agent-pilot",
   "private": true,
-  "version": "1.4.4",
+  "version": "1.4.5",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
+    "build:ci": "node scripts/build-ci.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:clean": "cargo clean --manifest-path src-tauri/Cargo.toml",

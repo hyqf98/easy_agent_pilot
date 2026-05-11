@@ -44,6 +44,7 @@ jobs:
         if: startsWith(matrix.platform, 'macos')
         run: |
           echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
+          echo "TAURI_BUNDLER_DMG_IGNORE_CI=true" >> $GITHUB_ENV
 
       - name: install pnpm
         uses: pnpm/action-setup@v4
