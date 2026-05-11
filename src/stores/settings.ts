@@ -14,7 +14,7 @@ export type CliStatus = 'available' | 'not_found' | 'error'
 
 export interface CliTool {
   name: string
-  path: string
+  command: string
   version: string | null
   status: CliStatus
 }

@@ -3,6 +3,7 @@ use rusqlite::{Connection, Row};
 use serde::{Deserialize, Serialize};
 
 use super::agent_team::ensure_builtin_agent_experts;
+use super::cli_support::normalize_cli_identifier;
 use super::support::{
     bind_optional, bind_optional_mapped, bind_value, bool_from_int, now_rfc3339,
     open_db_connection, UpdateSqlBuilder,
@@ -19,7 +20,7 @@ pub struct Agent {
     pub agent_type: String,
     /// 提供商: claude 或 codex
     pub provider: Option<String>,
-    /// CLI 可执行文件路径 (CLI 类型专用)
+    /// CLI 命令名 (CLI 类型专用，兼容旧字段名)
     pub cli_path: Option<String>,
     /// API 密钥 (SDK 类型专用，加密存储)
     pub api_key: Option<String>,
@@ -55,7 +56,7 @@ pub struct CreateAgentInput {
     pub agent_type: String,
     /// 提供商: claude 或 codex
     pub provider: Option<String>,
-    /// CLI 可执行文件路径 (CLI 类型专用)
+    /// CLI 命令名 (CLI 类型专用，兼容旧字段名)
     pub cli_path: Option<String>,
     /// API 密钥 (SDK 类型专用)
     pub api_key: Option<String>,
@@ -79,7 +80,7 @@ pub struct UpdateAgentInput {
     pub agent_type: Option<String>,
     /// 提供商: claude 或 codex
     pub provider: Option<String>,
-    /// CLI 可执行文件路径 (CLI 类型专用)
+    /// CLI 命令名 (CLI 类型专用，兼容旧字段名)
     pub cli_path: Option<String>,
     /// API 密钥 (SDK 类型专用)
     pub api_key: Option<String>,
@@ -95,13 +96,19 @@ pub struct UpdateAgentInput {
     pub status: Option<String>,
 }
 
+fn normalize_agent_cli_command(value: Option<String>) -> Option<String> {
+    value.and_then(|item| normalize_cli_identifier(&item))
+}
+
 fn map_agent_row(row: &Row<'_>) -> rusqlite::Result<Agent> {
+    let cli_path = normalize_agent_cli_command(row.get(4)?);
+
     Ok(Agent {
         id: row.get(0)?,
         name: row.get(1)?,
         agent_type: row.get(2)?,
         provider: row.get(3)?,
-        cli_path: row.get(4)?,
+        cli_path,
         api_key: row.get(5)?,
         base_url: row.get(6)?,
         model_id: row.get(7)?,
@@ -181,6 +188,7 @@ pub fn create_agent(input: CreateAgentInput) -> Result<Agent, String> {
     } else {
         0
     };
+    let cli_path = normalize_agent_cli_command(input.cli_path.clone());
 
     conn.execute(
         "INSERT INTO agents (id, name, type, provider, cli_path, api_key, base_url, model_id, custom_model_enabled, mode, model, status, created_at, updated_at)
@@ -190,7 +198,7 @@ pub fn create_agent(input: CreateAgentInput) -> Result<Agent, String> {
             &input.name,
             &final_type,
             &final_provider,
-            &input.cli_path,
+            &cli_path,
             &input.api_key,
             &input.base_url,
             &input.model_id,
@@ -211,7 +219,7 @@ pub fn create_agent(input: CreateAgentInput) -> Result<Agent, String> {
         name: input.name,
         agent_type: final_type,
         provider: final_provider,
-        cli_path: input.cli_path,
+        cli_path,
         api_key: input.api_key,
         base_url: input.base_url,
         model_id: input.model_id,
@@ -232,6 +240,7 @@ pub fn update_agent(id: String, input: UpdateAgentInput) -> Result<Agent, String
     let conn = open_db_connection().map_err(|e| e.to_string())?;
 
     let now = now_rfc3339();
+    let cli_path = normalize_agent_cli_command(input.cli_path.clone());
 
     let mut updates = UpdateSqlBuilder::new();
     updates.push("name", input.name.is_some());
@@ -255,7 +264,7 @@ pub fn update_agent(id: String, input: UpdateAgentInput) -> Result<Agent, String
     bind_optional(&mut stmt, &mut param_count, &input.name).map_err(|e| e.to_string())?;
     bind_optional(&mut stmt, &mut param_count, &input.agent_type).map_err(|e| e.to_string())?;
     bind_optional(&mut stmt, &mut param_count, &input.provider).map_err(|e| e.to_string())?;
-    bind_optional(&mut stmt, &mut param_count, &input.cli_path).map_err(|e| e.to_string())?;
+    bind_optional(&mut stmt, &mut param_count, &cli_path).map_err(|e| e.to_string())?;
     bind_optional(&mut stmt, &mut param_count, &input.api_key).map_err(|e| e.to_string())?;
     bind_optional(&mut stmt, &mut param_count, &input.base_url).map_err(|e| e.to_string())?;
     bind_optional(&mut stmt, &mut param_count, &input.model_id).map_err(|e| e.to_string())?;
@@ -353,24 +362,18 @@ pub async fn test_agent_connection(id: String) -> Result<TestResult, String> {
 async fn test_cli_connection(agent: &Agent) -> (bool, String) {
     use crate::commands::cli_support::get_cli_version;
 
-    let cli_path = match &agent.cli_path {
-        Some(path) => path,
-        None => return (false, "CLI 路径未配置".to_string()),
+    let cli_command = match agent
+        .cli_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| agent.provider.as_deref())
+    {
+        Some(command) => command,
+        None => return (false, "CLI 命令未配置".to_string()),
     };
 
-    // 检查路径是否存在
-    let path = std::path::Path::new(cli_path);
-    if !path.exists() {
-        return (false, format!("CLI 路径不存在: {}", cli_path));
-    }
-    if path.is_dir() {
-        return (
-            false,
-            format!("CLI 路径指向目录而不是可执行文件: {}", cli_path),
-        );
-    }
-
-    match get_cli_version(path) {
+    match get_cli_version(std::path::Path::new(cli_command)) {
         Some(version) => (true, format!("连接成功: {}", version)),
         None => (false, "CLI 执行失败: 无法获取版本信息".to_string()),
     }

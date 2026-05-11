@@ -6,7 +6,7 @@ import { useAgentConfigStore } from './agentConfig'
 import { getErrorMessage } from '@/utils/api'
 // 智能体类型：cli 或 sdk
 export type AgentType = 'cli' | 'sdk'
-// 提供方：claude 或 codex
+// 提供方：claude、codex 或 opencode
 export type AgentProvider = 'claude' | 'codex' | 'opencode'
 // 智能体状态
 export type AgentStatus = 'online' | 'offline' | 'error' | 'testing'
@@ -18,8 +18,9 @@ export interface AgentConfig {
   name: string
   /** 智能体类型：cli 或 sdk */
   type: AgentType
-  /** 提供方：claude 或 codex */
+  /** 提供方：claude、codex 或 opencode */
   provider?: AgentProvider
+  /** CLI 命令名（兼容旧字段名） */
   cliPath?: string
   /** API 密钥 (SDK 类型专用) */
   apiKey?: string
@@ -65,6 +66,39 @@ export function inferAgentProvider(
   return undefined
 }
 
+export function normalizeCliCommand(value?: string | null): string | undefined {
+  const trimmed = value?.trim()
+  if (!trimmed) {
+    return undefined
+  }
+
+  const tail = trimmed
+    .replace(/^["']|["']$/g, '')
+    .split(/[\\/]/)
+    .pop()
+    ?.toLowerCase()
+
+  if (!tail) {
+    return undefined
+  }
+
+  const normalized = tail.replace(/\.(exe|cmd|bat|com)$/i, '')
+
+  if (normalized === 'claude-code' || normalized === 'claude') {
+    return 'claude'
+  }
+
+  if (normalized === 'codex') {
+    return 'codex'
+  }
+
+  if (normalized === 'opencode') {
+    return 'opencode'
+  }
+
+  return normalized || undefined
+}
+
 // 后端返回的原始数据结构（snake_case）
 interface RawAgentData {
   id: string
@@ -100,7 +134,7 @@ function transformAgent(raw: RawAgentData): AgentConfig {
     name: raw.name,
     type: raw.type as AgentType,
     provider: raw.provider as AgentProvider | undefined,
-    cliPath: raw.cli_path,
+    cliPath: normalizeCliCommand(raw.cli_path) || raw.cli_path,
     apiKey: raw.api_key,
     baseUrl: raw.base_url,
     modelId: raw.model_id,
@@ -147,7 +181,7 @@ export const useAgentStore = defineStore('agent', () => {
     return detectedTools.value.filter(tool => {
       if (tool.status !== 'available') return false
       return !agents.value.some(agent =>
-        agent.type === 'cli' && agent.cliPath === tool.path
+        agent.type === 'cli' && agent.cliPath === tool.command
       )
     })
   })
@@ -175,6 +209,7 @@ export const useAgentStore = defineStore('agent', () => {
   async function createAgent(agent: Omit<AgentConfig, 'id' | 'createdAt' | 'updatedAt' | 'status'>) {
     const notificationStore = useNotificationStore()
     const agentConfigStore = useAgentConfigStore()
+    const cliPath = normalizeCliCommand(agent.cliPath) || agent.cliPath
 
     try {
       const rawAgent = await invoke<RawAgentData>('create_agent', {
@@ -182,7 +217,7 @@ export const useAgentStore = defineStore('agent', () => {
           name: agent.name,
           type: agent.type,
           provider: agent.provider,
-          cli_path: agent.cliPath,
+          cli_path: cliPath,
           api_key: agent.apiKey,
           base_url: agent.baseUrl,
           model_id: agent.modelId,
@@ -217,6 +252,7 @@ export const useAgentStore = defineStore('agent', () => {
     const notificationStore = useNotificationStore()
     const agentConfigStore = useAgentConfigStore()
     const existingAgent = agents.value.find(agent => agent.id === id)
+    const cliPath = normalizeCliCommand(updates.cliPath) || updates.cliPath
     const nextType = updates.type ?? existingAgent?.type
     const nextProvider = updates.provider ?? existingAgent?.provider
     const providerChanged = Boolean(
@@ -234,7 +270,7 @@ export const useAgentStore = defineStore('agent', () => {
           name: updates.name,
           type: updates.type,
           provider: updates.provider,
-          cli_path: updates.cliPath,
+          cli_path: cliPath,
           api_key: updates.apiKey,
           base_url: updates.baseUrl,
           model_id: updates.modelId,
@@ -356,7 +392,7 @@ export const useAgentStore = defineStore('agent', () => {
         const result = await invoke<DetectionResult>('detect_cli_tools')
         detectedTools.value = result.tools.map(tool => ({
           name: tool.name,
-          path: tool.path,
+          command: tool.command,
           version: tool.version,
           status: tool.status as CliStatus
         }))
@@ -390,7 +426,7 @@ export const useAgentStore = defineStore('agent', () => {
       name,
       type: 'cli',
       provider,
-      cliPath: tool.path
+      cliPath: tool.command
     })
   }
 

@@ -153,6 +153,8 @@ function isCliUnavailableError(agent: AgentConfig, error: unknown): boolean {
 
   return normalized.includes('cli 路径未配置')
     || normalized.includes('path not configured')
+    || normalized.includes('cli 命令未配置')
+    || normalized.includes('command not configured')
     || normalized.includes('command not found')
     || normalized.includes('executable file not found')
     || normalized.includes('binary not found')

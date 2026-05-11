@@ -1,5 +1,5 @@
 import type { AgentConfig, AgentProvider, AgentType } from '@/stores/agent'
-import { inferAgentProvider } from '@/stores/agent'
+import { inferAgentProvider, normalizeCliCommand } from '@/stores/agent'
 import { appendClaudeMcpAllowedTools } from '@/utils/mcpServerConfig'
 import type { ConversationContext, ExecutionRequest } from './strategies/types'
 
@@ -186,7 +186,7 @@ export function buildAgentExecutionRequest(
     agentType: profile.agentType,
     provider: profile.provider,
     cliPath: profile.agentType === 'cli'
-      ? (options.agent.cliPath || profile.defaultCliPath)
+      ? (normalizeCliCommand(options.agent.cliPath) || profile.defaultCliPath)
       : undefined,
     apiKey: profile.agentType === 'sdk' ? options.agent.apiKey : undefined,
     baseUrl: profile.agentType === 'sdk' ? options.agent.baseUrl : undefined,

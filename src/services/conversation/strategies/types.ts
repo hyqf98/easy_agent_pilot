@@ -138,7 +138,7 @@ export interface AgentStrategy {
 export interface CliExecutionRequest {
   /** 会话 ID */
   sessionId: string
-  /** CLI 路径 */
+  /** CLI 命令名（兼容旧字段名） */
   cliPath: string
   /** 模型 ID */
   modelId?: string
@@ -187,6 +187,7 @@ export interface ExecutionRequest {
   planId?: string
   agentType: 'cli' | 'sdk'
   provider: string
+  /** CLI 命令名（兼容旧字段名） */
   cliPath?: string
   apiKey?: string
   baseUrl?: string

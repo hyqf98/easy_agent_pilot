@@ -117,12 +117,12 @@ export const useNotificationStore = defineStore('notification', () => {
     )
   }
 
-  // CLI 路径无效错误
+  // CLI 命令无效错误
   function cliPathError(path: string, err: unknown, retryAction?: () => Promise<void> | void): string {
     const errorMessage = getErrorMessage(err)
     return error(
-      'CLI 路径无效',
-      `路径 "${path}" 无效: ${errorMessage}`,
+      'CLI 命令无效',
+      `命令 "${path}" 无效: ${errorMessage}`,
       retryAction,
       '重新配置'
     )

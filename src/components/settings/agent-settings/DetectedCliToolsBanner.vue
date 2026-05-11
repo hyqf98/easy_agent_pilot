@@ -36,7 +36,7 @@ const { t } = useI18n()
       <div class="detected-tools__list">
         <div
           v-for="tool in tools"
-          :key="tool.path"
+          :key="tool.command"
           class="detected-tool"
         >
           <div class="detected-tool__info">
@@ -49,7 +49,7 @@ const { t } = useI18n()
               <span class="detected-tool__name">
                 {{ tool.name === 'claude' ? 'Claude CLI' : tool.name === 'opencode' ? 'OpenCode CLI' : 'Codex CLI' }}
               </span>
-              <span class="detected-tool__path">{{ tool.path }}</span>
+              <span class="detected-tool__path">{{ tool.command }}</span>
             </div>
             <span
               v-if="tool.version"

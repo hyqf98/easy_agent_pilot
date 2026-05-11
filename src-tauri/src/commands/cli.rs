@@ -8,14 +8,14 @@ use std::process::Command;
 use uuid::Uuid;
 
 use crate::commands::cli_support::{
-    configure_windows_std_command, find_cli_executable, find_cli_executables, get_cli_version,
+    configure_windows_std_command, get_cli_version,
 };
 
 /// CLI 工具信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CliTool {
     pub name: String,
-    pub path: String,
+    pub command: String,
     pub version: Option<String>,
     pub status: CliStatus,
 }
@@ -149,9 +149,8 @@ fn resolve_npm_global_bin_paths(base_paths: &[PathBuf]) -> Vec<PathBuf> {
     paths
 }
 
-fn resolve_npm_global_bin_path_via_command(base_paths: &[PathBuf]) -> Option<PathBuf> {
-    let npm_path = find_cli_executable("npm", base_paths)?;
-    let mut command = Command::new(npm_path);
+fn resolve_npm_global_bin_path_via_command(_base_paths: &[PathBuf]) -> Option<PathBuf> {
+    let mut command = Command::new("npm");
     configure_windows_std_command(&mut command);
     let output = command.args(["prefix", "-g"]).output().ok()?;
 
@@ -182,36 +181,19 @@ fn npm_prefix_to_bin_dir(prefix: &Path) -> PathBuf {
 
 /// 检测单个 CLI 工具
 fn detect_cli(cli_name: &str) -> CliTool {
-    let scan_paths = get_scan_paths_public();
-    let mut first_invalid_match: Option<PathBuf> = None;
-
-    for cli_path in find_cli_executables(cli_name, &scan_paths) {
-        if let Some(version) = get_cli_version(&cli_path) {
-            return CliTool {
-                name: cli_name.to_string(),
-                path: cli_path.to_string_lossy().to_string(),
-                version: Some(version),
-                status: CliStatus::Available,
-            };
-        }
-
-        if first_invalid_match.is_none() {
-            first_invalid_match = Some(cli_path);
-        }
-    }
-
-    if let Some(cli_path) = first_invalid_match {
+    let command = cli_name.to_string();
+    if let Some(version) = get_cli_version(Path::new(cli_name)) {
         return CliTool {
             name: cli_name.to_string(),
-            path: cli_path.to_string_lossy().to_string(),
-            version: None,
-            status: CliStatus::Error,
+            command,
+            version: Some(version),
+            status: CliStatus::Available,
         };
     }
 
     CliTool {
         name: cli_name.to_string(),
-        path: String::new(),
+        command,
         version: None,
         status: CliStatus::NotFound,
     }
@@ -234,42 +216,6 @@ pub fn detect_cli_tools() -> Result<DetectionResult, String> {
         .count();
 
     Ok(DetectionResult { tools, total_found })
-}
-
-/// 手动验证 CLI 路径 (Tauri 命令)
-#[tauri::command]
-pub fn verify_cli_path(path: String) -> Result<CliTool, String> {
-    let cli_path = PathBuf::from(&path);
-
-    if !cli_path.exists() {
-        return Ok(CliTool {
-            name: "custom".to_string(),
-            path,
-            version: None,
-            status: CliStatus::NotFound,
-        });
-    }
-
-    // 尝试获取版本号来验证可执行性
-    let version = get_cli_version(&cli_path);
-    let status = if version.is_some() {
-        CliStatus::Available
-    } else {
-        CliStatus::Error
-    };
-
-    // 从路径推断 CLI 名称
-    let name = cli_path
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-
-    Ok(CliTool {
-        name,
-        path,
-        version,
-        status,
-    })
 }
 
 // ============== CLI 路径配置 CRUD ==============

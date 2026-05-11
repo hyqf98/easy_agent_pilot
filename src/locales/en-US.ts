@@ -50,8 +50,8 @@ export default {
     timeout: 'Request timeout',
     // Error type messages
     types: {
-      cliPathInvalid: 'CLI Path Invalid',
-      cliPathNotFound: 'CLI Path Not Found',
+      cliPathInvalid: 'CLI Command Invalid',
+      cliPathNotFound: 'CLI Command Not Found',
       cliExecutionFailed: 'CLI Execution Failed',
       apiAuthInvalid: 'API Authentication Failed',
       apiKeyMissing: 'API Key Missing',
@@ -65,8 +65,8 @@ export default {
     },
     // User-friendly error messages
     friendly: {
-      cliPathNotFound: 'The specified CLI tool was not found. Please check the path',
-      cliExecutionFailed: 'The CLI tool cannot be executed. Please check file permissions or reinstall',
+      cliPathNotFound: 'The specified CLI command was not found. Please check PATH',
+      cliExecutionFailed: 'The CLI command cannot be executed. Please check permissions or reinstall',
       apiAuthInvalid: 'API key is invalid or expired. Please check your configuration',
       apiKeyMissing: 'Please configure your API key first',
       networkTimeout: 'Request timed out. Please check your network connection and try again',
@@ -779,16 +779,16 @@ export default {
       statusUnsupported: 'Updater unavailable in current environment'
     },
     cli: {
-      title: 'CLI Path Settings',
+      title: 'CLI Management',
       autoDetect: 'Auto Detect',
       scanning: 'Scanning for installed CLI tools...',
       foundTools: 'Found {n} CLI tool(s)',
-      noToolsFound: 'No CLI tools found. Please ensure Claude CLI or Codex CLI is installed',
+      noToolsFound: 'No CLI tools found. Please ensure Claude, Codex, or OpenCode CLI is installed',
       autoDetected: 'Auto Detected',
-      manualConfig: 'Manual Configuration',
+      manualConfig: 'Command Configuration',
       addCli: 'Add CLI',
-      noCustomPaths: 'No custom CLI paths configured',
-      noCustomPathsHint: 'Click "Add CLI" to add CLI tools from non-standard paths',
+      noCustomPaths: 'No custom CLI commands configured',
+      noCustomPathsHint: 'Add a detected CLI command as an Agent',
       scanPathsHelp: 'Scan Paths Info',
       statusAvailable: 'Available',
       statusNotFound: 'Not Found',
@@ -857,7 +857,7 @@ export default {
       providerCodexSdk: 'Codex SDK',
       provider: 'Provider',
       apiUrl: 'API URL',
-      cliPath: 'CLI Path',
+      cliPath: 'CLI Command',
       createdAt: 'Created',
       updatedAt: 'Updated',
       testConnection: 'Test Connection',
@@ -877,15 +877,15 @@ export default {
       customModel: 'Custom Model',
       customModelPlaceholder: 'Enter custom model ID',
       modelPlaceholder: 'claude-3-opus-20240229',
-      cliPathPlaceholder: '/usr/local/bin/claude',
-      cliPathRequired: 'Please enter CLI path',
+      cliPathPlaceholder: 'claude',
+      cliPathRequired: 'Please enter CLI command',
       // Validation messages
       validation: {
         urlInvalid: 'Invalid URL format. Please enter a valid URL (e.g., https://api.example.com)',
         urlProtocolRequired: 'URL must include a protocol (e.g., https://)',
-        cliPathNotFound: 'CLI path does not exist. Please check the path',
-        cliPathNotExecutable: 'CLI file is not executable. Please check file permissions',
-        cliPathValidationFailed: 'CLI path validation failed'
+        cliPathNotFound: 'CLI command is unavailable. Please verify it is installed and on PATH',
+        cliPathNotExecutable: 'CLI command cannot be executed. Please check PATH and permissions',
+        cliPathValidationFailed: 'CLI command validation failed'
       },
       // Scan feature
       scan: {
@@ -953,8 +953,8 @@ export default {
       addError: 'Failed to add agent',
       // Migration related
       migrationTitle: 'Configuration Migration',
-      migrationAvailable: 'Detected {n} CLI path configuration(s) to migrate',
-      migrationDescription: 'The system detected legacy CLI path configurations. These can be migrated to the new agent configuration format for better management.',
+      migrationAvailable: 'Detected {n} legacy CLI configuration(s) to migrate',
+      migrationDescription: 'The system detected legacy CLI configurations. They can be migrated into the new Agent-based configuration flow.',
       migrationButton: 'Migrate Now',
       migrationLater: 'Later',
       migrationProcessing: 'Migrating...',

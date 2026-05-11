@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useNotificationStore } from './notification'
 import { useProjectStore } from './project'
 import { getErrorMessage } from '@/utils/api'
-import type { AgentConfig } from './agent'
+import { normalizeCliCommand, type AgentConfig } from './agent'
 import {
   buildSyncPreviewItems,
   buildMcpConfigInput,
@@ -88,11 +88,12 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
   const isSdkAgent = computed(() => selectedAgent.value?.type === 'sdk')
 
   function getCliInventoryCacheKey(agent: AgentConfig): string | null {
-    if (agent.type !== 'cli' || !agent.cliPath || !agent.provider) {
+    const cliPath = normalizeCliCommand(agent.cliPath) || agent.provider
+    if (agent.type !== 'cli' || !cliPath || !agent.provider) {
       return null
     }
 
-    return `${agent.provider}:${agent.cliPath}:${projectStore.currentProject?.path || '__global__'}`
+    return `${agent.provider}:${cliPath}:${projectStore.currentProject?.path || '__global__'}`
   }
 
   function invalidateCliInventory(agent?: AgentConfig | null) {
@@ -198,24 +199,25 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
     pluginsConfigs.value = []
 
     const notificationStore = useNotificationStore()
+    const cliPath = normalizeCliCommand(agent.cliPath) || agent.provider
 
     try {
-      if (agent.cliPath) {
-        await loadCliCapabilities(agent.cliPath, agent.provider)
+      if (cliPath) {
+        await loadCliCapabilities(cliPath, agent.provider)
       }
 
       const paths = await invoke<CliConfigPaths>('get_cli_config_paths', {
-        cliPath: agent.cliPath,
+        cliPath,
         cliType: agent.provider,
       })
       cliConfigPaths.value = paths
 
       const config = await invoke<CliConfig>('read_cli_config', {
-        cliPath: agent.cliPath,
+        cliPath,
         cliType: agent.provider,
       })
       const scanResult = await invoke<ClaudeConfigScanResult>('scan_cli_config', {
-        cliPath: agent.cliPath,
+        cliPath,
         cliType: agent.provider,
         projectPath: projectStore.currentProject?.path ?? null,
       })
@@ -309,8 +311,9 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
 
     const request = (async () => {
       try {
+        const cliPath = normalizeCliCommand(targetAgent.cliPath) || targetAgent.provider
         const scanResult = await invoke<ClaudeConfigScanResult>('scan_cli_config', {
-          cliPath: targetAgent.cliPath,
+          cliPath,
           cliType: targetAgent.provider,
           projectPath: projectStore.currentProject?.path ?? null,
         })
@@ -384,7 +387,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
 
     const notificationStore = useNotificationStore()
 
-    const cliPath = targetAgent.cliPath || targetAgent.provider
+    const cliPath = normalizeCliCommand(targetAgent.cliPath) || targetAgent.provider
     const cliType = targetAgent.provider
 
     if (!cliPath || !cliType) {
@@ -418,7 +421,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
     }
 
     try {
-      const cliPath = selectedAgent.value.cliPath || selectedAgent.value.provider
+      const cliPath = normalizeCliCommand(selectedAgent.value.cliPath) || selectedAgent.value.provider
       const cliType = selectedAgent.value.provider
 
       if (!cliPath || !cliType) {
@@ -461,11 +464,12 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
 
   async function scanCliItemsForSync(cliPath: string, type: SyncConfigType, cliType?: string) {
     const notificationStore = useNotificationStore()
+    const normalizedCliPath = normalizeCliCommand(cliPath) || cliType || cliPath
 
     try {
       if (type === 'mcp') {
         const config = await invoke<CliConfig>('read_cli_config', {
-          cliPath,
+          cliPath: normalizedCliPath,
           cliType,
         })
         const mcpServers = config.mcp_servers || config.mcpServers || {}
@@ -478,7 +482,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
       }
 
       const scanResult = await invoke<ClaudeConfigScanResult>('scan_cli_config', {
-        cliPath,
+        cliPath: normalizedCliPath,
         cliType,
       })
       return buildSyncPreviewItems(scanResult, type)
@@ -487,7 +491,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
       notificationStore.networkError(
         '扫描配置失败',
         getErrorMessage(error),
-        async () => { await scanCliItemsForSync(cliPath, type, cliType) }
+        async () => { await scanCliItemsForSync(normalizedCliPath || cliPath, type, cliType) }
       )
       throw error
     }
@@ -539,7 +543,7 @@ export const useSkillConfigStore = defineStore('skillConfig', () => {
     if (isReadOnly.value) {
       try {
         await invoke('update_cli_mcp_config', {
-          cliPath: selectedAgent.value?.cliPath,
+          cliPath: normalizeCliCommand(selectedAgent.value?.cliPath) || selectedAgent.value?.provider,
           cliType: selectedAgent.value?.provider,
           name: config.name,
           config: {

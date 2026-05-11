@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { invoke } from '@tauri-apps/api/core'
 import type { AgentConfig, AgentType, AgentProvider } from '@/stores/agent'
-import { EaButton, EaIcon, EaSelect } from '@/components/common'
+import { EaButton, EaSelect } from '@/components/common'
 import { validateUrl } from '@/utils/validation'
 
 export interface AgentConfigFormProps {
@@ -25,8 +24,7 @@ function createDefaultForm() {
     type: 'cli' as AgentType,
     provider: 'claude' as AgentProvider,
     apiKey: '',
-    baseUrl: '',
-    cliPath: ''
+    baseUrl: ''
   }
 }
 
@@ -35,24 +33,15 @@ const form = ref(createDefaultForm())
 function createDefaultFieldErrors() {
   return {
     name: '',
-    baseUrl: '',
-    cliPath: ''
+    baseUrl: ''
   }
 }
 
 const fieldErrors = ref(createDefaultFieldErrors())
 
 const isValidating = ref({
-  baseUrl: false,
-  cliPath: false
+  baseUrl: false
 })
-
-interface CliValidationResult {
-  name: string
-  path: string
-  version: string | null
-  status: 'Available' | 'NotFound' | 'Error'
-}
 
 const errorMessage = ref('')
 const isSubmitting = ref(false)
@@ -64,8 +53,7 @@ function resetForm() {
   fieldErrors.value = createDefaultFieldErrors()
   errorMessage.value = ''
   isValidating.value = {
-    baseUrl: false,
-    cliPath: false
+    baseUrl: false
   }
 }
 
@@ -77,8 +65,7 @@ watch(() => props.agent, (agent) => {
       type: agent.type,
       provider: agent.provider || 'claude',
       apiKey: agent.apiKey || '',
-      baseUrl: agent.baseUrl || '',
-      cliPath: agent.cliPath || ''
+      baseUrl: agent.baseUrl || ''
     }
     fieldErrors.value = createDefaultFieldErrors()
     errorMessage.value = ''
@@ -101,16 +88,6 @@ watch(() => form.value.name, () => {
 watch(() => form.value.baseUrl, () => {
   if (fieldErrors.value.baseUrl) {
     fieldErrors.value.baseUrl = ''
-  }
-  if (errorMessage.value) {
-    errorMessage.value = ''
-  }
-})
-
-// 监听 cliPath 输入，清除错误
-watch(() => form.value.cliPath, () => {
-  if (fieldErrors.value.cliPath) {
-    fieldErrors.value.cliPath = ''
   }
   if (errorMessage.value) {
     errorMessage.value = ''
@@ -144,43 +121,6 @@ const providerOptions = computed(() => {
 })
 
 const showSdkFields = computed(() => form.value.type === 'sdk')
-const showCliFields = computed(() => form.value.type === 'cli')
-
-type RuntimePlatform = 'windows' | 'macos' | 'linux'
-
-function detectPlatform(): RuntimePlatform {
-  const platform = (navigator as Navigator & {
-    userAgentData?: { platform?: string }
-  }).userAgentData?.platform || navigator.platform || navigator.userAgent
-  const normalized = platform.toLowerCase()
-
-  if (normalized.includes('win')) {
-    return 'windows'
-  }
-
-  if (normalized.includes('mac')) {
-    return 'macos'
-  }
-
-  return 'linux'
-}
-
-const runtimePlatform = detectPlatform()
-
-const cliPathPlaceholder = computed(() => {
-  const providerMap: Record<string, string> = { claude: 'claude', codex: 'codex', opencode: 'opencode' }
-  const executableName = providerMap[form.value.provider || ''] || 'claude'
-
-  if (runtimePlatform === 'windows') {
-    return `%USERPROFILE%\\\\AppData\\\\Roaming\\\\npm\\\\${executableName}.cmd`
-  }
-
-  if (runtimePlatform === 'macos') {
-    return `/opt/homebrew/bin/${executableName}`
-  }
-
-  return `/home/your-user/.local/bin/${executableName}`
-})
 
 // 验证 URL 格式（即时验证）
 const validateBaseUrlFormat = () => {
@@ -204,57 +144,23 @@ const validateBaseUrlFormat = () => {
   return true
 }
 
-// 验证 CLI 路径是否存在（即时验证）
-const validateCliPathExists = async () => {
-  if (!form.value.cliPath.trim()) {
-    fieldErrors.value.cliPath = ''
-    return true
-  }
-
-  isValidating.value.cliPath = true
-  try {
-    const result = await invoke<CliValidationResult>('verify_cli_path', {
-      path: form.value.cliPath.trim()
-    })
-
-    if (result.status === 'NotFound') {
-      fieldErrors.value.cliPath = t('settings.agent.validation.cliPathNotFound')
-      return false
-    } else if (result.status === 'Error') {
-      fieldErrors.value.cliPath = t('settings.agent.validation.cliPathNotExecutable')
-      return false
-    }
-
-    fieldErrors.value.cliPath = ''
-    return true
-  } catch {
-    fieldErrors.value.cliPath = t('settings.agent.validation.cliPathValidationFailed')
-    return false
-  } finally {
-    isValidating.value.cliPath = false
-  }
-}
-
 // 表单有效性校验
 const isFormValid = computed(() => {
   // 名称必填
   if (!form.value.name.trim()) return false
 
   // 有字段级错误时禁用
-  if (fieldErrors.value.name || fieldErrors.value.baseUrl || fieldErrors.value.cliPath) {
+  if (fieldErrors.value.name || fieldErrors.value.baseUrl) {
     return false
   }
 
   // 正在验证时禁用
-  if (isValidating.value.baseUrl || isValidating.value.cliPath) {
+  if (isValidating.value.baseUrl) {
     return false
   }
 
   // SDK 模式下 Base URL 必填
   if (form.value.type === 'sdk' && !form.value.baseUrl.trim()) return false
-
-  // CLI 模式下 CLI 路径必填
-  if (form.value.type === 'cli' && !form.value.cliPath.trim()) return false
 
   return true
 })
@@ -279,19 +185,6 @@ const validateForm = async (): Promise<boolean> => {
     }
   }
 
-  // CLI 模式验证
-  if (form.value.type === 'cli') {
-    if (!form.value.cliPath.trim()) {
-      fieldErrors.value.cliPath = t('settings.agent.cliPathRequired')
-      return false
-    }
-
-    // 验证路径是否存在
-    if (!(await validateCliPathExists())) {
-      return false
-    }
-  }
-
   return true
 }
 
@@ -306,7 +199,7 @@ const handleSubmit = async () => {
       provider: form.value.provider,
       apiKey: form.value.apiKey || undefined,
       baseUrl: form.value.baseUrl || undefined,
-      cliPath: form.value.cliPath || undefined
+      cliPath: form.value.type === 'cli' ? form.value.provider : undefined
     })
   } finally {
     isSubmitting.value = false
@@ -317,13 +210,8 @@ const handleCancel = () => {
   emit('cancel')
 }
 
-// 处理 blur 事件 - 即时验证
 const handleBaseUrlBlur = () => {
   validateBaseUrlFormat()
-}
-
-const handleCliPathBlur = () => {
-  validateCliPathExists()
 }
 </script>
 
@@ -420,39 +308,6 @@ const handleCliPathBlur = () => {
             class="form-field-error"
           >
             {{ fieldErrors.baseUrl }}
-          </span>
-        </div>
-      </template>
-
-      <!-- CLI 模式字段 -->
-      <template v-if="showCliFields">
-        <div class="form-group">
-          <label class="form-label">
-            {{ t('settings.agent.cliPath') }} <span class="form-label__required">*</span>
-          </label>
-          <div class="form-input-with-icon">
-            <input
-              v-model="form.cliPath"
-              type="text"
-              class="form-input"
-              :class="{ 'form-input--error': fieldErrors.cliPath }"
-              :placeholder="cliPathPlaceholder"
-              :disabled="isValidating.cliPath"
-              @blur="handleCliPathBlur"
-            >
-            <EaIcon
-              v-if="isValidating.cliPath"
-              name="loader"
-              :size="16"
-              spin
-              class="form-input-icon"
-            />
-          </div>
-          <span
-            v-if="fieldErrors.cliPath"
-            class="form-field-error"
-          >
-            {{ fieldErrors.cliPath }}
           </span>
         </div>
       </template>
@@ -554,23 +409,6 @@ const handleCliPathBlur = () => {
 
 .form-input--error:focus {
   border-color: var(--color-error, #ef4444);
-}
-
-.form-input-with-icon {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
-.form-input-with-icon .form-input {
-  flex: 1;
-  padding-right: var(--spacing-8);
-}
-
-.form-input-icon {
-  position: absolute;
-  right: var(--spacing-3);
-  color: var(--color-text-tertiary);
 }
 
 .form-field-error {

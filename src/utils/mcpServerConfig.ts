@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { AgentConfig } from '@/stores/agent'
+import { normalizeCliCommand, type AgentConfig } from '@/stores/agent'
 import type { McpServerConfig } from '@/services/conversation/strategies/types'
 import type {
   CliConfig,
@@ -89,8 +89,9 @@ function mapSdkMcpServer(config: RawAgentMcpConfig): McpServerConfig | null {
 }
 
 export async function loadAgentMcpServers(agent: AgentConfig): Promise<McpServerConfig[]> {
+  const cliPath = normalizeCliCommand(agent.cliPath) || agent.provider
   const cacheKey = agent.type === 'cli'
-    ? `cli:${agent.provider || ''}:${agent.cliPath || ''}`
+    ? `cli:${agent.provider || ''}:${cliPath || ''}`
     : `sdk:${agent.id}`
   const now = Date.now()
   const cachedEntry = mcpServerCache.get(cacheKey)
@@ -100,29 +101,29 @@ export async function loadAgentMcpServers(agent: AgentConfig): Promise<McpServer
   }
 
   const loader = (async () => {
-  if (agent.type === 'cli') {
-    if (!agent.cliPath) {
-      return []
+    if (agent.type === 'cli') {
+      if (!cliPath) {
+        return []
+      }
+
+      const config = await invoke<CliConfig>('read_cli_config', {
+        cliPath,
+        cliType: agent.provider
+      })
+      const mcpServers = config.mcp_servers || config.mcpServers || {}
+
+      return Object.entries(mcpServers)
+        .map(([name, server]) => mapCliMcpServer(name, server))
+        .filter((server): server is McpServerConfig => Boolean(server))
     }
 
-    const config = await invoke<CliConfig>('read_cli_config', {
-      cliPath: agent.cliPath,
-      cliType: agent.provider
+    const configs = await invoke<RawAgentMcpConfig[]>('list_agent_mcp_configs', {
+      agentId: agent.id
     })
-    const mcpServers = config.mcp_servers || config.mcpServers || {}
 
-    return Object.entries(mcpServers)
-      .map(([name, server]) => mapCliMcpServer(name, server))
+    return configs
+      .map(mapSdkMcpServer)
       .filter((server): server is McpServerConfig => Boolean(server))
-  }
-
-  const configs = await invoke<RawAgentMcpConfig[]>('list_agent_mcp_configs', {
-    agentId: agent.id
-  })
-
-  return configs
-    .map(mapSdkMcpServer)
-    .filter((server): server is McpServerConfig => Boolean(server))
   })()
 
   mcpServerCache.set(cacheKey, {

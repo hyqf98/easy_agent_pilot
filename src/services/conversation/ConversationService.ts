@@ -2096,14 +2096,6 @@ export class ConversationService {
       }
     }
 
-    // CLI 类型检查路径
-    if (agent.type === 'cli' && !agent.cliPath) {
-      return {
-        available: false,
-        reason: 'CLI 路径未配置'
-      }
-    }
-
     // SDK 类型检查 API Key
     if (agent.type === 'sdk') {
       if (!agent.apiKey) {

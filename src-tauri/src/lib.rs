@@ -90,7 +90,6 @@ pub fn run() {
             commands::check_database_exists,
             commands::migrate_persistence_path,
             commands::cli::detect_cli_tools,
-            commands::cli::verify_cli_path,
             commands::cli::list_cli_paths,
             commands::cli::add_cli_path,
             commands::cli::update_cli_path,

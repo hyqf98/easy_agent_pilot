@@ -12,9 +12,9 @@ export interface ApiError {
 
 /// 错误类型枚举
 export enum ErrorType {
-  /// CLI 路径无效
+  /// CLI 命令无效
   CLI_PATH_INVALID = 'CLI_PATH_INVALID',
-  /// CLI 路径不存在
+  /// CLI 命令不存在
   CLI_PATH_NOT_FOUND = 'CLI_PATH_NOT_FOUND',
   /// CLI 执行失败
   CLI_EXECUTION_FAILED = 'CLI_EXECUTION_FAILED',
@@ -201,7 +201,12 @@ export function classifyError(error: unknown): ErrorType {
   if (message.includes('cli') && (message.includes('failed') || message.includes('失败') || message.includes('unable') || message.includes('无法'))) {
     return ErrorType.CLI_EXECUTION_FAILED
   }
-  if (message.includes('路径未配置') || message.includes('path not configured')) {
+  if (
+    message.includes('路径未配置')
+    || message.includes('path not configured')
+    || message.includes('命令未配置')
+    || message.includes('command not configured')
+  ) {
     return ErrorType.CLI_PATH_NOT_FOUND
   }
   if (message.includes('os error 206') || message.includes('文件名或扩展名太长')) {

@@ -64,11 +64,7 @@ export class TaskSplitOrchestrator {
     let fullContent = ''
     const streamErrors: string[] = []
 
-    if (agent.type === 'cli') {
-      if (!agent.cliPath) {
-        throw new Error('CLI 路径未配置')
-      }
-    } else {
+    if (agent.type !== 'cli') {
       if (!agent.apiKey) {
         throw new Error('SDK API Key 未配置')
       }

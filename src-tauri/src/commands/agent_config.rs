@@ -1244,12 +1244,10 @@ pub fn sync_opencode_models(
         return Err("未配置 OpenCode Provider，请先在配置切换中设置 Provider".to_string());
     }
 
-    let scan_paths = crate::commands::cli::get_scan_paths_public();
-    let cli_path = crate::commands::cli_support::find_cli_executable("opencode", &scan_paths)
-        .ok_or_else(|| "未找到 opencode CLI".to_string())?;
-
-    let output =
-        crate::commands::cli_support::run_cli_command(&cli_path, &["models", &input.provider_name])
+    let output = crate::commands::cli_support::run_cli_command(
+        std::path::Path::new("opencode"),
+        &["models", &input.provider_name],
+    )
             .map_err(|e| format!("执行 opencode models {} 失败: {}", input.provider_name, e))?;
 
     if !output.status.success() {
@@ -1360,11 +1358,10 @@ pub struct SyncAllOpencodeModelsInput {
 pub fn sync_all_opencode_models(
     input: SyncAllOpencodeModelsInput,
 ) -> Result<Vec<AgentModelConfig>, String> {
-    let scan_paths = crate::commands::cli::get_scan_paths_public();
-    let cli_path = crate::commands::cli_support::find_cli_executable("opencode", &scan_paths)
-        .ok_or_else(|| "未找到 opencode CLI，请确认已安装 opencode".to_string())?;
-
-    let output = crate::commands::cli_support::run_cli_command(&cli_path, &["models", "--verbose"])
+    let output = crate::commands::cli_support::run_cli_command(
+        std::path::Path::new("opencode"),
+        &["models", "--verbose"],
+    )
         .map_err(|e| format!("执行 opencode models 失败: {}", e))?;
 
     if !output.status.success() {
@@ -1419,11 +1416,10 @@ pub fn sync_all_opencode_models(
 
 #[tauri::command]
 pub fn list_opencode_provider_models() -> Result<Vec<OpencodeProviderModels>, String> {
-    let scan_paths = crate::commands::cli::get_scan_paths_public();
-    let cli_path = crate::commands::cli_support::find_cli_executable("opencode", &scan_paths)
-        .ok_or_else(|| "未找到 opencode CLI".to_string())?;
-
-    let output = crate::commands::cli_support::run_cli_command(&cli_path, &["models"])
+    let output = crate::commands::cli_support::run_cli_command(
+        std::path::Path::new("opencode"),
+        &["models"],
+    )
         .map_err(|e| format!("执行 opencode models 失败: {}", e))?;
 
     if !output.status.success() {

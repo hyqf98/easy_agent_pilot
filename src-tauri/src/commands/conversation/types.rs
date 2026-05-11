@@ -30,7 +30,7 @@ pub struct McpServerConfig {
 pub struct CliExecutionRequest {
     /// 会话 ID
     pub session_id: String,
-    /// CLI 路径
+    /// CLI 命令名（兼容旧字段名）
     pub cli_path: String,
     /// 模型 ID
     pub model_id: Option<String>,
@@ -88,7 +88,7 @@ pub struct ExecutionRequest {
     pub agent_type: String,
     /// 提供者 (claude/codex)
     pub provider: String,
-    /// CLI 路径 (仅 CLI 类型需要)
+    /// CLI 命令名 (仅 CLI 类型需要，兼容旧字段名)
     pub cli_path: Option<String>,
     /// API 密钥 (仅 SDK 类型需要)
     pub api_key: Option<String>,

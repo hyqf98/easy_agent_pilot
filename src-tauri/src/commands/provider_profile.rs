@@ -1686,11 +1686,7 @@ async fn fetch_models_dev_providers() -> Result<Vec<OpenCodeAuthProvider>, Strin
 /// 通过 `opencode models` 命令（不带参数）获取所有可用模型的 provider 前缀，
 /// 去重后返回所有 CLI 支持的 provider ID 列表。
 fn fetch_all_opencode_provider_ids() -> Result<Vec<String>, String> {
-    let scan_paths = crate::commands::cli::get_scan_paths_public();
-    let cli_path = crate::commands::cli_support::find_cli_executable("opencode", &scan_paths)
-        .ok_or_else(|| "未找到 opencode CLI".to_string())?;
-
-    let output = crate::commands::cli_support::run_cli_command(&cli_path, &["models"])
+    let output = crate::commands::cli_support::run_cli_command(Path::new("opencode"), &["models"])
         .map_err(|e| format!("执行 opencode models 失败: {}", e))?;
 
     if !output.status.success() {
@@ -1750,17 +1746,8 @@ pub fn read_opencode_provider_api_key(provider: String) -> Result<Option<String>
 pub fn list_opencode_models(provider: String) -> Result<Vec<String>, String> {
     let configured_models = load_configured_opencode_models(&provider);
 
-    let scan_paths = crate::commands::cli::get_scan_paths_public();
-    let Some(cli_path) =
-        crate::commands::cli_support::find_cli_executable("opencode", &scan_paths)
-    else {
-        if !configured_models.is_empty() {
-            return Ok(configured_models);
-        }
-        return Err("未找到 opencode CLI".to_string());
-    };
-
-    let output = crate::commands::cli_support::run_cli_command(&cli_path, &["models", &provider])
+    let output =
+        crate::commands::cli_support::run_cli_command(Path::new("opencode"), &["models", &provider])
         .map_err(|e| format!("执行 opencode models {} 失败: {}", provider, e))?;
 
     if !output.status.success() {

@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { AgentConfig } from '@/stores/agent'
+import { normalizeCliCommand, type AgentConfig } from '@/stores/agent'
 
 export interface RuntimeNotice {
   id: string
@@ -281,7 +281,7 @@ export async function buildCliEnvironmentNotice(agent: AgentConfig): Promise<Run
     return null
   }
 
-  const cliPath = agent.cliPath || agent.provider
+  const cliPath = normalizeCliCommand(agent.cliPath) || agent.provider
   const cliType = agent.provider
 
   if (!cliPath || !cliType) {
@@ -297,36 +297,36 @@ export async function buildCliEnvironmentNotice(agent: AgentConfig): Promise<Run
   }
 
   const loader = (async (): Promise<RuntimeNotice | null> => {
-  try {
-    const [scanResult, cliConfig] = await Promise.all([
-      invoke<CliConfigScanResult>('scan_cli_config', { cliPath, cliType }),
-      invoke<CliConfig>('read_cli_config', { cliPath, cliType })
-    ])
+    try {
+      const [scanResult, cliConfig] = await Promise.all([
+        invoke<CliConfigScanResult>('scan_cli_config', { cliPath, cliType }),
+        invoke<CliConfig>('read_cli_config', { cliPath, cliType })
+      ])
 
-    const skillNames = uniqueNames(scanResult.skills.map(skill => skill.name))
-    const pluginNames = uniqueNames(scanResult.plugins.map(plugin => plugin.name))
-    const mcpNames = uniqueNames(Object.keys(cliConfig.mcp_servers || cliConfig.mcpServers || {}))
+      const skillNames = uniqueNames(scanResult.skills.map(skill => skill.name))
+      const pluginNames = uniqueNames(scanResult.plugins.map(plugin => plugin.name))
+      const mcpNames = uniqueNames(Object.keys(cliConfig.mcp_servers || cliConfig.mcpServers || {}))
 
-    const lines = [
-      formatNameList('Skills', skillNames),
-      formatNameList('Plugins', pluginNames),
-      formatNameList('MCP', mcpNames)
-    ].filter(Boolean) as string[]
+      const lines = [
+        formatNameList('Skills', skillNames),
+        formatNameList('Plugins', pluginNames),
+        formatNameList('MCP', mcpNames)
+      ].filter(Boolean) as string[]
 
-    if (lines.length === 0) {
+      if (lines.length === 0) {
+        return null
+      }
+
+      return {
+        id: 'environment',
+        title: '已加载运行扩展',
+        content: lines.join('\n'),
+        tone: 'info'
+      }
+    } catch (error) {
+      console.warn('[runtimeNotice] Failed to build CLI environment notice:', error)
       return null
     }
-
-    return {
-      id: 'environment',
-      title: '已加载运行扩展',
-      content: lines.join('\n'),
-      tone: 'info'
-    }
-  } catch (error) {
-    console.warn('[runtimeNotice] Failed to build CLI environment notice:', error)
-    return null
-  }
   })()
 
   environmentNoticeCache.set(cacheKey, {

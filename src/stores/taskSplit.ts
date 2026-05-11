@@ -1134,9 +1134,6 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
     if (!agent) {
       throw new Error('未找到选中的智能体，请重新选择后重试。')
     }
-    if (agent.type === 'cli' && !agent.cliPath) {
-      throw new Error('CLI 路径未配置')
-    }
     if (agent.type === 'sdk' && !agent.apiKey) {
       throw new Error('SDK API Key 未配置')
     }
