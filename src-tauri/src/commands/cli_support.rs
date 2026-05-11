@@ -251,10 +251,10 @@ fn resolve_windows_cli_path(cli_path: &str) -> String {
     }
     if let Some(resolved) = find_cli_executable(cli_path, &[]) {
         if let Some(resolved_str) = resolved.to_str() {
-            log_debug!(
-                "Windows CLI 路径解析: {} → {}",
-                cli_path,
-                resolved_str
+            crate::logging::write_log(
+                "DEBUG",
+                "cli_support",
+                &format!("Windows CLI 路径解析: {} → {}", cli_path, resolved_str),
             );
             return resolved_str.to_string();
         }
@@ -271,16 +271,16 @@ fn is_windows_script_extension(path: &Path) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn wrap_cmd_script(tokio_cmd: bool, resolved_path: &str, args: &[String]) -> (String, Vec<String>) {
+fn wrap_cmd_script(_tokio_cmd: bool, resolved_path: &str, args: &[String]) -> (String, Vec<String>) {
     let path = Path::new(resolved_path);
     if !is_windows_script_extension(path) {
         return (resolved_path.to_string(), args.to_vec());
     }
 
-    log_debug!(
-        "Windows CLI cmd 包装: {} → cmd.exe /C {}",
-        resolved_path,
-        resolved_path
+    crate::logging::write_log(
+        "DEBUG",
+        "cli_support",
+        &format!("Windows CLI cmd 包装: {} → cmd.exe /C {}", resolved_path, resolved_path),
     );
 
     let mut wrapped_args = vec!["/C".to_string(), resolved_path.to_string()];
