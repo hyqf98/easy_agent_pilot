@@ -187,7 +187,7 @@ export function useAgentSettingsPage() {
 
       if (withInstallerDetails) {
         refreshStatus.value = '正在刷新安装信息...'
-        await cliInstallerStore.loadInstallOptions()
+        await cliInstallerStore.ensureReady()
         void cliInstallerStore.checkAllUpdates()
       }
 
@@ -289,6 +289,8 @@ export function useAgentSettingsPage() {
     currentPage.value = 1
   }
 
+  let initialized = false
+
   watch(
     () => [uiStore.settingsModalVisible, uiStore.activeSettingsTab] as const,
     ([visible, activeTab], [previousVisible, previousTab]) => {
@@ -300,13 +302,15 @@ export function useAgentSettingsPage() {
         return
       }
 
-      void refreshAgentDetection()
+      if (initialized) {
+        void refreshAgentDetection()
+      }
     }
   )
 
   onMounted(async () => {
     await agentStore.loadAgents()
-    void cliInstallerStore.ensureReady()
+    initialized = true
     void refreshAgentDetection()
   })
 

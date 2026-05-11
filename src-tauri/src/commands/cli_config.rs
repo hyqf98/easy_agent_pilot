@@ -427,12 +427,12 @@ fn sync_skill_items(
         source_cli_type,
         target_cli_type,
     )?;
-    let source_scan = crate::commands::scan::scan_cli_config(
+    let source_scan = crate::commands::scan::scan_cli_config_sync(
         Some(source_cli_path.to_string()),
         source_cli_type.map(str::to_string),
         None,
     )?;
-    let target_scan = crate::commands::scan::scan_cli_config(
+    let target_scan = crate::commands::scan::scan_cli_config_sync(
         Some(target_cli_path.to_string()),
         target_cli_type.map(str::to_string),
         None,

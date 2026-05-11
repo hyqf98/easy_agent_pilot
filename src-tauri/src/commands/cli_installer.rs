@@ -22,17 +22,56 @@ static ACTIVE_CLI_OPERATIONS: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 
 fn create_command<S: AsRef<OsStr>>(program: S) -> Command {
+    let program_ref = program.as_ref();
+    let resolved = {
+        let program_str = program_ref.to_str().unwrap_or_default();
+        let path = std::path::Path::new(program_str);
+        if path.is_absolute() || path.components().count() > 1 {
+            program_ref.to_os_string()
+        } else {
+            let scan_paths = get_scan_paths_public();
+            find_cli_executable(program_str, &scan_paths)
+                .map(|p| p.into_os_string())
+                .unwrap_or_else(|| program_ref.to_os_string())
+        }
+    };
+
+    let mut command = Command::new(&resolved);
     #[cfg(target_os = "windows")]
     {
-        let mut command = Command::new(program);
         configure_windows_std_command(&mut command);
-        command
     }
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        Command::new(program)
+    let scan_paths = get_scan_paths_public();
+    let mut path_entries = Vec::new();
+    let mut seen = HashSet::new();
+
+    if let Some(existing_path) = std::env::var_os("PATH") {
+        for entry in std::env::split_paths(&existing_path) {
+            if entry.as_os_str().is_empty() {
+                continue;
+            }
+            if seen.insert(entry.clone()) {
+                path_entries.push(entry);
+            }
+        }
     }
+
+    for path in scan_paths {
+        if path.as_os_str().is_empty() {
+            continue;
+        }
+        if seen.insert(path.clone()) {
+            path_entries.push(path);
+        }
+    }
+
+    if !path_entries.is_empty() {
+        let new_path = std::env::join_paths(&path_entries).unwrap_or_default();
+        command.env("PATH", new_path);
+    }
+
+    command
 }
 
 #[cfg(windows)]
@@ -107,7 +146,51 @@ pub struct InstallCompleteEvent {
 }
 
 #[tauri::command]
-pub fn detect_package_managers() -> Result<Vec<PackageManager>, String> {
+pub async fn detect_package_managers() -> Result<Vec<PackageManager>, String> {
+    tokio::task::spawn_blocking(|| {
+        let mut managers = Vec::new();
+        let scan_paths = get_scan_paths_public();
+
+        let npm_path = find_cli_executable("npm", &scan_paths);
+        managers.push(PackageManager {
+            name: "npm".to_string(),
+            available: npm_path.is_some(),
+            version: npm_path
+                .as_deref()
+                .and_then(|path| get_cli_version(path)),
+        });
+
+        #[cfg(target_os = "macos")]
+        {
+            let brew_path = find_cli_executable("brew", &scan_paths);
+            managers.push(PackageManager {
+                name: "homebrew".to_string(),
+                available: true,
+                version: brew_path
+                    .as_deref()
+                    .and_then(|path| get_cli_version(path)),
+            });
+        }
+
+        #[cfg(not(windows))]
+        {
+            let curl_path = find_cli_executable("curl", &scan_paths);
+            managers.push(PackageManager {
+                name: "curl".to_string(),
+                available: curl_path.is_some(),
+                version: curl_path
+                    .as_deref()
+                    .and_then(|path| get_cli_version(path)),
+            });
+        }
+
+        Ok(managers)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn detect_package_managers_sync() -> Vec<PackageManager> {
     let mut managers = Vec::new();
     let scan_paths = get_scan_paths_public();
 
@@ -144,7 +227,7 @@ pub fn detect_package_managers() -> Result<Vec<PackageManager>, String> {
         });
     }
 
-    Ok(managers)
+    managers
 }
 
 fn detect_cli_installed(cli_name: &str) -> (bool, Option<String>) {
@@ -158,14 +241,25 @@ fn detect_cli_installed(cli_name: &str) -> (bool, Option<String>) {
 
 /// 获取 CLI 的安装��项
 #[tauri::command]
-pub fn get_cli_install_options(cli_name: String) -> Result<CliInstallerInfo, String> {
-    let managers = detect_package_managers()?;
-    let manager_map: HashMap<&str, bool> = managers
+pub async fn get_cli_install_options(cli_name: String) -> Result<CliInstallerInfo, String> {
+    let cli_name_clone = cli_name.clone();
+    let managers = tokio::task::spawn_blocking(move || {
+        let scan_paths = get_scan_paths_public();
+        let executable = find_cli_executable(&cli_name_clone, &scan_paths);
+        let version = executable
+            .as_deref()
+            .and_then(|path| get_cli_version(path));
+        let managers = detect_package_managers_sync();
+        (executable.is_some(), version, managers)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let (installed, current_version, manager_list) = managers;
+    let manager_map: HashMap<&str, bool> = manager_list
         .iter()
         .map(|m| (m.name.as_str(), m.available))
         .collect();
-
-    let (installed, current_version) = detect_cli_installed(&cli_name);
 
     let mut options = Vec::new();
 
@@ -396,29 +490,28 @@ pub async fn install_cli(cli_name: String, method: String, app: AppHandle) -> Re
         &format!("🚀 Starting installation of {}...", cli_name),
     );
 
-    let result = (|| -> Result<(), String> {
-        let options = get_cli_install_options(cli_name.clone())?;
-        let option = options
-            .install_options
-            .iter()
-            .find(|o| o.method == method)
-            .ok_or("Installation method not found")?;
+    let options = get_cli_install_options(cli_name.clone()).await?;
+    let option = options
+        .install_options
+        .iter()
+        .find(|o| o.method == method)
+        .ok_or("Installation method not found")?;
 
-        if !option.available {
-            return Err(format!(
-                "Required package manager for '{}' method is not available",
-                method
-            ));
-        }
+    if !option.available {
+        finish_cli_operation(&cli_name);
+        return Err(format!(
+            "Required package manager for '{}' method is not available",
+            method
+        ));
+    }
 
-        emit_log_event(
-            &app,
-            &cli_name,
-            &format!("📝 Executing: {}", option.command),
-        );
+    emit_log_event(
+        &app,
+        &cli_name,
+        &format!("📝 Executing: {}", option.command),
+    );
 
-        execute_install_command(&app, &cli_name, &method, &option.command)
-    })();
+    let result = execute_install_command(&app, &cli_name, &method, &option.command);
     finish_cli_operation(&cli_name);
 
     match result {
@@ -553,7 +646,14 @@ fn execute_install_command(
 
 #[tauri::command]
 pub async fn check_cli_update(cli_name: String) -> Result<VersionInfo, String> {
-    let (_, current_raw) = detect_cli_installed(&cli_name);
+    let cli_name_clone = cli_name.clone();
+    let current_raw = tokio::task::spawn_blocking(move || {
+        let (_, version) = detect_cli_installed(&cli_name_clone);
+        version
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
     if current_raw.is_none() {
         return Ok(resolve_version_state(None, None));
     }
@@ -734,7 +834,7 @@ pub async fn upgrade_cli(cli_name: String, app: AppHandle) -> Result<(), String>
     );
 
     let result = async {
-        let install_info = get_cli_install_options(cli_name.clone())?;
+        let install_info = get_cli_install_options(cli_name.clone()).await?;
         let methods = build_upgrade_method_order(&cli_name, &install_info);
 
         if methods.is_empty() {

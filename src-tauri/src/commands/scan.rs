@@ -891,9 +891,7 @@ fn scan_plugins_directory(
     Ok(plugins)
 }
 
-/// 扫描 CLI 配置 (Tauri 命令)
-#[tauri::command]
-pub fn scan_cli_config(
+pub fn scan_cli_config_sync(
     cli_path: Option<String>,
     cli_type: Option<String>,
     project_path: Option<String>,
@@ -942,6 +940,18 @@ pub fn scan_cli_config(
         skills,
         plugins,
     ))
+}
+
+/// 扫描 CLI 配置 (Tauri 命令，异步)
+#[tauri::command]
+pub async fn scan_cli_config(
+    cli_path: Option<String>,
+    cli_type: Option<String>,
+    project_path: Option<String>,
+) -> Result<ClaudeConfigScanResult, String> {
+    tokio::task::spawn_blocking(move || scan_cli_config_sync(cli_path, cli_type, project_path))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// 尝试通过 claude mcp list 命令获取 MCP 配置

@@ -249,14 +249,23 @@ fn detect_cli(cli_name: &str) -> CliTool {
     }
 }
 
-/// 检测所有 CLI 工具 (Tauri 命令)
+/// 检测所有 CLI 工具 (Tauri 命令，异步并行)
 #[tauri::command]
-pub fn detect_cli_tools() -> Result<DetectionResult, String> {
-    let cli_names = vec!["claude", "codex", "opencode"];
-    let mut tools = Vec::new();
+pub async fn detect_cli_tools() -> Result<DetectionResult, String> {
+    let cli_names = vec!["claude".to_string(), "codex".to_string(), "opencode".to_string()];
 
-    for cli_name in cli_names {
-        let tool = detect_cli(cli_name);
+    let handles: Vec<_> = cli_names
+        .into_iter()
+        .map(|name| {
+            tokio::task::spawn_blocking(move || detect_cli(&name))
+        })
+        .collect();
+
+    let mut tools = Vec::with_capacity(handles.len());
+    for handle in handles {
+        let tool = handle
+            .await
+            .map_err(|e| format!("CLI 检测任务失败: {}", e))?;
         tools.push(tool);
     }
 

@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::time::Duration;
 use tokio::process::Command as TokioCommand;
 
 use crate::commands::cli::get_scan_paths_public;
@@ -456,8 +457,10 @@ pub fn get_cli_version(cli_path: &Path) -> Option<String> {
         ["-v"].as_slice(),
         ["version"].as_slice(),
     ] {
-        let Ok(output) = run_cli_command(cli_path, args) else {
-            continue;
+        let output = run_cli_command_with_timeout(cli_path, args);
+        let output = match output {
+            Some(o) => o,
+            None => continue,
         };
         if !output.status.success() {
             continue;
@@ -475,6 +478,25 @@ pub fn get_cli_version(cli_path: &Path) -> Option<String> {
     }
 
     None
+}
+
+const VERSION_CHECK_TIMEOUT_SECS: u64 = 5;
+
+fn run_cli_command_with_timeout(cli_path: &Path, args: &[&str]) -> Option<Output> {
+    let cli_path_owned = cli_path.to_path_buf();
+    let args_owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let args_refs: Vec<&str> = args_owned.iter().map(|s| s.as_str()).collect();
+        let result = run_cli_command(&cli_path_owned, &args_refs);
+        let _ = tx.send(result);
+    });
+
+    match rx.recv_timeout(Duration::from_secs(VERSION_CHECK_TIMEOUT_SECS)) {
+        Ok(Ok(output)) => Some(output),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
