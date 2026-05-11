@@ -245,26 +245,7 @@ pub fn find_cli_executable(cli_name: &str, extra_dirs: &[PathBuf]) -> Option<Pat
 }
 
 #[cfg(target_os = "windows")]
-fn resolve_windows_cli_path(cli_path: &str) -> String {
-    let path = Path::new(cli_path);
-    if path.is_absolute() || path.components().count() > 1 {
-        return cli_path.to_string();
-    }
-    if let Some(resolved) = find_cli_executable(cli_path, &[]) {
-        if let Some(resolved_str) = resolved.to_str() {
-            crate::logging::write_log(
-                "DEBUG",
-                "cli_support",
-                &format!("Windows CLI 路径解析: {} → {}", cli_path, resolved_str),
-            );
-            return resolved_str.to_string();
-        }
-    }
-    cli_path.to_string()
-}
-
-#[cfg(target_os = "windows")]
-fn is_windows_script_extension(path: &Path) -> bool {
+fn is_windows_script_path(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "cmd" | "bat"))
@@ -272,19 +253,27 @@ fn is_windows_script_extension(path: &Path) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn wrap_cmd_script(_tokio_cmd: bool, resolved_path: &str, args: &[String]) -> (String, Vec<String>) {
-    let path = Path::new(resolved_path);
-    if !is_windows_script_extension(path) {
-        return (resolved_path.to_string(), args.to_vec());
+fn needs_cmd_wrapper(cli_path: &str) -> bool {
+    let path = Path::new(cli_path);
+    if !path.is_absolute() && path.components().count() <= 1 {
+        return true;
+    }
+    is_windows_script_path(path)
+}
+
+#[cfg(target_os = "windows")]
+fn wrap_for_windows(cli_path: &str, args: &[String]) -> (String, Vec<String>) {
+    if !needs_cmd_wrapper(cli_path) {
+        return (cli_path.to_string(), args.to_vec());
     }
 
     crate::logging::write_log(
         "DEBUG",
         "cli_support",
-        &format!("Windows CLI cmd 包装: {} → cmd.exe /C {}", resolved_path, resolved_path),
+        &format!("Windows 命令包装: {} → cmd.exe /C {} + {} args", cli_path, cli_path, args.len()),
     );
 
-    let mut wrapped_args = vec!["/C".to_string(), resolved_path.to_string()];
+    let mut wrapped_args = vec!["/C".to_string(), cli_path.to_string()];
     wrapped_args.extend(args.iter().cloned());
     ("cmd.exe".to_string(), wrapped_args)
 }
@@ -336,23 +325,17 @@ fn configure_cli_tokio_command_env(command: &mut TokioCommand, cli_path: &Path) 
 
 #[cfg(target_os = "windows")]
 pub fn run_cli_command(cli_path: &Path, args: &[&str]) -> std::io::Result<Output> {
-    let resolved = if cli_path.is_absolute() || cli_path.components().count() > 1 {
-        cli_path.to_path_buf()
-    } else {
-        resolve_windows_cli_path(cli_path.to_str().unwrap_or_default()).into()
-    };
-    let resolved_str = resolved.to_str().unwrap_or_default();
-    let path = Path::new(resolved_str);
-    if is_windows_script_extension(path) {
+    let cli_str = cli_path.to_str().unwrap_or_default();
+    if needs_cmd_wrapper(cli_str) {
         let mut command = Command::new("cmd.exe");
         configure_windows_std_command(&mut command);
-        configure_cli_std_command_env(&mut command, &resolved);
-        command.arg("/C").arg(&resolved).args(args);
+        configure_cli_std_command_env(&mut command, cli_path);
+        command.arg("/C").arg(cli_str).args(args);
         command.output()
     } else {
-        let mut command = Command::new(&resolved);
+        let mut command = Command::new(cli_path);
         configure_windows_std_command(&mut command);
-        configure_cli_std_command_env(&mut command, &resolved);
+        configure_cli_std_command_env(&mut command, cli_path);
         command.args(args);
         command.output()
     }
@@ -368,11 +351,10 @@ pub fn run_cli_command(cli_path: &Path, args: &[&str]) -> std::io::Result<Output
 
 #[cfg(target_os = "windows")]
 pub fn build_tokio_cli_command(cli_path: &str, args: &[String]) -> TokioCommand {
-    let resolved = resolve_windows_cli_path(cli_path);
-    let (executable, wrapped_args) = wrap_cmd_script(true, &resolved, args);
+    let (executable, wrapped_args) = wrap_for_windows(cli_path, args);
     let mut command = TokioCommand::new(&executable);
     configure_windows_tokio_command(&mut command);
-    configure_cli_tokio_command_env(&mut command, Path::new(&resolved));
+    configure_cli_tokio_command_env(&mut command, Path::new(cli_path));
     command.args(&wrapped_args);
     command
 }
