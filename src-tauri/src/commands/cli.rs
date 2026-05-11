@@ -8,7 +8,7 @@ use std::process::Command;
 use uuid::Uuid;
 
 use crate::commands::cli_support::{
-    configure_windows_std_command, get_cli_version,
+    configure_windows_std_command, find_cli_executable, get_cli_version,
 };
 
 /// CLI 工具信息
@@ -63,9 +63,17 @@ pub fn get_scan_paths_public() -> Vec<PathBuf> {
     {
         push_scan_path(&mut paths, &mut seen, PathBuf::from("/usr/local/bin"));
         push_scan_path(&mut paths, &mut seen, PathBuf::from("/opt/homebrew/bin"));
+        push_scan_path(&mut paths, &mut seen, PathBuf::from("/opt/homebrew/sbin"));
+        push_scan_path(&mut paths, &mut seen, PathBuf::from("/usr/bin"));
+        push_scan_path(&mut paths, &mut seen, PathBuf::from("/bin"));
         if let Some(h) = &home {
             push_scan_path(&mut paths, &mut seen, h.join(".local/bin"));
             push_scan_path(&mut paths, &mut seen, h.join(".npm-global/bin"));
+            push_scan_path(&mut paths, &mut seen, h.join(".volta/bin"));
+            push_scan_path(&mut paths, &mut seen, h.join(".nvm/current/bin"));
+            push_scan_path(&mut paths, &mut seen, h.join(".bun/bin"));
+            push_scan_path(&mut paths, &mut seen, h.join(".cargo/bin"));
+            push_scan_path(&mut paths, &mut seen, h.join(".asdf/shims"));
             push_scan_path(&mut paths, &mut seen, h.join("Applications"));
         }
         push_scan_path(&mut paths, &mut seen, PathBuf::from("/Applications"));
@@ -75,15 +83,38 @@ pub fn get_scan_paths_public() -> Vec<PathBuf> {
     {
         push_scan_path(&mut paths, &mut seen, PathBuf::from("/usr/local/bin"));
         push_scan_path(&mut paths, &mut seen, PathBuf::from("/usr/bin"));
+        push_scan_path(&mut paths, &mut seen, PathBuf::from("/usr/local/sbin"));
+        push_scan_path(&mut paths, &mut seen, PathBuf::from("/usr/sbin"));
+        push_scan_path(&mut paths, &mut seen, PathBuf::from("/bin"));
         if let Some(h) = &home {
             push_scan_path(&mut paths, &mut seen, h.join(".local/bin"));
             push_scan_path(&mut paths, &mut seen, h.join(".npm-global/bin"));
+            push_scan_path(&mut paths, &mut seen, h.join(".volta/bin"));
+            push_scan_path(&mut paths, &mut seen, h.join(".nvm/current/bin"));
+            push_scan_path(&mut paths, &mut seen, h.join(".bun/bin"));
+            push_scan_path(&mut paths, &mut seen, h.join(".cargo/bin"));
+            push_scan_path(&mut paths, &mut seen, h.join(".asdf/shims"));
+            push_scan_path(&mut paths, &mut seen, h.join(".local/share/pnpm"));
         }
         push_scan_path(&mut paths, &mut seen, PathBuf::from("/snap/bin"));
     }
 
     #[cfg(target_os = "windows")]
     {
+        if let Some(program_files) = std::env::var_os("ProgramFiles") {
+            push_scan_path(
+                &mut paths,
+                &mut seen,
+                PathBuf::from(program_files).join("nodejs"),
+            );
+        }
+        if let Some(program_files_x86) = std::env::var_os("ProgramFiles(x86)") {
+            push_scan_path(
+                &mut paths,
+                &mut seen,
+                PathBuf::from(program_files_x86).join("nodejs"),
+            );
+        }
         if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
             push_scan_path(
                 &mut paths,
@@ -93,7 +124,17 @@ pub fn get_scan_paths_public() -> Vec<PathBuf> {
             push_scan_path(
                 &mut paths,
                 &mut seen,
+                PathBuf::from(&local_app_data).join("pnpm"),
+            );
+            push_scan_path(
+                &mut paths,
+                &mut seen,
                 PathBuf::from(&local_app_data).join("Programs"),
+            );
+            push_scan_path(
+                &mut paths,
+                &mut seen,
+                PathBuf::from(&local_app_data).join("Programs").join("nodejs"),
             );
         }
         if let Ok(app_data) = std::env::var("APPDATA") {
@@ -101,6 +142,9 @@ pub fn get_scan_paths_public() -> Vec<PathBuf> {
         }
         if let Some(h) = &home {
             push_scan_path(&mut paths, &mut seen, h.join(".local/bin"));
+            push_scan_path(&mut paths, &mut seen, h.join(".bun/bin"));
+            push_scan_path(&mut paths, &mut seen, h.join(".volta/bin"));
+            push_scan_path(&mut paths, &mut seen, h.join(".cargo/bin"));
         }
     }
 
@@ -182,11 +226,17 @@ fn npm_prefix_to_bin_dir(prefix: &Path) -> PathBuf {
 /// 检测单个 CLI 工具
 fn detect_cli(cli_name: &str) -> CliTool {
     let command = cli_name.to_string();
-    if let Some(version) = get_cli_version(Path::new(cli_name)) {
+    let scan_paths = get_scan_paths_public();
+    let executable = find_cli_executable(cli_name, &scan_paths);
+    let version = executable
+        .as_deref()
+        .and_then(|path| get_cli_version(path));
+
+    if executable.is_some() {
         return CliTool {
             name: cli_name.to_string(),
             command,
-            version: Some(version),
+            version,
             status: CliStatus::Available,
         };
     }

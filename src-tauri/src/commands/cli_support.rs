@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tokio::process::Command as TokioCommand;
 
+use crate::commands::cli::get_scan_paths_public;
+
 const WINDOWS_EXEC_EXTENSIONS: &[&str] = &[".exe", ".cmd", ".bat", ".com"];
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -242,23 +244,32 @@ pub fn find_cli_executable(cli_name: &str, extra_dirs: &[PathBuf]) -> Option<Pat
 }
 
 fn build_cli_runtime_path(cli_path: &Path) -> Option<OsString> {
-    let cli_dir = cli_path.parent()?;
-    let existing_path = std::env::var_os("PATH");
     let mut path_entries = Vec::new();
     let mut seen = HashSet::new();
 
-    if seen.insert(cli_dir.to_path_buf()) {
-        path_entries.push(cli_dir.to_path_buf());
-    }
-
-    if let Some(value) = existing_path {
-        for entry in std::env::split_paths(&value) {
+    if let Some(existing_path) = std::env::var_os("PATH") {
+        for entry in std::env::split_paths(&existing_path) {
             if entry.as_os_str().is_empty() {
                 continue;
             }
             if seen.insert(entry.clone()) {
                 path_entries.push(entry);
             }
+        }
+    }
+
+    if let Some(parent) = cli_path.parent() {
+        if !parent.as_os_str().is_empty() && seen.insert(parent.to_path_buf()) {
+            path_entries.push(parent.to_path_buf());
+        }
+    }
+
+    for path in get_scan_paths_public() {
+        if path.as_os_str().is_empty() {
+            continue;
+        }
+        if seen.insert(path.clone()) {
+            path_entries.push(path);
         }
     }
 
@@ -279,26 +290,11 @@ fn configure_cli_tokio_command_env(command: &mut TokioCommand, cli_path: &Path) 
 
 #[cfg(target_os = "windows")]
 pub fn run_cli_command(cli_path: &Path, args: &[&str]) -> std::io::Result<Output> {
-    let extension = cli_path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-
-    if matches!(extension.as_str(), "cmd" | "bat") {
-        let mut command = Command::new("cmd");
-        configure_windows_std_command(&mut command);
-        configure_cli_std_command_env(&mut command, cli_path);
-        command.arg("/C").arg(cli_path);
-        command.args(args);
-        command.output()
-    } else {
-        let mut command = Command::new(cli_path);
-        configure_windows_std_command(&mut command);
-        configure_cli_std_command_env(&mut command, cli_path);
-        command.args(args);
-        command.output()
-    }
+    let mut command = Command::new(cli_path);
+    configure_windows_std_command(&mut command);
+    configure_cli_std_command_env(&mut command, cli_path);
+    command.args(args);
+    command.output()
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -311,25 +307,9 @@ pub fn run_cli_command(cli_path: &Path, args: &[&str]) -> std::io::Result<Output
 
 #[cfg(target_os = "windows")]
 pub fn build_tokio_cli_command(cli_path: &str, args: &[String]) -> TokioCommand {
-    let raw_path = Path::new(cli_path);
-    let extension = raw_path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-
-    if matches!(extension.as_str(), "cmd" | "bat") {
-        let mut command = TokioCommand::new("cmd");
-        configure_windows_tokio_command(&mut command);
-        configure_cli_tokio_command_env(&mut command, raw_path);
-        command.arg("/C").arg(cli_path);
-        command.args(args);
-        return command;
-    }
-
     let mut command = TokioCommand::new(cli_path);
     configure_windows_tokio_command(&mut command);
-    configure_cli_tokio_command_env(&mut command, raw_path);
+    configure_cli_tokio_command_env(&mut command, Path::new(cli_path));
     command.args(args);
     command
 }
@@ -397,9 +377,8 @@ pub fn build_cli_launch_error_message(
 
 #[cfg(not(target_os = "windows"))]
 pub fn build_tokio_cli_command(cli_path: &str, args: &[String]) -> TokioCommand {
-    let raw_path = Path::new(cli_path);
     let mut command = TokioCommand::new(cli_path);
-    configure_cli_tokio_command_env(&mut command, raw_path);
+    configure_cli_tokio_command_env(&mut command, Path::new(cli_path));
     command.args(args);
     command
 }

@@ -1,7 +1,9 @@
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useAgentStore, type AgentConfig, type CliTool } from '@/stores/agent'
 import { useCliInstallerStore } from '@/stores/cliInstaller'
+import { useNotificationStore } from '@/stores/notification'
+import { useUIStore } from '@/stores/ui'
 
 interface MigrationResult {
   success: boolean
@@ -22,6 +24,8 @@ const PAGE_SIZE = 10
 export function useAgentSettingsPage() {
   const agentStore = useAgentStore()
   const cliInstallerStore = useCliInstallerStore()
+  const notificationStore = useNotificationStore()
+  const uiStore = useUIStore()
 
   const addingToolName = ref<string | null>(null)
   const currentPage = ref(1)
@@ -46,6 +50,8 @@ export function useAgentSettingsPage() {
   const isMigrating = ref(false)
   const migrationResult = ref<MigrationResult | null>(null)
   const showMigrationResultToast = ref(false)
+  const isRefreshing = ref(false)
+  const refreshStatus = ref('')
 
   const filteredAgents = computed(() => {
     let result = [...agentStore.agents]
@@ -157,11 +163,50 @@ export function useAgentSettingsPage() {
     showMigrationBanner.value = false
   }
 
+  async function refreshAgentDetection(options: { withInstallerDetails?: boolean; notify?: boolean } = {}) {
+    const withInstallerDetails = options.withInstallerDetails ?? false
+    const notify = options.notify ?? false
+
+    if (isRefreshing.value) {
+      return
+    }
+
+    isRefreshing.value = true
+    refreshStatus.value = withInstallerDetails
+      ? '正在重新检测 CLI 命令和安装信息...'
+      : '正在检测当前电脑中的 CLI 命令...'
+
+    if (notify) {
+      notificationStore.info('正在刷新', refreshStatus.value)
+    }
+
+    try {
+      await nextTick()
+      await agentStore.scanCliTools({ force: true })
+      await checkMigrationNeeded()
+
+      if (withInstallerDetails) {
+        refreshStatus.value = '正在刷新安装信息...'
+        await cliInstallerStore.loadInstallOptions()
+        void cliInstallerStore.checkAllUpdates()
+      }
+
+      if (notify) {
+        notificationStore.success('刷新完成', withInstallerDetails
+          ? '已重新检测本机 CLI 命令和安装信息'
+          : '已重新检测本机 CLI 命令')
+      }
+    } catch (error) {
+      console.error('Failed to refresh agent detection:', error)
+      notificationStore.error('刷新失败', String(error))
+    } finally {
+      isRefreshing.value = false
+      refreshStatus.value = ''
+    }
+  }
+
   async function triggerMigrationCheck() {
-    await Promise.all([
-      agentStore.scanCliTools({ force: true }),
-      checkMigrationNeeded()
-    ])
+    await refreshAgentDetection({ withInstallerDetails: true, notify: true })
   }
 
   async function handleQuickAdd(tool: CliTool) {
@@ -244,10 +289,25 @@ export function useAgentSettingsPage() {
     currentPage.value = 1
   }
 
+  watch(
+    () => [uiStore.settingsModalVisible, uiStore.activeSettingsTab] as const,
+    ([visible, activeTab], [previousVisible, previousTab]) => {
+      if (!visible || activeTab !== 'agents') {
+        return
+      }
+
+      if (visible === previousVisible && activeTab === previousTab) {
+        return
+      }
+
+      void refreshAgentDetection()
+    }
+  )
+
   onMounted(async () => {
     await agentStore.loadAgents()
-    void agentStore.scanCliTools()
-    void checkMigrationNeeded()
+    void cliInstallerStore.ensureReady()
+    void refreshAgentDetection()
   })
 
   return {
@@ -269,6 +329,8 @@ export function useAgentSettingsPage() {
     isMigrating,
     migrationResult,
     showMigrationResultToast,
+    isRefreshing,
+    refreshStatus,
     filteredAgents,
     totalPages,
     paginatedAgents,

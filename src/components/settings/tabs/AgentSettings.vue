@@ -29,6 +29,8 @@ const {
   isMigrating,
   migrationResult,
   showMigrationResultToast,
+  isRefreshing,
+  refreshStatus,
   filteredAgents,
   totalPages,
   paginatedAgents,
@@ -181,6 +183,8 @@ const {
           type="ghost"
           size="small"
           class="toolbar-refresh"
+          :loading="isRefreshing"
+          :disabled="isRefreshing"
           @click="triggerMigrationCheck"
         >
           <EaIcon
@@ -188,6 +192,13 @@ const {
             :size="14"
           />
         </EaButton>
+
+        <div
+          v-if="refreshStatus"
+          class="agent-list-page__refresh-status"
+        >
+          {{ refreshStatus }}
+        </div>
 
         <div class="filter-group">
           <EaButton
@@ -411,6 +422,12 @@ const {
 
 .toolbar-refresh {
   flex-shrink: 0;
+}
+
+.agent-list-page__refresh-status {
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
 }
 
 .agent-count {

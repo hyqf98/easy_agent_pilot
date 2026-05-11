@@ -1,113 +1,13 @@
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio::process::Command as TokioCommand;
 
-use crate::commands::cli_support::{configure_windows_tokio_command, find_cli_executable};
+use crate::commands::cli_support::configure_windows_tokio_command;
 
-fn default_stdio_search_dirs() -> Vec<PathBuf> {
-    let mut extra_dirs = Vec::new();
-
-    #[cfg(target_os = "macos")]
-    {
-        extra_dirs.push(PathBuf::from("/opt/homebrew/bin"));
-        extra_dirs.push(PathBuf::from("/usr/local/bin"));
-        extra_dirs.push(PathBuf::from("/usr/bin"));
-
-        if let Some(home_dir) = dirs::home_dir() {
-            extra_dirs.push(home_dir.join(".volta").join("bin"));
-            extra_dirs.push(home_dir.join(".nvm").join("current").join("bin"));
-            extra_dirs.push(home_dir.join(".local").join("bin"));
-            extra_dirs.push(home_dir.join(".bun").join("bin"));
-            extra_dirs.push(home_dir.join(".cargo").join("bin"));
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        extra_dirs.push(PathBuf::from("/usr/local/bin"));
-        extra_dirs.push(PathBuf::from("/usr/bin"));
-        extra_dirs.push(PathBuf::from("/bin"));
-
-        if let Some(home_dir) = dirs::home_dir() {
-            extra_dirs.push(home_dir.join(".local").join("bin"));
-            extra_dirs.push(home_dir.join(".volta").join("bin"));
-            extra_dirs.push(home_dir.join(".nvm").join("current").join("bin"));
-            extra_dirs.push(home_dir.join(".bun").join("bin"));
-            extra_dirs.push(home_dir.join(".cargo").join("bin"));
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        if let Some(program_files) = std::env::var_os("ProgramFiles") {
-            extra_dirs.push(PathBuf::from(program_files).join("nodejs"));
-        }
-        if let Some(program_files_x86) = std::env::var_os("ProgramFiles(x86)") {
-            extra_dirs.push(PathBuf::from(program_files_x86).join("nodejs"));
-        }
-        if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
-            let local_app_data = PathBuf::from(local_app_data);
-            extra_dirs.push(local_app_data.join("Programs").join("nodejs"));
-            extra_dirs.push(local_app_data.join("pnpm"));
-        }
-        if let Some(app_data) = std::env::var_os("APPDATA") {
-            extra_dirs.push(PathBuf::from(app_data).join("npm"));
-        }
-        if let Some(user_profile) = std::env::var_os("USERPROFILE") {
-            let user_profile = PathBuf::from(user_profile);
-            extra_dirs.push(user_profile.join(".volta").join("bin"));
-            extra_dirs.push(user_profile.join(".cargo").join("bin"));
-        }
-    }
-
-    extra_dirs
-}
-
-fn resolve_stdio_command(command: &str) -> String {
-    let trimmed = command.trim().trim_matches('"').trim_matches('\'');
-    if trimmed.is_empty() {
-        return trimmed.to_string();
-    }
-
-    let command_path = Path::new(trimmed);
-    if command_path.is_absolute() || command_path.components().count() > 1 {
-        return trimmed.to_string();
-    }
-
-    find_cli_executable(trimmed, &default_stdio_search_dirs())
-        .unwrap_or_else(|| PathBuf::from(trimmed))
-        .to_string_lossy()
-        .to_string()
-}
-
-/// 在 Windows 上构建兼容的命令。
-/// 对于 npx、npm 等 Node.js 脚本命令，在 Windows 上需要使用 cmd.exe /C 来执行。
 pub fn build_platform_command(command: &str, args: &[String]) -> TokioCommand {
-    let resolved_command = resolve_stdio_command(command);
-
-    #[cfg(target_os = "windows")]
-    {
-        let script_commands = ["npx", "npm", "yarn", "pnpm", "bun"];
-        let resolved_extension = Path::new(&resolved_command)
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-
-        if script_commands.contains(&command)
-            || matches!(resolved_extension.as_str(), "cmd" | "bat")
-        {
-            let mut cmd = TokioCommand::new("cmd");
-            configure_windows_tokio_command(&mut cmd);
-            cmd.arg("/C").arg(&resolved_command);
-            cmd.args(args);
-            return cmd;
-        }
-    }
-
-    let mut cmd = TokioCommand::new(&resolved_command);
+    let mut cmd = TokioCommand::new(command);
     configure_windows_tokio_command(&mut cmd);
     cmd.args(args);
     cmd

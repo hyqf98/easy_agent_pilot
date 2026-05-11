@@ -4,9 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-use crate::commands::cli_support::resolve_cli_name;
+use crate::commands::cli_support::{resolve_cli_name, run_cli_command};
 use crate::commands::mcp_shared::parse_args_string;
 use crate::commands::scan_session_shared::{
     clean_display_text, collect_jsonl_files, delete_cli_session_path,
@@ -948,7 +947,7 @@ pub fn scan_cli_config(
 /// 尝试通过 claude mcp list 命令获取 MCP 配置
 #[tauri::command]
 pub fn scan_claude_mcp_list() -> Result<Vec<ScannedMcpServer>, String> {
-    let output = Command::new("claude").arg("mcp").arg("list").output();
+    let output = run_cli_command(Path::new("claude"), &["mcp", "list"]);
 
     match output {
         Ok(output) => {

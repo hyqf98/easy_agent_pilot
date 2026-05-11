@@ -14,7 +14,8 @@ use tauri::{AppHandle, Emitter};
 
 #[cfg(target_os = "windows")]
 use crate::commands::cli_support::configure_windows_std_command;
-use crate::commands::cli_support::get_cli_version;
+use crate::commands::cli_support::{find_cli_executable, get_cli_version};
+use crate::commands::cli::get_scan_paths_public;
 
 /// 当前正在执行安装或升级的 CLI。
 static ACTIVE_CLI_OPERATIONS: LazyLock<Mutex<HashSet<String>>> =
@@ -108,81 +109,51 @@ pub struct InstallCompleteEvent {
 #[tauri::command]
 pub fn detect_package_managers() -> Result<Vec<PackageManager>, String> {
     let mut managers = Vec::new();
+    let scan_paths = get_scan_paths_public();
 
-    if let Ok(output) = create_command("npm").arg("--version").output() {
-        let available = output.status.success();
-        let version = if available {
-            Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-        } else {
-            None
-        };
-        managers.push(PackageManager {
-            name: "npm".to_string(),
-            available,
-            version,
-        });
-    } else {
-        managers.push(PackageManager {
-            name: "npm".to_string(),
-            available: false,
-            version: None,
-        });
-    }
+    let npm_path = find_cli_executable("npm", &scan_paths);
+    managers.push(PackageManager {
+        name: "npm".to_string(),
+        available: npm_path.is_some(),
+        version: npm_path
+            .as_deref()
+            .and_then(|path| get_cli_version(path)),
+    });
 
     #[cfg(target_os = "macos")]
     {
-        if let Ok(output) = create_command("brew").arg("--version").output() {
-            let available = output.status.success();
-            let version = if available {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                stdout.lines().next().map(|s| s.to_string())
-            } else {
-                None
-            };
-            managers.push(PackageManager {
-                name: "homebrew".to_string(),
-                available,
-                version,
-            });
-        } else {
-            managers.push(PackageManager {
-                name: "homebrew".to_string(),
-                available: false,
-                version: None,
-            });
-        }
+        let brew_path = find_cli_executable("brew", &scan_paths);
+        managers.push(PackageManager {
+            name: "homebrew".to_string(),
+            available: true,
+            version: brew_path
+                .as_deref()
+                .and_then(|path| get_cli_version(path)),
+        });
     }
 
     #[cfg(not(windows))]
     {
-        if let Ok(output) = create_command("curl").arg("--version").output() {
-            let available = output.status.success();
-            let version = if available {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                stdout.lines().next().map(|s| s.to_string())
-            } else {
-                None
-            };
-            managers.push(PackageManager {
-                name: "curl".to_string(),
-                available,
-                version,
-            });
-        } else {
-            managers.push(PackageManager {
-                name: "curl".to_string(),
-                available: false,
-                version: None,
-            });
-        }
+        let curl_path = find_cli_executable("curl", &scan_paths);
+        managers.push(PackageManager {
+            name: "curl".to_string(),
+            available: curl_path.is_some(),
+            version: curl_path
+                .as_deref()
+                .and_then(|path| get_cli_version(path)),
+        });
     }
 
     Ok(managers)
 }
 
 fn detect_cli_installed(cli_name: &str) -> (bool, Option<String>) {
-    let version = get_cli_version(std::path::Path::new(cli_name));
-    (version.is_some(), version)
+    let scan_paths = get_scan_paths_public();
+    let executable = find_cli_executable(cli_name, &scan_paths);
+    let version = executable
+        .as_deref()
+        .and_then(|path| get_cli_version(path));
+    (executable.is_some(), version)
 }
 
 /// 获取 CLI 的安装��项
@@ -231,28 +202,32 @@ pub fn get_cli_install_options(cli_name: String) -> Result<CliInstallerInfo, Str
                     method: "homebrew".to_string(),
                     command: "brew install claude-code".to_string(),
                     recommended: false,
-                    available: *manager_map.get("homebrew").unwrap_or(&false),
+                    available: true,
                     display_name: "Homebrew".to_string(),
                 });
             }
 
-            options.push(InstallOption {
-                method: "npm".to_string(),
-                command: "npm install -g @anthropic-ai/claude-code".to_string(),
-                recommended: false,
-                available: *manager_map.get("npm").unwrap_or(&false),
-                display_name: "npm".to_string(),
-            });
+            if *manager_map.get("npm").unwrap_or(&false) {
+                options.push(InstallOption {
+                    method: "npm".to_string(),
+                    command: "npm install -g @anthropic-ai/claude-code".to_string(),
+                    recommended: false,
+                    available: true,
+                    display_name: "npm".to_string(),
+                });
+            }
         }
         "codex" => {
             // npm - 推荐方式
-            options.push(InstallOption {
-                method: "npm".to_string(),
-                command: "npm install -g @openai/codex".to_string(),
-                recommended: true,
-                available: *manager_map.get("npm").unwrap_or(&false),
-                display_name: "npm".to_string(),
-            });
+            if *manager_map.get("npm").unwrap_or(&false) {
+                options.push(InstallOption {
+                    method: "npm".to_string(),
+                    command: "npm install -g @openai/codex".to_string(),
+                    recommended: true,
+                    available: true,
+                    display_name: "npm".to_string(),
+                });
+            }
 
             // Homebrew - macOS
             #[cfg(target_os = "macos")]
@@ -261,7 +236,7 @@ pub fn get_cli_install_options(cli_name: String) -> Result<CliInstallerInfo, Str
                     method: "homebrew".to_string(),
                     command: "brew install codex".to_string(),
                     recommended: false,
-                    available: *manager_map.get("homebrew").unwrap_or(&false),
+                    available: true,
                     display_name: "Homebrew".to_string(),
                 });
             }
@@ -284,18 +259,20 @@ pub fn get_cli_install_options(cli_name: String) -> Result<CliInstallerInfo, Str
                     method: "homebrew".to_string(),
                     command: "brew install anomalyco/tap/opencode".to_string(),
                     recommended: false,
-                    available: *manager_map.get("homebrew").unwrap_or(&false),
+                    available: true,
                     display_name: "Homebrew".to_string(),
                 });
             }
 
-            options.push(InstallOption {
-                method: "npm".to_string(),
-                command: "npm install -g opencode-ai@latest".to_string(),
-                recommended: false,
-                available: *manager_map.get("npm").unwrap_or(&false),
-                display_name: "npm".to_string(),
-            });
+            if *manager_map.get("npm").unwrap_or(&false) {
+                options.push(InstallOption {
+                    method: "npm".to_string(),
+                    command: "npm install -g opencode-ai@latest".to_string(),
+                    recommended: false,
+                    available: true,
+                    display_name: "npm".to_string(),
+                });
+            }
         }
         _ => {
             return Err(format!("Unsupported CLI: {}", cli_name));
