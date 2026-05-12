@@ -7,6 +7,7 @@ import { useProjectStore } from '@/stores/project'
 import { useThemeStore } from '@/stores/theme'
 import { resolveFileIcon } from '@/utils/fileIcon'
 import { EaIcon } from '@/components/common'
+import type { PendingImageAttachment } from '@/stores/sessionExecution'
 
 type FileMentionScope = 'project' | 'global'
 
@@ -20,6 +21,17 @@ interface FileMentionSearchResult {
   scope: FileMentionScope
 }
 
+interface AttachmentMentionEntry {
+  name: string
+  placeholder: string
+  mimeType: string
+  isImage: boolean
+}
+
+type MentionResultItem =
+  | { kind: 'file'; data: FileMentionSearchResult }
+  | { kind: 'attachment'; data: AttachmentMentionEntry }
+
 const LAST_SCOPE_KEY = 'ea-file-mention-scope'
 
 const props = defineProps<{
@@ -29,6 +41,7 @@ const props = defineProps<{
   mentionStart: number
   projectPath?: string | null
   defaultScope?: FileMentionScope
+  pendingImages?: PendingImageAttachment[]
 }>()
 
 const emit = defineEmits<{
@@ -69,6 +82,27 @@ const currentProject = computed(() => {
 
 const trimmedSearchText = computed(() => props.searchText.trim())
 const requiresGlobalQuery = computed(() => activeScope.value === 'global' && trimmedSearchText.value.length < 2)
+
+const attachmentEntries = computed<AttachmentMentionEntry[]>(() => {
+  const images = props.pendingImages ?? []
+  if (images.length === 0) return []
+
+  const query = trimmedSearchText.value.toLowerCase()
+  const entries: AttachmentMentionEntry[] = images.map((img, index) => ({
+    name: img.name,
+    placeholder: `[Image${index + 1}]`,
+    mimeType: img.mimeType,
+    isImage: img.mimeType.startsWith('image/')
+  }))
+
+  if (!query) return entries
+
+  return entries.filter(entry =>
+    entry.name.toLowerCase().includes(query)
+    || entry.placeholder.toLowerCase().includes(query)
+    || (entry.isImage ? 'image' : 'file').includes(query)
+  )
+})
 
 const scopeOptions = computed(() => ([
   {
@@ -121,6 +155,17 @@ const emptyStateMessage = computed(() => {
   return activeScope.value === 'project'
     ? t('fileMention.projectEmpty')
     : t('fileMention.globalEmpty')
+})
+
+const mergedResults = computed<MentionResultItem[]>(() => {
+  const items: MentionResultItem[] = []
+  for (const att of attachmentEntries.value) {
+    items.push({ kind: 'attachment', data: att })
+  }
+  for (const file of results.value) {
+    items.push({ kind: 'file', data: file })
+  }
+  return items
 })
 
 const close = () => {
@@ -182,7 +227,7 @@ const performSearch = async () => {
 
     results.value = nextResults ?? []
     hasResolvedSearch.value = true
-    selectedIndex.value = Math.min(selectedIndex.value, Math.max(results.value.length - 1, 0))
+    selectedIndex.value = Math.min(selectedIndex.value, Math.max(mergedResults.value.length - 1, 0))
   } catch (error) {
     console.error('Failed to search file mentions:', error)
     if (currentToken === searchToken) {
@@ -229,6 +274,19 @@ const selectFile = (file: FileMentionSearchResult) => {
   emit('select', file.insertPath, props.mentionStart)
 }
 
+const selectAttachment = (entry: AttachmentMentionEntry) => {
+  close()
+  emit('select', entry.placeholder, props.mentionStart)
+}
+
+const selectItem = (item: MentionResultItem) => {
+  if (item.kind === 'attachment') {
+    selectAttachment(item.data)
+  } else {
+    selectFile(item.data)
+  }
+}
+
 const scrollToSelected = () => {
   nextTick(() => {
     const selectedEl = dropdownRef.value?.querySelector('.file-mention__item--selected')
@@ -243,27 +301,29 @@ const switchScopeByKeyboard = () => {
 const handleKeyDown = (event: KeyboardEvent) => {
   if (!isOpen.value) return
 
+  const totalItems = mergedResults.value.length
+
   switch (event.key) {
     case 'ArrowUp':
       event.preventDefault()
       event.stopPropagation()
-      if (results.value.length === 0) return
-      selectedIndex.value = selectedIndex.value > 0 ? selectedIndex.value - 1 : results.value.length - 1
+      if (totalItems === 0) return
+      selectedIndex.value = selectedIndex.value > 0 ? selectedIndex.value - 1 : totalItems - 1
       scrollToSelected()
       break
     case 'ArrowDown':
       event.preventDefault()
       event.stopPropagation()
-      if (results.value.length === 0) return
-      selectedIndex.value = selectedIndex.value < results.value.length - 1 ? selectedIndex.value + 1 : 0
+      if (totalItems === 0) return
+      selectedIndex.value = selectedIndex.value < totalItems - 1 ? selectedIndex.value + 1 : 0
       scrollToSelected()
       break
     case 'Enter': {
-      const selectedFile = results.value[selectedIndex.value]
-      if (!selectedFile) return
+      const selectedItem = mergedResults.value[selectedIndex.value]
+      if (!selectedItem) return
       event.preventDefault()
       event.stopPropagation()
-      selectFile(selectedFile)
+      selectItem(selectedItem)
       break
     }
     case 'Escape':
@@ -283,6 +343,27 @@ const getFileIconName = (file: FileMentionSearchResult): string => {
   if (file.nodeType === 'directory') return 'folder'
   const iconMeta = resolveFileIcon(file.nodeType, file.name, file.extension ?? undefined)
   return typeof iconMeta === 'string' ? iconMeta : (iconMeta?.icon || 'file')
+}
+
+const getItemIconName = (item: MentionResultItem): string => {
+  if (item.kind === 'attachment') {
+    return item.data.isImage ? 'image' : 'file-text'
+  }
+  return getFileIconName(item.data)
+}
+
+const getItemName = (item: MentionResultItem): string => {
+  if (item.kind === 'attachment') {
+    return item.data.name
+  }
+  return item.data.name
+}
+
+const getItemSubtext = (item: MentionResultItem): string => {
+  if (item.kind === 'attachment') {
+    return item.data.placeholder
+  }
+  return item.data.displayPath
 }
 
 const highlightMatch = (text: string) => {
@@ -312,6 +393,12 @@ watch(
   },
   { immediate: true }
 )
+
+watch(attachmentEntries, () => {
+  if (isOpen.value) {
+    selectedIndex.value = Math.min(selectedIndex.value, Math.max(mergedResults.value.length - 1, 0))
+  }
+})
 
 watch(results, () => {
   nextTick(scrollToSelected)
@@ -363,16 +450,16 @@ onUnmounted(() => {
           <span v-if="trimmedSearchText">{{ t('fileMention.searchingFor', { query: trimmedSearchText }) }}</span>
           <span v-else>{{ t('fileMention.scopeHint', { scope: activeScope === 'project' ? t('fileMention.scopeProject') : t('fileMention.scopeGlobal') }) }}</span>
           <span
-            v-if="results.length > 0"
+            v-if="mergedResults.length > 0"
             class="file-mention__count"
           >
-            {{ t('fileMention.resultCount', { count: results.length }) }}
+            {{ t('fileMention.resultCount', { count: mergedResults.length }) }}
           </span>
         </div>
       </div>
 
       <div
-        v-if="!isLoading && results.length === 0 && (hasResolvedSearch || requiresGlobalQuery || (activeScope === 'project' && !currentProject) || !trimmedSearchText)"
+        v-if="!isLoading && mergedResults.length === 0 && (hasResolvedSearch || requiresGlobalQuery || (activeScope === 'project' && !currentProject) || !trimmedSearchText)"
         class="file-mention__empty"
       >
         <EaIcon
@@ -387,32 +474,44 @@ onUnmounted(() => {
         class="file-mention__list"
       >
         <div
-          v-for="(file, index) in results"
-          :key="`${file.scope}-${file.path}`"
+          v-for="(item, index) in mergedResults"
+          :key="item.kind === 'attachment' ? `att-${item.data.placeholder}` : `file-${item.data.scope}-${item.data.path}`"
           class="file-mention__item"
-          :class="{ 'file-mention__item--selected': index === selectedIndex }"
-          @click="selectFile(file)"
+          :class="{
+            'file-mention__item--selected': index === selectedIndex,
+            'file-mention__item--attachment': item.kind === 'attachment'
+          }"
+          @click="selectItem(item)"
           @mouseenter="selectedIndex = index"
         >
           <div class="file-mention__item-icon">
             <EaIcon
-              :name="getFileIconName(file)"
+              :name="getItemIconName(item)"
               :size="14"
             />
           </div>
           <div class="file-mention__item-body">
             <span
               class="file-mention__item-name"
-              v-html="highlightMatch(file.name)"
+              v-html="highlightMatch(getItemName(item))"
             />
             <span
               class="file-mention__item-path"
-              :class="{ 'file-mention__item-path--muted': file.displayPath === file.name }"
-              v-html="highlightMatch(file.displayPath)"
+              :class="{ 'file-mention__item-path--muted': item.kind === 'file' && item.data.displayPath === item.data.name }"
+              v-html="highlightMatch(getItemSubtext(item))"
             />
           </div>
-          <span class="file-mention__item-scope">
-            {{ file.scope === 'project' ? t('fileMention.scopeProjectShort') : t('fileMention.scopeGlobalShort') }}
+          <span
+            v-if="item.kind === 'attachment'"
+            class="file-mention__item-scope file-mention__item-scope--attachment"
+          >
+            {{ item.data.isImage ? t('fileMention.scopeImage') : t('fileMention.scopeFile') }}
+          </span>
+          <span
+            v-else
+            class="file-mention__item-scope"
+          >
+            {{ item.data.scope === 'project' ? t('fileMention.scopeProjectShort') : t('fileMention.scopeGlobalShort') }}
           </span>
         </div>
 
@@ -627,6 +726,20 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
+.file-mention__item-scope--attachment {
+  background: rgba(139, 92, 246, 0.12);
+  color: #7c3aed;
+}
+
+.file-mention__item--attachment {
+  background: rgba(139, 92, 246, 0.04);
+}
+
+.file-mention__item--attachment:hover,
+.file-mention__item--attachment.file-mention__item--selected {
+  background: rgba(139, 92, 246, 0.1);
+}
+
 .file-mention__item-name :deep(mark),
 .file-mention__item-path :deep(mark) {
   background: rgba(251, 191, 36, 0.28);
@@ -720,6 +833,20 @@ onUnmounted(() => {
 
 .file-mention-dropdown--dark .file-mention__item-scope {
   background: rgba(51, 65, 85, 0.72);
+}
+
+.file-mention-dropdown--dark .file-mention__item-scope--attachment {
+  background: rgba(139, 92, 246, 0.22);
+  color: #c4b5fd;
+}
+
+.file-mention-dropdown--dark .file-mention__item--attachment {
+  background: rgba(139, 92, 246, 0.08);
+}
+
+.file-mention-dropdown--dark .file-mention__item--attachment:hover,
+.file-mention-dropdown--dark .file-mention__item--attachment.file-mention__item--selected {
+  background: rgba(139, 92, 246, 0.16);
 }
 
 .file-mention-dropdown--dark .file-mention__footer {

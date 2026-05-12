@@ -1772,6 +1772,8 @@ export default {
     navigate: 'Navigate',
     select: 'Select',
     close: 'Close',
+    scopeImage: 'IMG',
+    scopeFile: 'FILE',
   },
   fileTree: {
     selectedCount: '{count} selected',

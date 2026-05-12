@@ -36,7 +36,9 @@ const zhCN = {
     globalEmpty: '没有匹配的全局文件',
     navigate: '导航',
     select: '选择',
-    close: '关闭'
+    close: '关闭',
+    scopeImage: '图片',
+    scopeFile: '文件'
   },
   common: {
     ...enUS.common,

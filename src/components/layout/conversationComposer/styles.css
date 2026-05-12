@@ -508,6 +508,7 @@
   overflow-wrap: anywhere;
   overflow-y: auto;
   scrollbar-gutter: stable;
+  tab-size: 4;
 }
 
 .conversation-composer--main .conversation-composer__render,
@@ -708,7 +709,7 @@
 
 :deep(.conversation-composer__memory-tag) {
   position: relative;
-  display: inline-block;
+  display: inline;
   min-width: 1ch;
   max-width: 100%;
   vertical-align: baseline;
@@ -717,6 +718,7 @@
 :deep(.conversation-composer__memory-tag-ghost) {
   visibility: hidden;
   white-space: pre-wrap;
+  display: inline;
 }
 
 :deep(.conversation-composer__memory-tag-surface) {

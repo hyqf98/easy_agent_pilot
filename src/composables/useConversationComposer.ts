@@ -98,6 +98,14 @@ interface UseConversationComposerOptions {
 const MEMORY_REFERENCE_TOKEN_PATTERN = /\[\[memory-ref:(library_chunk|raw_record):([^\]]+)\]\]/g
 const ATTACHMENT_PLACEHOLDER_PATTERN = /\[(Image|File)(\d+)\]/g
 const MEMORY_SUGGESTION_DEBOUNCE_MS = 350
+
+const COMPOSER_DEBUG = false
+
+function composerDebug(tag: string, payload: Record<string, unknown>) {
+  if (!COMPOSER_DEBUG) return
+  const ts = performance.now().toFixed(1)
+  console.log(`%c[composer:${tag}] @${ts}ms`, 'color:#0ea5e9;font-weight:600', payload)
+}
 const MEMORY_SUGGESTION_AUTO_HIDE_MS = 3000
 const MEMORY_SUGGESTION_EMPTY_STATE_DELAY_MS = 3000
 const MEMORY_SUGGESTION_EMPTY_STATE_RECHECK_MS = 240
@@ -212,6 +220,39 @@ function sanitizeComposerText(value: string): string {
   }
 
   return sanitized
+}
+
+function buildTokenInsertPayload(before: string, token: string, after: string) {
+  const needsLeadingSpace = before.length > 0 && !/\s$/.test(before)
+  const needsTrailingSpace = after.length > 0 && !/^\s/.test(after)
+  const inserted = `${needsLeadingSpace ? ' ' : ''}${token}${needsTrailingSpace ? ' ' : ''}`
+  const raw = `${before}${inserted}${after}`
+  const newText = sanitizeComposerText(raw)
+  const newPosition = before.length + inserted.length
+  composerDebug('token-insert', {
+    token: token.length > 40 ? token.slice(0, 40) + '...' : token,
+    beforeLen: before.length,
+    afterLen: after.length,
+    needsLeadingSpace,
+    needsTrailingSpace,
+    newPosition
+  })
+  return { newText, newPosition }
+}
+
+function deleteTokenRange(text: string, from: number, to: number) {
+  const raw = text.slice(0, from) + text.slice(to)
+  const newText = raw.replace(/[ \t]{2,}/g, ' ')
+  const newPosition = from
+  composerDebug('token-delete', {
+    from,
+    to,
+    textLen: text.length,
+    newTextLen: newText.length,
+    deletedChars: to - from,
+    newPosition
+  })
+  return { newText, newPosition }
 }
 
 function getLeadingSlashSegment(text: string): { content: string; length: number } | null {
@@ -1418,25 +1459,32 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     const cursorPos = textarea ? textarea.selectionStart : inputText.value.length
     const beforeAt = inputText.value.slice(0, mentionStartPos)
     const afterSearch = inputText.value.slice(cursorPos)
-    const nextMention = isGlobalMentionPath(insertPath) ? createComposerMention(insertPath) : null
-    const insertText = `${nextMention?.displayText ?? formatMentionLiteral(insertPath)} `
-    const newText = sanitizeComposerText(beforeAt + insertText + afterSearch)
-    const newPosition = beforeAt.length + insertText.length
-    const nextMentions = [...reconcileFileMentions(inputText.value, currentFileMentions.value)]
 
-    if (nextMention) {
-      nextMentions.splice(countMentionsInText(beforeAt), 0, nextMention)
-      if (currentSessionId.value) {
-        sessionExecutionStore.setFileMentions(currentSessionId.value, nextMentions)
+    const isAttachmentPlaceholder = /^\[(Image|File)\d+\]$/.test(insertPath)
+    const token = isAttachmentPlaceholder
+      ? insertPath
+      : (isGlobalMentionPath(insertPath) ? createComposerMention(insertPath) : null)?.displayText ?? formatMentionLiteral(insertPath)
+
+    const { newText, newPosition } = buildTokenInsertPayload(beforeAt, token, afterSearch)
+
+    if (!isAttachmentPlaceholder) {
+      const nextMention = isGlobalMentionPath(insertPath) ? createComposerMention(insertPath) : null
+      const nextMentions = [...reconcileFileMentions(inputText.value, currentFileMentions.value)]
+
+      if (nextMention) {
+        nextMentions.splice(countMentionsInText(beforeAt), 0, nextMention)
+        if (currentSessionId.value) {
+          sessionExecutionStore.setFileMentions(currentSessionId.value, nextMentions)
+        }
       }
     }
 
-    // 先同步 textarea 的 DOM 值，避免光标位置错乱
     if (textarea) {
       textarea.value = newText
     }
 
     inputText.value = newText
+    composerDebug('file-select', { mentionStart: mentionStartPos, token, isAttachment: isAttachmentPlaceholder, newPosition })
 
     requestAnimationFrame(() => {
       if (textarea) {
@@ -1482,11 +1530,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
     const before = inputText.value.slice(0, replaceStart)
     const after = inputText.value.slice(replaceEnd)
-    const needsLeadingSpace = before.length > 0 && !/\s$/.test(before)
-    const needsTrailingSpace = after.length === 0 || !/^\s/.test(after)
-    const insertedToken = `${needsLeadingSpace ? ' ' : ''}${token}${needsTrailingSpace ? ' ' : ''}`
-    const newText = sanitizeComposerText(`${before}${insertedToken}${after}`)
-    const newPosition = before.length + insertedToken.length
+    const { newText, newPosition } = buildTokenInsertPayload(before, token, after)
 
     textarea.value = newText
     inputText.value = newText
@@ -1495,6 +1539,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     sessionExecutionStore.clearDismissedMemorySuggestionKeys(sessionId)
     hideMemorySuggestionPanel()
     hoveredMemoryPreview.value = buildMemoryPreviewFromReference(reference)
+    composerDebug('memory-insert', { token, replaceStart, replaceEnd, newPosition })
 
     requestAnimationFrame(() => {
       textarea.focus()
@@ -1532,12 +1577,10 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     }
 
     const token = buildMemoryReferenceToken(reference.sourceType, reference.sourceId)
-    const newText = sanitizeComposerText(
-      inputText.value
-        .split(token)
-        .join(' ')
-        .replace(/[ \t]{2,}/g, ' ')
-    ).trimStart()
+    const tokenIndex = inputText.value.indexOf(token)
+    const { newText } = tokenIndex >= 0
+      ? deleteTokenRange(inputText.value, tokenIndex, tokenIndex + token.length)
+      : { newText: inputText.value }
 
     if (textareaRef.value) {
       textareaRef.value.value = newText
@@ -1545,6 +1588,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
     inputText.value = newText
     sessionExecutionStore.removeMemoryReference(sessionId, reference.sourceType, reference.sourceId)
+    composerDebug('memory-remove', { token, tokenIndex, newTextLen: newText.length })
     if (hoveredMemoryPreview.value?.key === buildMemoryReferenceKey(reference.sourceType, reference.sourceId)) {
       clearMemoryPreview()
     }
@@ -1553,26 +1597,24 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
   const handleSlashCommandSelect = (command: SlashCommandDescriptor) => {
     const textarea = textareaRef.value
-    const nextText = command.insertText.endsWith(' ')
-      ? command.insertText
-      : `${command.insertText} `
-    const nextPosition = nextText.length
+    const { newText, newPosition } = buildTokenInsertPayload('', command.insertText, '')
+    composerDebug('slash-select', { commandName: command.name, insertText: command.insertText, newPosition })
 
     if (textarea) {
-      textarea.value = nextText
+      textarea.value = newText
     }
 
-    inputText.value = nextText
+    inputText.value = newText
     closeSlashCommand()
 
     requestAnimationFrame(() => {
       if (textarea) {
         textarea.focus()
-        textarea.setSelectionRange(nextPosition, nextPosition)
+        textarea.setSelectionRange(newPosition, newPosition)
         if (renderLayerRef.value) {
           renderLayerRef.value.scrollTop = textarea.scrollTop
         }
-        updateSlashCommandState(textarea, nextText, nextPosition)
+        updateSlashCommandState(textarea, newText, newPosition)
       } else {
         focusInput()
       }
@@ -1581,8 +1623,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
   const handleCdPathSelect = (insertPath: string) => {
     const textarea = textareaRef.value
-    const newText = `/cd ${insertPath}`
-    const nextPosition = newText.length
+    const { newText, newPosition } = buildTokenInsertPayload('', `/cd ${insertPath}`, '')
 
     if (textarea) {
       textarea.value = newText
@@ -1593,11 +1634,11 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     requestAnimationFrame(() => {
       if (textarea) {
         textarea.focus()
-        textarea.setSelectionRange(nextPosition, nextPosition)
+        textarea.setSelectionRange(newPosition, newPosition)
         if (renderLayerRef.value) {
           renderLayerRef.value.scrollTop = textarea.scrollTop
         }
-        updateSlashCommandState(textarea, newText, nextPosition)
+        updateSlashCommandState(textarea, newText, newPosition)
       } else {
         closeCdPathSuggestions()
       }
@@ -1679,6 +1720,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     const sanitizedValue = sanitizeComposerText(value)
 
     if (sanitizedValue !== value) {
+      composerDebug('input-sanitized', { hadControlChars: true })
       cursorPosition = sanitizeComposerText(value.slice(0, cursorPosition)).length
       value = sanitizedValue
       target.value = sanitizedValue
@@ -1704,6 +1746,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     }
 
     inputText.value = value
+    composerDebug('input', { valueLen: value.length, cursorPos: cursorPosition })
     updateSlashCommandState(target, value, cursorPosition)
   }
 
@@ -1801,11 +1844,9 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       placeholders.push(isImage ? `[Image${i}]` : `[File${i}]`)
     }
 
-    const insertText = placeholders.join(' ')
-    const needsSpace = before.length > 0 && !/\s$/.test(before)
-    const fullInsert = `${needsSpace ? ' ' : ''}${insertText} `
-    const newText = sanitizeComposerText(`${before}${fullInsert}${after}`)
-    const newPosition = before.length + fullInsert.length
+    const token = placeholders.join(' ')
+    const { newText, newPosition } = buildTokenInsertPayload(before, token, after)
+    composerDebug('attach-insert', { startIndex, endIndex, placeholders, newPosition })
 
     textarea.value = newText
     inputText.value = newText
@@ -1847,17 +1888,47 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
   const removeImage = async (imageId: string) => {
     const sessionId = currentSessionId.value
-    const image = pendingImages.value.find(item => item.id === imageId)
+    const imagesBeforeRemove = pendingImages.value
+    const imageIndex = imagesBeforeRemove.findIndex(item => item.id === imageId)
+    const image = imageIndex >= 0 ? imagesBeforeRemove[imageIndex] : null
     if (!sessionId || !image) {
       return
     }
+
+    const totalCount = imagesBeforeRemove.length
+    const isImage = image.mimeType.startsWith('image/')
+    const removedPlaceholder = isImage ? `[Image${imageIndex + 1}]` : `[File${imageIndex + 1}]`
 
     try {
       await invoke('delete_uploaded_image', {
         sessionId,
         path: image.path
       })
+
+      let text = inputText.value
+
+      text = text.replace(removedPlaceholder, '')
+
+      for (let i = imageIndex + 2; i <= totalCount; i++) {
+        const oldImageTag = `[Image${i}]`
+        const oldFileTag = `[File${i}]`
+        const newIndex = i - 1
+        const newImageTag = `[Image${newIndex}]`
+        const newFileTag = `[File${newIndex}]`
+        text = text.split(oldImageTag).join(newImageTag)
+        text = text.split(oldFileTag).join(newFileTag)
+      }
+
+      text = text.replace(/[ \t]{2,}/g, ' ').trim()
+
       sessionExecutionStore.removePendingImage(sessionId, imageId)
+
+      if (textareaRef.value) {
+        textareaRef.value.value = text
+      }
+      inputText.value = text
+
+      composerDebug('remove-attachment', { imageId, removedPlaceholder, imageIndex, newTextLen: text.length })
     } catch (error) {
       console.error('Failed to delete uploaded attachment:', error)
       notificationStore.smartError('删除附件', error instanceof Error ? error : new Error(String(error)))
@@ -2314,6 +2385,8 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       return attachment
     })
 
+    composerDebug('send', { rawLen: rawInput.length, expandedLen: expandedInput.length, attachCount: attachments.length, memoryRefCount: orderedMemoryReferences.length })
+
     if (!displayInput && !hasMemoryReferences && attachments.length === 0) return
 
     const parsedSlashCommand = attachments.length === 0 ? parseSlashCommandInput(userInput) : null
@@ -2526,26 +2599,58 @@ export function useConversationComposer(options: UseConversationComposerOptions)
           if (slashMatch) {
             event.preventDefault()
             const deleteStart = cursorPos - slashMatch[0].length
-            const newText = text.slice(0, deleteStart) + text.slice(cursorPos)
+            const { newText, newPosition } = deleteTokenRange(text, deleteStart, cursorPos)
             textarea.value = newText
             inputText.value = newText
+            composerDebug('backspace', { matchType: 'slash', deleteStart, deleteEnd: cursorPos })
             requestAnimationFrame(() => {
               textarea.focus()
-              textarea.setSelectionRange(deleteStart, deleteStart)
+              textarea.setSelectionRange(newPosition, newPosition)
             })
             return
           }
 
-          const attachMatch = before.match(/\[(Image|File)\d+\]\s?$/)
+          const attachMatch = before.match(/\[(Image|File)\d+\]\s*$/)
           if (attachMatch) {
             event.preventDefault()
             const deleteStart = cursorPos - attachMatch[0].length
-            const newText = text.slice(0, deleteStart) + text.slice(cursorPos)
+            const { newText, newPosition } = deleteTokenRange(text, deleteStart, cursorPos)
             textarea.value = newText
             inputText.value = newText
+            composerDebug('backspace', { matchType: 'attachment', deleteStart, deleteEnd: cursorPos })
             requestAnimationFrame(() => {
               textarea.focus()
-              textarea.setSelectionRange(deleteStart, deleteStart)
+              textarea.setSelectionRange(newPosition, newPosition)
+            })
+            return
+          }
+
+          const fileMentionMatch = before.match(/@"[^"\n]+"$|@[^\s@"]+$/)
+          if (fileMentionMatch) {
+            event.preventDefault()
+            const deleteStart = cursorPos - fileMentionMatch[0].length
+            const { newText, newPosition } = deleteTokenRange(text, deleteStart, cursorPos)
+            textarea.value = newText
+            inputText.value = newText
+            composerDebug('backspace', { matchType: 'file-mention', deleteStart, deleteEnd: cursorPos })
+            requestAnimationFrame(() => {
+              textarea.focus()
+              textarea.setSelectionRange(newPosition, newPosition)
+            })
+            return
+          }
+
+          const memoryMatch = before.match(/\[\[memory-ref:[^\]]+\]\]\s*$/)
+          if (memoryMatch) {
+            event.preventDefault()
+            const deleteStart = cursorPos - memoryMatch[0].length
+            const { newText, newPosition } = deleteTokenRange(text, deleteStart, cursorPos)
+            textarea.value = newText
+            inputText.value = newText
+            composerDebug('backspace', { matchType: 'memory-ref', deleteStart, deleteEnd: cursorPos })
+            requestAnimationFrame(() => {
+              textarea.focus()
+              textarea.setSelectionRange(newPosition, newPosition)
             })
             return
           }
@@ -2606,7 +2711,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     const textarea = textareaRef.value
     const baseMentions = [...reconcileFileMentions(inputText.value, currentFileMentions.value)]
     const globalMentions: ComposerFileMention[] = []
-    const insertText = paths.map((path) => {
+    const token = paths.map((path) => {
       if (!isGlobalMentionPath(path)) {
         return formatMentionLiteral(path)
       }
@@ -2614,10 +2719,10 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       const mention = createComposerMention(path)
       globalMentions.push(mention)
       return mention.displayText
-    }).join(' ') + ' '
+    }).join(' ')
 
     if (!textarea) {
-      inputText.value += insertText
+      inputText.value += ` ${token}`
       if (currentSessionId.value) {
         sessionExecutionStore.setFileMentions(currentSessionId.value, [...baseMentions, ...globalMentions])
       }
@@ -2629,8 +2734,10 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     const mentionIndex = countMentionsInText(inputText.value.slice(0, start))
     const nextMentions = [...baseMentions]
     nextMentions.splice(mentionIndex, 0, ...globalMentions)
-    const newText = sanitizeComposerText(`${inputText.value.slice(0, start)}${insertText}${inputText.value.slice(end)}`)
-    const newPosition = start + insertText.length
+    const before = inputText.value.slice(0, start)
+    const after = inputText.value.slice(end)
+    const { newText, newPosition } = buildTokenInsertPayload(before, token, after)
+    composerDebug('file-mention-insert', { paths: paths.length, token, newPosition })
 
     textarea.value = newText
 

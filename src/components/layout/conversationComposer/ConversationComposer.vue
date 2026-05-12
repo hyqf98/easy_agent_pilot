@@ -712,6 +712,7 @@ defineExpose({
       :mention-start="mentionStart"
       :project-path="workingDirectory || currentProjectPath || undefined"
       :default-scope="defaultFileMentionScope"
+      :pending-images="pendingImages"
       @select="handleFileSelect"
       @close="closeFileMention"
     />
