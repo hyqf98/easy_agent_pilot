@@ -877,7 +877,7 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
             retryDelaySeconds: SOLO_CLI_FAILURE_RETRY_DELAY_MS / 1000,
             runtime: runtimeFailureLabel,
             errorMessage,
-            failureKind: classifiedFailure?.kind || 'unclassified'
+            failureKind: classifiedFailure ? 'detected' : 'unclassified'
           }
           const content = `检测到 ${runtimeFailureLabel} CLI 异常，10 秒后开始第 ${cliRetryCount}/${maxCliRetries} 次底层重试...`
 

@@ -66,6 +66,7 @@ interface TextSegment {
   memorySourceLabel?: string
   attachmentType?: 'image' | 'file'
   attachmentIndex?: number
+  trailingSpace?: boolean
 }
 
 interface UploadImageInput {
@@ -238,6 +239,33 @@ function buildTokenInsertPayload(before: string, token: string, after: string) {
     newPosition
   })
   return { newText, newPosition }
+}
+
+function consumeTokenGap(text: string, startIndex: number) {
+  if (text[startIndex] !== ' ') {
+    return {
+      trailingSpace: false,
+      nextIndex: startIndex
+    }
+  }
+
+  return {
+    trailingSpace: true,
+    nextIndex: startIndex + 1
+  }
+}
+
+function syncTextareaCaret(textarea: HTMLTextAreaElement | null, position: number, renderLayer?: HTMLDivElement | null) {
+  if (!textarea) {
+    return
+  }
+
+  textarea.focus()
+  textarea.setSelectionRange(position, position)
+  if (renderLayer) {
+    renderLayer.scrollTop = textarea.scrollTop
+    renderLayer.scrollLeft = textarea.scrollLeft
+  }
 }
 
 function deleteTokenRange(text: string, from: number, to: number) {
@@ -617,11 +645,13 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     let match: RegExpExecArray | null
 
     if (leadingSlash) {
+      const { trailingSpace, nextIndex } = consumeTokenGap(text, leadingSlash.length)
       segments.push({
         type: 'slash',
-        content: leadingSlash.content
+        content: leadingSlash.content,
+        trailingSpace
       })
-      lastIndex = leadingSlash.length
+      lastIndex = nextIndex
     }
 
     FILE_MENTION_PATTERN.lastIndex = 0
@@ -670,16 +700,18 @@ export function useConversationComposer(options: UseConversationComposerOptions)
         const literal = match[0]
         const fullPath = match[1] ?? match[2]
         const mappedMention = currentFileMentions.value.find(mention => mention.displayText === literal)
+        const { trailingSpace, nextIndex } = consumeTokenGap(text, match.index + match[0].length)
 
         segments.push({
           type: 'file',
           content: literal,
           displayContent: mappedMention?.displayText ?? getMentionDisplayText(literal, fullPath),
           fullPath: mappedMention?.fullPath ?? fullPath,
-          titleContent: mappedMention?.titleText ?? getMentionTitle(fullPath)
+          titleContent: mappedMention?.titleText ?? getMentionTitle(fullPath),
+          trailingSpace
         })
 
-        lastIndex = match.index + match[0].length
+        lastIndex = nextIndex
         continue
       }
 
@@ -693,16 +725,18 @@ export function useConversationComposer(options: UseConversationComposerOptions)
         const memorySourceLabel = sourceType === 'library_chunk'
           ? t('message.memorySourceLibrary')
           : t('message.memorySourceRaw')
+        const { trailingSpace, nextIndex } = consumeTokenGap(text, memoryMatch.index + memoryMatch[0].length)
 
         segments.push({
           type: 'memory',
           content: memoryMatch[0],
           displayContent: mappedReference?.title?.trim() || memorySourceLabel,
           titleContent: mappedReference?.snippet ?? mappedReference?.fullContent ?? mappedReference?.title ?? '',
-          memorySourceLabel
+          memorySourceLabel,
+          trailingSpace
         })
 
-        lastIndex = memoryMatch.index + memoryMatch[0].length
+        lastIndex = nextIndex
         continue
       }
 
@@ -711,15 +745,17 @@ export function useConversationComposer(options: UseConversationComposerOptions)
         const attachmentIndex = parseInt(attachmentMatch[2], 10)
         const attachmentKind = attachmentMatch[1]
         const isImage = attachmentKind === 'Image'
+        const { trailingSpace, nextIndex } = consumeTokenGap(text, attachmentMatch.index + attachmentMatch[0].length)
 
         segments.push({
           type: 'attachment',
           content: attachmentMatch[0],
           attachmentType: isImage ? 'image' : 'file',
-          attachmentIndex
+          attachmentIndex,
+          trailingSpace
         })
 
-        lastIndex = attachmentMatch.index + attachmentMatch[0].length
+        lastIndex = nextIndex
       }
     }
 
@@ -1487,13 +1523,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     composerDebug('file-select', { mentionStart: mentionStartPos, token, isAttachment: isAttachmentPlaceholder, newPosition })
 
     requestAnimationFrame(() => {
-      if (textarea) {
-        textarea.focus()
-        textarea.setSelectionRange(newPosition, newPosition)
-        if (renderLayerRef.value) {
-          renderLayerRef.value.scrollTop = textarea.scrollTop
-        }
-      }
+      syncTextareaCaret(textarea, newPosition, renderLayerRef.value)
     })
   }
 
@@ -1542,11 +1572,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     composerDebug('memory-insert', { token, replaceStart, replaceEnd, newPosition })
 
     requestAnimationFrame(() => {
-      textarea.focus()
-      textarea.setSelectionRange(newPosition, newPosition)
-      if (renderLayerRef.value) {
-        renderLayerRef.value.scrollTop = textarea.scrollTop
-      }
+      syncTextareaCaret(textarea, newPosition, renderLayerRef.value)
     })
   }
 
@@ -1609,11 +1635,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
     requestAnimationFrame(() => {
       if (textarea) {
-        textarea.focus()
-        textarea.setSelectionRange(newPosition, newPosition)
-        if (renderLayerRef.value) {
-          renderLayerRef.value.scrollTop = textarea.scrollTop
-        }
+        syncTextareaCaret(textarea, newPosition, renderLayerRef.value)
         updateSlashCommandState(textarea, newText, newPosition)
       } else {
         focusInput()
@@ -1633,11 +1655,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
     requestAnimationFrame(() => {
       if (textarea) {
-        textarea.focus()
-        textarea.setSelectionRange(newPosition, newPosition)
-        if (renderLayerRef.value) {
-          renderLayerRef.value.scrollTop = textarea.scrollTop
-        }
+        syncTextareaCaret(textarea, newPosition, renderLayerRef.value)
         updateSlashCommandState(textarea, newText, newPosition)
       } else {
         closeCdPathSuggestions()
@@ -1646,31 +1664,67 @@ export function useConversationComposer(options: UseConversationComposerOptions)
   }
 
   const getCaretCoordinates = (textarea: HTMLTextAreaElement, position: number) => {
-    const text = textarea.value.substring(0, position)
-    const lines = text.split('\n')
-    const currentLine = lines.length - 1
-    const currentCol = lines[lines.length - 1].length
-
+    const mirror = document.createElement('div')
+    const marker = document.createElement('span')
     const style = window.getComputedStyle(textarea)
-    const lineHeight = parseFloat(style.lineHeight)
-    const paddingTop = parseFloat(style.paddingTop)
-    const paddingLeft = parseFloat(style.paddingLeft)
-    const fontSize = parseFloat(style.fontSize)
-    const fontFamily = style.fontFamily
+    const value = textarea.value.slice(0, position)
 
-    const lineHeightActual = lineHeight || fontSize * 1.5
-    const y = paddingTop + currentLine * lineHeightActual
+    const mirroredText = value.length > 0 ? value : '.'
+    const lastChar = mirroredText[mirroredText.length - 1]
 
-    const canvas = document.createElement('canvas')
-    const context = canvas.getContext('2d')
-    if (context) {
-      context.font = `${fontSize}px ${fontFamily}`
-      const textWidth = context.measureText(lines[lines.length - 1]).width
-      canvas.remove()
-      return { x: paddingLeft + textWidth, y }
-    }
-    canvas.remove()
-    return { x: paddingLeft + currentCol * (fontSize * 0.6), y }
+    const propertiesToCopy = [
+      'boxSizing',
+      'width',
+      'height',
+      'paddingTop',
+      'paddingRight',
+      'paddingBottom',
+      'paddingLeft',
+      'borderTopWidth',
+      'borderRightWidth',
+      'borderBottomWidth',
+      'borderLeftWidth',
+      'fontFamily',
+      'fontSize',
+      'fontStyle',
+      'fontVariant',
+      'fontWeight',
+      'letterSpacing',
+      'lineHeight',
+      'textIndent',
+      'textTransform',
+      'wordSpacing',
+      'whiteSpace',
+      'overflowWrap',
+      'wordBreak',
+      'tabSize'
+    ] as const
+
+    mirror.style.position = 'absolute'
+    mirror.style.visibility = 'hidden'
+    mirror.style.whiteSpace = 'pre-wrap'
+    mirror.style.overflowWrap = 'anywhere'
+    mirror.style.wordBreak = 'break-word'
+    mirror.style.top = '0'
+    mirror.style.left = '0'
+    mirror.style.pointerEvents = 'none'
+
+    propertiesToCopy.forEach((property) => {
+      mirror.style[property] = style[property]
+    })
+
+    mirror.textContent = mirroredText.slice(0, -1)
+    marker.textContent = lastChar === '\n' ? '\u200b' : lastChar
+    mirror.appendChild(marker)
+    document.body.appendChild(mirror)
+
+    const markerRect = marker.getBoundingClientRect()
+    const mirrorRect = mirror.getBoundingClientRect()
+    const x = markerRect.right - mirrorRect.left - textarea.scrollLeft
+    const y = markerRect.top - mirrorRect.top - textarea.scrollTop
+
+    document.body.removeChild(mirror)
+    return { x, y }
   }
 
   const updateSlashCommandState = (target: HTMLTextAreaElement, value: string, cursorPosition: number) => {
@@ -1741,7 +1795,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
     if (value.length > 0 && cursorPosition > 0 && value[cursorPosition - 1] === '@') {
       const rect = target.getBoundingClientRect()
-      const caretPos = getCaretCoordinates(target, cursorPosition - 1)
+      const caretPos = getCaretCoordinates(target, cursorPosition)
       openFileMention(rect.left + caretPos.x, rect.top + caretPos.y + 20, '', cursorPosition - 1)
     }
 
@@ -1852,11 +1906,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     inputText.value = newText
 
     requestAnimationFrame(() => {
-      textarea.focus()
-      textarea.setSelectionRange(newPosition, newPosition)
-      if (renderLayerRef.value) {
-        renderLayerRef.value.scrollTop = textarea.scrollTop
-      }
+      syncTextareaCaret(textarea, newPosition, renderLayerRef.value)
     })
   }
 
@@ -2595,7 +2645,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
           const text = inputText.value
           const before = text.slice(0, cursorPos)
 
-          const slashMatch = before.match(/\/[^\s\n]*$/)
+          const slashMatch = before.match(/\/[^\s\n]*\s*$/)
           if (slashMatch) {
             event.preventDefault()
             const deleteStart = cursorPos - slashMatch[0].length
@@ -2604,8 +2654,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
             inputText.value = newText
             composerDebug('backspace', { matchType: 'slash', deleteStart, deleteEnd: cursorPos })
             requestAnimationFrame(() => {
-              textarea.focus()
-              textarea.setSelectionRange(newPosition, newPosition)
+              syncTextareaCaret(textarea, newPosition, renderLayerRef.value)
             })
             return
           }
@@ -2619,13 +2668,12 @@ export function useConversationComposer(options: UseConversationComposerOptions)
             inputText.value = newText
             composerDebug('backspace', { matchType: 'attachment', deleteStart, deleteEnd: cursorPos })
             requestAnimationFrame(() => {
-              textarea.focus()
-              textarea.setSelectionRange(newPosition, newPosition)
+              syncTextareaCaret(textarea, newPosition, renderLayerRef.value)
             })
             return
           }
 
-          const fileMentionMatch = before.match(/@"[^"\n]+"$|@[^\s@"]+$/)
+          const fileMentionMatch = before.match(/@"[^"\n]+"\s*$|@[^\s@"]+\s*$/)
           if (fileMentionMatch) {
             event.preventDefault()
             const deleteStart = cursorPos - fileMentionMatch[0].length
@@ -2634,8 +2682,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
             inputText.value = newText
             composerDebug('backspace', { matchType: 'file-mention', deleteStart, deleteEnd: cursorPos })
             requestAnimationFrame(() => {
-              textarea.focus()
-              textarea.setSelectionRange(newPosition, newPosition)
+              syncTextareaCaret(textarea, newPosition, renderLayerRef.value)
             })
             return
           }
@@ -2649,8 +2696,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
             inputText.value = newText
             composerDebug('backspace', { matchType: 'memory-ref', deleteStart, deleteEnd: cursorPos })
             requestAnimationFrame(() => {
-              textarea.focus()
-              textarea.setSelectionRange(newPosition, newPosition)
+              syncTextareaCaret(textarea, newPosition, renderLayerRef.value)
             })
             return
           }
@@ -2748,10 +2794,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
     requestAnimationFrame(() => {
       textarea.focus()
-      textarea.setSelectionRange(newPosition, newPosition)
-      if (renderLayerRef.value) {
-        renderLayerRef.value.scrollTop = textarea.scrollTop
-      }
+      syncTextareaCaret(textarea, newPosition, renderLayerRef.value)
     })
   }
 

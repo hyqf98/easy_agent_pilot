@@ -1100,7 +1100,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
             throw error
           }
 
-          if (!classifiedFailure || classifiedFailure.kind !== 'retryable' || cliRetryCount >= maxCliRetries) {
+          if (!classifiedFailure || cliRetryCount >= maxCliRetries) {
             throw error
           }
 

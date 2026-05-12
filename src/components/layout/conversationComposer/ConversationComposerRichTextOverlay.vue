@@ -21,41 +21,56 @@ defineProps<{
       v-for="(segment, index) in parsedInputText"
       :key="index"
     >
-      <span
-        v-if="segment.type === 'text'"
-        class="conversation-composer__text"
-      >{{ segment.content }}</span>
-      <span
-        v-else-if="segment.type === 'file'"
-        class="conversation-composer__file-tag"
-        :title="segment.titleContent"
-      >{{ segment.displayContent || segment.content }}</span>
-      <span
-        v-else-if="segment.type === 'memory'"
-        class="conversation-composer__memory-tag"
-        :title="segment.titleContent"
-      >
-        <span class="conversation-composer__memory-tag-ghost">{{ segment.content }}</span>
-        <span class="conversation-composer__memory-tag-surface">
-          <span
-            v-if="segment.memorySourceLabel"
-            class="conversation-composer__memory-tag-kind"
-          >{{ segment.memorySourceLabel }}</span>
-          <span class="conversation-composer__memory-tag-text">{{ segment.displayContent || segment.content }}</span>
+      <template v-if="segment.type === 'text'">
+        <span class="conversation-composer__text">{{ segment.content }}</span>
+      </template>
+      <template v-else-if="segment.type === 'file'">
+        <span
+          class="conversation-composer__file-tag"
+          :title="segment.titleContent"
+        >{{ segment.displayContent || segment.content }}</span>
+        <span
+          v-if="segment.trailingSpace"
+          class="conversation-composer__token-gap"
+        >&nbsp;</span>
+      </template>
+      <template v-else-if="segment.type === 'memory'">
+        <span
+          class="conversation-composer__memory-tag"
+          :title="segment.titleContent"
+        >
+          <span class="conversation-composer__memory-tag-ghost">{{ segment.content }}</span>
+          <span class="conversation-composer__memory-tag-surface">
+            <span
+              v-if="segment.memorySourceLabel"
+              class="conversation-composer__memory-tag-kind"
+            >{{ segment.memorySourceLabel }}</span>
+            <span class="conversation-composer__memory-tag-text">{{ segment.displayContent || segment.content }}</span>
+          </span>
         </span>
-      </span>
-      <span
-        v-else-if="segment.type === 'attachment'"
-        class="conversation-composer__attachment-placeholder"
-        :class="{
-          'conversation-composer__attachment-placeholder--image': segment.attachmentType === 'image',
-          'conversation-composer__attachment-placeholder--file': segment.attachmentType === 'file'
-        }"
-      >{{ segment.content }}</span>
-      <span
-        v-else
-        class="conversation-composer__slash-tag"
-      >{{ segment.content }}</span>
+      </template>
+      <template v-else-if="segment.type === 'attachment'">
+        <span
+          class="conversation-composer__attachment-placeholder"
+          :class="{
+            'conversation-composer__attachment-placeholder--image': segment.attachmentType === 'image',
+            'conversation-composer__attachment-placeholder--file': segment.attachmentType === 'file'
+          }"
+        >{{ segment.content }}</span>
+        <span
+          v-if="segment.trailingSpace"
+          class="conversation-composer__token-gap"
+        >&nbsp;</span>
+      </template>
+      <template v-else>
+        <span
+          class="conversation-composer__slash-tag"
+        >{{ segment.content }}</span>
+        <span
+          v-if="segment.trailingSpace"
+          class="conversation-composer__token-gap"
+        >&nbsp;</span>
+      </template>
     </template>
   </template>
 

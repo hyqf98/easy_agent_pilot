@@ -491,8 +491,8 @@ impl AgentExecutionStrategy for CodexCliStrategy {
         if let Some(effort) = &reasoning_effort {
             let trimmed = effort.trim();
             if !trimmed.is_empty() {
-                args.push("--reasoning-effort".to_string());
-                args.push(trimmed.to_string());
+                args.push("-c".to_string());
+                args.push(format!("model_reasoning_effort={trimmed}"));
             }
         }
 

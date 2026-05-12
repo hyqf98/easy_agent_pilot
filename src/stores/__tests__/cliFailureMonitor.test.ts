@@ -14,7 +14,7 @@ describe('cliFailureMonitor', () => {
       )!
     ])
 
-    expect(result?.kind).toBe('retryable')
+    expect(result?.message).toContain('OpenCode 异常完成')
   })
 
   it('classifies retryable gateway timeout payloads', () => {
@@ -25,15 +25,15 @@ describe('cliFailureMonitor', () => {
       )!
     ])
 
-    expect(result?.kind).toBe('retryable')
+    expect(result?.message).toContain('Claude 异常完成')
   })
 
-  it('classifies explicit stderr errors as non-retryable', () => {
+  it('classifies explicit stderr errors as cli failures', () => {
     const result = classifyCliFailureFragments('Claude', [
       createCliFailureFragment('stderr', 'fatal error: unsupported model configuration')!
     ])
 
-    expect(result?.kind).toBe('non_retryable')
+    expect(result?.message).toContain('Claude 异常完成')
   })
 
   it('ignores plain successful content', () => {
@@ -77,6 +77,6 @@ describe('cliFailureMonitor', () => {
       createCliFailureFragment('stderr', 'error: broken pipe (os error 32)')!
     ])
 
-    expect(result?.kind).toBe('retryable')
+    expect(result?.message).toContain('Codex 异常完成')
   })
 })

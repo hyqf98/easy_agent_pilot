@@ -773,7 +773,7 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
       ...explicitFragments,
       createCliFailureFragment('content', session.value.rawContent)
     ].filter((item): item is NonNullable<typeof item> => Boolean(item)))
-    if (!retryableFailure || retryableFailure.kind !== 'retryable') {
+    if (!retryableFailure) {
       autoRetryScheduled.value = false
       autoRetryNextRunAt.value = null
       return

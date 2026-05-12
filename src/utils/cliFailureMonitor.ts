@@ -1,5 +1,3 @@
-export type CliFailureKind = 'retryable' | 'non_retryable'
-
 export type CliFailureFragmentSource =
   | 'content'
   | 'error'
@@ -13,7 +11,6 @@ export interface CliFailureFragment {
 }
 
 export interface CliFailureMatch {
-  kind: CliFailureKind
   message: string
   matchedText: string
 }
@@ -211,16 +208,11 @@ function stripAnsiEscapes(text: string): string {
   return text.replace(/\x1b\[[0-9;]*m/g, '')
 }
 
-function buildFailureMessage(
-  runtimeLabel: string,
-  kind: CliFailureKind,
-  matchedText: string
-): CliFailureMatch {
+function buildFailureMessage(runtimeLabel: string, matchedText: string): CliFailureMatch {
   const cleaned = stripAnsiEscapes(matchedText).replace(/\s+/g, ' ').trim()
   return {
-    kind,
     matchedText: cleaned,
-    message: `${runtimeLabel} 异常完成（${kind === 'retryable' ? '可重试' : '不可重试'}）: ${cleaned}`
+    message: `${runtimeLabel} 异常完成: ${cleaned}`
   }
 }
 
@@ -262,11 +254,11 @@ export function classifyCliFailureFragments(
     }
 
     if (hasRetryablePattern(normalized) && sourceAllowsRetryableMatch(fragment.source, normalized)) {
-      return buildFailureMessage(runtimeLabel, 'retryable', fragment.text)
+      return buildFailureMessage(runtimeLabel, fragment.text)
     }
 
     if (isNonRetryableFailure(fragment.source, normalized)) {
-      return buildFailureMessage(runtimeLabel, 'non_retryable', fragment.text)
+      return buildFailureMessage(runtimeLabel, fragment.text)
     }
   }
 
@@ -279,7 +271,7 @@ export function classifyCliFailureWithExplicitPriority(
   allFragments: CliFailureFragment[]
 ): CliFailureMatch | null {
   const explicitFailure = classifyCliFailureFragments(runtimeLabel, explicitFragments)
-  if (explicitFailure?.kind === 'retryable') {
+  if (explicitFailure) {
     return explicitFailure
   }
 

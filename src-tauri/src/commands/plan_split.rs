@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter};
 use super::conversation::executor::{get_registry, is_execution_session_active_internal};
 use super::conversation::set_abort_flag;
 use super::conversation::strategies::abnormal_completion::{
-    classify_cli_completion, CliCompletionFailureKind, CliTextFragment, CliTextSource,
+    classify_cli_completion, CliTextFragment, CliTextSource,
 };
 use super::conversation::strategies::lookup_claude_tool_use_usage;
 use super::conversation::types::{ExecutionRequest, MessageInput};
@@ -1406,12 +1406,7 @@ fn refresh_session_after_turn(
                 .into_iter()
                 .collect::<Vec<_>>();
             let classified_failure = classify_cli_completion("Plan Split", &failure, false);
-
-            let is_retryable_failure = matches!(
-                classified_failure.as_ref().map(|item| item.kind),
-                Some(CliCompletionFailureKind::Retryable)
-            );
-            session.status = if is_retryable_failure {
+            session.status = if classified_failure.is_some() {
                 "failed".to_string()
             } else {
                 "stopped".to_string()
@@ -1421,7 +1416,7 @@ fn refresh_session_after_turn(
             session.llm_messages_json = Some(serialize_json(&llm_messages)?);
             session.form_queue_json = None;
             session.current_form_index = None;
-            session.stopped_at = if is_retryable_failure {
+            session.stopped_at = if classified_failure.is_some() {
                 None
             } else {
                 session.completed_at.clone()

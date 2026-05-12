@@ -1,10 +1,4 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CliCompletionFailureKind {
-    Retryable,
-    NonRetryable,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CliTextSource {
     Content,
     Error,
@@ -35,7 +29,6 @@ impl CliTextFragment {
 
 #[derive(Debug, Clone)]
 pub struct CliCompletionFailure {
-    pub kind: CliCompletionFailureKind,
     pub message: String,
 }
 
@@ -71,6 +64,9 @@ const RETRYABLE_PATTERNS: &[&str] = &[
     "upstream prematurely closed connection",
     "resource temporarily unavailable",
     "temporarily busy",
+    "high demand",
+    "temporary errors",
+    "reconnecting",
     "econnreset",
     "econnrefused",
     "etimedout",
@@ -152,19 +148,11 @@ pub fn classify_cli_completion(
         if is_retryable_failure(&normalized)
             && source_allows_retryable_match(fragment.source, &normalized)
         {
-            return Some(build_failure(
-                provider,
-                CliCompletionFailureKind::Retryable,
-                &fragment.text,
-            ));
+            return Some(build_failure(provider, &fragment.text));
         }
 
         if is_non_retryable_failure(fragment.source, &normalized) {
-            return Some(build_failure(
-                provider,
-                CliCompletionFailureKind::NonRetryable,
-                &fragment.text,
-            ));
+            return Some(build_failure(provider, &fragment.text));
         }
     }
 
@@ -199,7 +187,6 @@ pub fn classify_cli_completion(
             if contains_error_context(&normalized) {
                 return Some(build_failure(
                     provider,
-                    CliCompletionFailureKind::Retryable,
                     &fragment.text,
                 ));
             }
@@ -209,7 +196,6 @@ pub fn classify_cli_completion(
     if emitted_error && !has_primary_response {
         return Some(build_failure(
             provider,
-            CliCompletionFailureKind::Retryable,
             "CLI emitted an error event without a structured failure summary.",
         ));
     }
@@ -217,22 +203,9 @@ pub fn classify_cli_completion(
     None
 }
 
-fn build_failure(
-    provider: &str,
-    kind: CliCompletionFailureKind,
-    snippet: &str,
-) -> CliCompletionFailure {
-    let prefix = match kind {
-        CliCompletionFailureKind::Retryable => "可重试",
-        CliCompletionFailureKind::NonRetryable => "不可重试",
-    };
-
+fn build_failure(provider: &str, snippet: &str) -> CliCompletionFailure {
     CliCompletionFailure {
-        kind,
-        message: format!(
-            "{provider} CLI 异常完成（{prefix}）: {}",
-            snippet.trim().replace('\n', " ")
-        ),
+        message: format!("{provider} CLI 异常完成: {}", snippet.trim().replace('\n', " ")),
     }
 }
 
@@ -354,8 +327,7 @@ fn is_non_retryable_failure(source: CliTextSource, normalized: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_cli_completion, is_shared_benign_stderr_warning, CliCompletionFailureKind,
-        CliTextFragment, CliTextSource,
+        classify_cli_completion, is_shared_benign_stderr_warning, CliTextFragment, CliTextSource,
     };
 
     #[test]
@@ -369,7 +341,7 @@ mod tests {
         let failure =
             classify_cli_completion("OpenCode", &fragments, false).expect("should classify");
 
-        assert_eq!(failure.kind, CliCompletionFailureKind::Retryable);
+        assert!(failure.message.contains("OpenCode CLI 异常完成"));
     }
 
     #[test]
@@ -383,7 +355,7 @@ mod tests {
         let failure =
             classify_cli_completion("Claude", &fragments, false).expect("should classify");
 
-        assert_eq!(failure.kind, CliCompletionFailureKind::Retryable);
+        assert!(failure.message.contains("Claude CLI 异常完成"));
     }
 
     #[test]
@@ -442,7 +414,7 @@ mod tests {
         let failure =
             classify_cli_completion("OpenCode", &fragments, false).expect("should classify");
 
-        assert_eq!(failure.kind, CliCompletionFailureKind::Retryable);
+        assert!(failure.message.contains("OpenCode CLI 异常完成"));
     }
 
     #[test]
@@ -502,7 +474,21 @@ mod tests {
 
         let failure = classify_cli_completion("Codex", &fragments, true).expect("should classify");
 
-        assert_eq!(failure.kind, CliCompletionFailureKind::Retryable);
+        assert!(failure.message.contains("Codex CLI 异常完成"));
+    }
+
+    #[test]
+    fn classifies_codex_high_demand_reconnecting_as_retryable() {
+        let fragments = vec![CliTextFragment::new(
+            CliTextSource::Content,
+            "Reconnecting... 1/5 (We're currently experiencing high demand, which may cause temporary errors.)",
+        )
+        .expect("fragment")];
+
+        let failure =
+            classify_cli_completion("Codex", &fragments, false).expect("should classify");
+
+        assert!(failure.message.contains("Codex CLI 异常完成"));
     }
 
     #[test]
@@ -516,7 +502,7 @@ mod tests {
         let failure =
             classify_cli_completion("Codex", &fragments, true).expect("should classify");
 
-        assert_eq!(failure.kind, CliCompletionFailureKind::Retryable);
+        assert!(failure.message.contains("Codex CLI 异常完成"));
     }
 
     #[test]
@@ -530,7 +516,7 @@ mod tests {
         let failure =
             classify_cli_completion("Codex", &fragments, true).expect("should classify");
 
-        assert_eq!(failure.kind, CliCompletionFailureKind::Retryable);
+        assert!(failure.message.contains("Codex CLI 异常完成"));
     }
 
     #[test]
@@ -544,7 +530,7 @@ mod tests {
         let failure =
             classify_cli_completion("Codex", &fragments, false).expect("should classify");
 
-        assert_eq!(failure.kind, CliCompletionFailureKind::Retryable);
+        assert!(failure.message.contains("Codex CLI 异常完成"));
     }
 
     #[test]
@@ -552,6 +538,6 @@ mod tests {
         let failure =
             classify_cli_completion("Codex", &[], true).expect("should classify");
 
-        assert_eq!(failure.kind, CliCompletionFailureKind::Retryable);
+        assert!(failure.message.contains("Codex CLI 异常完成"));
     }
 }

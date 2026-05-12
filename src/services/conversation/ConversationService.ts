@@ -1322,10 +1322,11 @@ export class ConversationService {
             max: maxRetries
           })
           : null
+        const retryAttemptNumber = retryState?.current ?? retryCount
         const retryNotice: RuntimeNotice = {
           id: 'conversation-auto-retry',
           title: '自动重试',
-          content: `自动重试中... 第 ${retryCount}/${maxRetries} 次，${intervalMinutes} 分钟后重试\n原因: ${(classifiedFailure?.message || errorMessage).slice(0, 200)}`,
+          content: `自动重试中... 第 ${retryAttemptNumber}/${maxRetries} 次，${intervalMinutes} 分钟后重试\n原因: ${(classifiedFailure?.message || errorMessage).slice(0, 200)}`,
           tone: 'warning'
         }
         runtimeNoticesState = upsertRuntimeNotice(runtimeNoticesState, retryNotice)
@@ -1799,7 +1800,7 @@ export class ConversationService {
    * 检查主会话是否应自动重试。返回 true 表示应继续等待重试。
    */
   private checkConversationAutoRetry(sessionId: string, failure: CliFailureMatch | null): boolean {
-    if (!failure || failure.kind !== 'retryable') {
+    if (!failure) {
       return false
     }
 
