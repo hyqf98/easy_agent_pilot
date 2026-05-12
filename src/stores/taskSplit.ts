@@ -761,19 +761,23 @@ export const useTaskSplitStore = defineStore('taskSplit', () => {
   }
 
   function scheduleAutoRetry() {
-    if (!context.value || !session.value || session.value.status !== 'failed') {
+    const currentContext = context.value
+    const currentSession = session.value
+    if (!currentContext || !currentSession || currentSession.status !== 'failed') {
       return
     }
 
+    const selectedAgent = useAgentStore().agents.find(agent => agent.id === currentContext.agentId)
+    const runtimeLabel = inferAgentProvider(selectedAgent)?.toUpperCase() || selectedAgent?.type || 'CLI'
     const explicitFragments = [
-      createCliFailureFragment('error', session.value.errorMessage),
-      createCliFailureFragment('error', session.value.parseError)
+      createCliFailureFragment('error', currentSession.errorMessage),
+      createCliFailureFragment('error', currentSession.parseError)
     ].filter((item): item is NonNullable<typeof item> => Boolean(item))
-    const retryableFailure = classifyCliFailureWithExplicitPriority('Plan Split CLI', explicitFragments, [
+    const abnormalCompletion = classifyCliFailureWithExplicitPriority(runtimeLabel, explicitFragments, [
       ...explicitFragments,
-      createCliFailureFragment('content', session.value.rawContent)
+      createCliFailureFragment('content', currentSession.rawContent)
     ].filter((item): item is NonNullable<typeof item> => Boolean(item)))
-    if (!retryableFailure) {
+    if (!abnormalCompletion) {
       autoRetryScheduled.value = false
       autoRetryNextRunAt.value = null
       return

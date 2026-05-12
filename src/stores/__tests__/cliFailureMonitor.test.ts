@@ -6,7 +6,7 @@ import {
 } from '@/utils/cliFailureMonitor'
 
 describe('cliFailureMonitor', () => {
-  it('classifies retryable rate-limit payloads', () => {
+  it('classifies claude/opencode rate-limit payloads as abnormal completion', () => {
     const result = classifyCliFailureFragments('OpenCode', [
       createCliFailureFragment(
         'content',
@@ -17,7 +17,7 @@ describe('cliFailureMonitor', () => {
     expect(result?.message).toContain('OpenCode 异常完成')
   })
 
-  it('classifies retryable gateway timeout payloads', () => {
+  it('classifies claude gateway timeout payloads as abnormal completion', () => {
     const result = classifyCliFailureFragments('Claude', [
       createCliFailureFragment(
         'content',
@@ -72,7 +72,7 @@ describe('cliFailureMonitor', () => {
     expect(result).toBeNull()
   })
 
-  it('classifies broken pipe process exits as retryable', () => {
+  it('classifies codex broken pipe exits as abnormal completion', () => {
     const result = classifyCliFailureFragments('Codex', [
       createCliFailureFragment('stderr', 'error: broken pipe (os error 32)')!
     ])

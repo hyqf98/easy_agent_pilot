@@ -2655,6 +2655,7 @@ export function useConversationComposer(options: UseConversationComposerOptions)
             composerDebug('backspace', { matchType: 'slash', deleteStart, deleteEnd: cursorPos })
             requestAnimationFrame(() => {
               syncTextareaCaret(textarea, newPosition, renderLayerRef.value)
+              updateSlashCommandState(textarea, newText, newPosition)
             })
             return
           }

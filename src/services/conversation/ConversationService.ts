@@ -1819,7 +1819,7 @@ export class ConversationService {
     void writeFrontendRuntimeLog(
       'INFO',
       'conversation-service',
-      `auto-retry scheduled | sessionId=${sessionId} | retry=${currentCount + 1}/${maxRetries} | originalError=${failure.message.slice(0, 200)}`
+      `auto-retry scheduled | sessionId=${sessionId} | retry=${currentCount + 1}/${maxRetries} | abnormalCompletion=${failure.message.slice(0, 200)}`
     )
     return true
   }

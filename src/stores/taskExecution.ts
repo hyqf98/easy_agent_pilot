@@ -1463,7 +1463,7 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
       retryDelaySeconds: CLI_FAILURE_RETRY_DELAY_MS / 1000,
       runtime: runtimeLabel
     }
-    const content = `检测到可恢复的 ${runtimeLabel} CLI 异常，10 秒后开始第 ${retryCount}/${maxRetries} 次底层重试...`
+    const content = `检测到 ${runtimeLabel} CLI 异常完成，10 秒后开始第 ${retryCount}/${maxRetries} 次底层重试...`
 
     if (existingLogId) {
       const existingEntry = state.logs.find((log) => log.id === existingLogId)

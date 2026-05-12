@@ -15,7 +15,9 @@ export interface CliFailureMatch {
   matchedText: string
 }
 
-const RETRYABLE_PATTERNS = [
+export type CliFailureRuntime = 'claude' | 'codex' | 'opencode'
+
+const FAILURE_PATTERNS = [
   'rate limit',
   'too many requests',
   'throttl',
@@ -47,6 +49,9 @@ const RETRYABLE_PATTERNS = [
   'upstream prematurely closed connection',
   'resource temporarily unavailable',
   'temporarily busy',
+  'high demand',
+  'temporary errors',
+  'reconnecting',
   'econnreset',
   'econnrefused',
   'etimedout',
@@ -101,7 +106,7 @@ function normalizeText(value: string | null | undefined): string {
   return value?.trim().toLowerCase() || ''
 }
 
-function hasRetryableHttpStatus(normalized: string): boolean {
+function hasFailureHttpStatus(normalized: string): boolean {
   const hasTransientStatus = ['429', '502', '503', '504'].some(status =>
     normalized.includes(status)
   )
@@ -133,9 +138,9 @@ function hasRetryableHttpStatus(normalized: string): boolean {
   ].some(signal => normalized.includes(signal))
 }
 
-function hasRetryablePattern(normalized: string): boolean {
-  return hasRetryableHttpStatus(normalized)
-    || RETRYABLE_PATTERNS.some(pattern => normalized.includes(pattern))
+function hasFailurePattern(normalized: string): boolean {
+  return hasFailureHttpStatus(normalized)
+    || FAILURE_PATTERNS.some(pattern => normalized.includes(pattern))
 }
 
 function hasErrorContext(normalized: string): boolean {
@@ -173,7 +178,7 @@ function isPrimaryResponseContent(normalized: string): boolean {
     && !looksLikeFailurePayload(normalized)
 }
 
-function sourceAllowsRetryableMatch(
+function sourceAllowsFailureMatch(
   source: CliFailureFragmentSource,
   normalized: string
 ): boolean {
@@ -188,7 +193,7 @@ function sourceAllowsRetryableMatch(
   return looksLikeFailurePayload(normalized)
 }
 
-function isNonRetryableFailure(
+function isFailurePayload(
   source: CliFailureFragmentSource,
   normalized: string
 ): boolean {
@@ -216,6 +221,40 @@ function buildFailureMessage(runtimeLabel: string, matchedText: string): CliFail
   }
 }
 
+function normalizeFailureRuntime(runtime?: string | null): CliFailureRuntime | null {
+  const normalized = runtime?.trim().toLowerCase()
+  if (!normalized) {
+    return null
+  }
+  if (normalized.includes('claude')) {
+    return 'claude'
+  }
+  if (normalized.includes('codex')) {
+    return 'codex'
+  }
+  if (normalized.includes('opencode') || normalized.includes('open code')) {
+    return 'opencode'
+  }
+  return null
+}
+
+function hasCodexSpecificFailurePattern(normalized: string): boolean {
+  return normalized.includes('reconnecting')
+    || normalized.includes('high demand')
+    || normalized.includes('temporary errors')
+    || normalized.includes('broken pipe')
+    || normalized.includes('os error 232')
+    || normalized.includes('failed printing to stdout')
+}
+
+function hasRuntimeSpecificFailurePattern(runtime: CliFailureRuntime | null, normalized: string): boolean {
+  if (runtime === 'codex') {
+    return hasCodexSpecificFailurePattern(normalized) || hasFailurePattern(normalized)
+  }
+
+  return hasFailurePattern(normalized)
+}
+
 export function createCliFailureFragment(
   source: CliFailureFragmentSource,
   text?: string | null
@@ -235,6 +274,7 @@ export function classifyCliFailureFragments(
   runtimeLabel: string,
   fragments: CliFailureFragment[]
 ): CliFailureMatch | null {
+  const runtime = normalizeFailureRuntime(runtimeLabel)
   const hasPrimaryResponse = fragments.some(fragment =>
     fragment.source === 'content' && isPrimaryResponseContent(normalizeText(fragment.text))
   )
@@ -253,11 +293,11 @@ export function classifyCliFailureFragments(
       continue
     }
 
-    if (hasRetryablePattern(normalized) && sourceAllowsRetryableMatch(fragment.source, normalized)) {
+    if (hasRuntimeSpecificFailurePattern(runtime, normalized) && sourceAllowsFailureMatch(fragment.source, normalized)) {
       return buildFailureMessage(runtimeLabel, fragment.text)
     }
 
-    if (isNonRetryableFailure(fragment.source, normalized)) {
+    if (isFailurePayload(fragment.source, normalized)) {
       return buildFailureMessage(runtimeLabel, fragment.text)
     }
   }
