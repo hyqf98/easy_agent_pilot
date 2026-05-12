@@ -721,6 +721,7 @@ defineExpose({
       :position="slashCommandPosition"
       :query="slashCommandQuery"
       :commands="slashCommands"
+      :panel-type="panelType"
       @select="handleSlashCommandSelect"
       @close="closeSlashCommand"
     />

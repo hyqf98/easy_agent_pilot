@@ -2,13 +2,14 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { EaIcon } from '@/components/common'
-import type { SlashCommandDescriptor } from '@/services/slashCommands'
+import type { SlashCommandDescriptor, SlashCommandPanelType } from '@/services/slashCommands'
 
 const props = defineProps<{
   visible: boolean
   position: { x: number; y: number; width: number; height: number }
   query: string
   commands: SlashCommandDescriptor[]
+  panelType: SlashCommandPanelType
 }>()
 
 const emit = defineEmits<{
@@ -19,6 +20,43 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const dropdownRef = ref<HTMLElement | null>(null)
 const selectedIndex = ref(0)
+
+interface DisplayItem {
+  type: 'command'
+  command: SlashCommandDescriptor
+  globalIndex: number
+}
+
+interface DisplayGroup {
+  type: 'group'
+  label: string
+}
+
+type DisplayEntry = DisplayItem | DisplayGroup
+
+const displayEntries = computed(() => {
+  const entries: DisplayEntry[] = []
+  let globalIdx = 0
+
+  const builtinCmds = props.commands.filter(c => c.source !== 'plugin')
+  const pluginCmds = props.commands.filter(c => c.source === 'plugin')
+
+  if (builtinCmds.length > 0) {
+    entries.push({ type: 'group', label: t('message.slash.builtinGroup') })
+    for (const cmd of builtinCmds) {
+      entries.push({ type: 'command', command: cmd, globalIndex: globalIdx++ })
+    }
+  }
+
+  if (pluginCmds.length > 0) {
+    entries.push({ type: 'group', label: t('message.slash.pluginGroup') })
+    for (const cmd of pluginCmds) {
+      entries.push({ type: 'command', command: cmd, globalIndex: globalIdx++ })
+    }
+  }
+
+  return entries
+})
 
 const dropdownStyle = computed(() => {
   if (!props.position.x || !props.position.y) return {}
@@ -146,20 +184,32 @@ onUnmounted(() => {
         v-else
         class="slash-command__list"
       >
-        <button
-          v-for="(command, index) in commands"
-          :key="command.name"
-          class="slash-command__item"
-          :class="{ 'slash-command__item--selected': index === selectedIndex }"
-          @mouseenter="selectedIndex = index"
-          @click="select(command)"
+        <template
+          v-for="entry in displayEntries"
+          :key="entry.type === 'group' ? entry.label : entry.command.name"
         >
-          <div class="slash-command__item-main">
-            <span class="slash-command__item-name">/{{ command.name }}</span>
-            <span class="slash-command__item-desc">{{ t(command.descriptionKey) }}</span>
+          <div
+            v-if="entry.type === 'group'"
+            class="slash-command__group-label"
+          >
+            {{ entry.label }}
           </div>
-          <span class="slash-command__item-usage">{{ t(command.usageKey) }}</span>
-        </button>
+          <button
+            v-else
+            class="slash-command__item"
+            :class="{ 'slash-command__item--selected': entry.globalIndex === selectedIndex }"
+            @mouseenter="selectedIndex = entry.globalIndex"
+            @click="select(entry.command)"
+          >
+            <div class="slash-command__item-main">
+              <span class="slash-command__item-name">/{{ entry.command.name }}</span>
+              <span class="slash-command__item-desc">
+                {{ entry.command.source === 'plugin' && entry.command.pluginName ? `[${entry.command.pluginName}] ` : '' }}{{ t(entry.command.descriptionKey) }}
+              </span>
+            </div>
+            <span class="slash-command__item-usage">{{ t(entry.command.usageKey) }}</span>
+          </button>
+        </template>
       </div>
     </div>
   </Teleport>
@@ -213,6 +263,16 @@ onUnmounted(() => {
   max-height: 236px;
   overflow-y: auto;
   padding: 6px;
+}
+
+.slash-command__group-label {
+  padding: 8px 12px 4px;
+  font-size: 10px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  user-select: none;
 }
 
 .slash-command__item {

@@ -288,6 +288,7 @@ pub fn run() {
             commands::skill_plugin::read_reference_file,
             commands::skill_plugin::create_cli_skill_scaffold,
             commands::skill_plugin::get_plugin_details,
+            commands::skill_plugin::scan_plugin_slash_commands,
             commands::skill_plugin::delete_skill_directory,
             commands::skill_plugin::delete_plugin_directory,
             commands::skill_plugin::read_file_content,

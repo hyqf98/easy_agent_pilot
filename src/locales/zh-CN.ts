@@ -326,7 +326,9 @@ const zhCN = {
       cdDesc: '切换迷你面板当前工作目录',
       cdUsage: '用法：/cd <路径>',
       initDesc: '调用架构分析专家初始化当前项目的 AGENTS.md',
-      initUsage: '分析当前项目并让 CLI 自行写入/更新 AGENTS.md'
+      initUsage: '分析当前项目并让 CLI 自行写入/更新 AGENTS.md',
+      builtinGroup: '内置命令',
+      pluginGroup: '插件/扩展命令'
     },
     emptyWelcome: '欢迎使用 Easy Agent Pilot',
     emptyHint: '在下方输入框中开始与 AI 对话',

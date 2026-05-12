@@ -29,12 +29,15 @@ import { useMemoryStore } from '@/stores/memory'
 import { useAgentTeamsStore } from '@/stores/agentTeams'
 import { compressionService } from '@/services/compression'
 import { conversationService } from '@/services/conversation'
+import { loadPluginSlashCommands, toSlashCommandDescriptor } from '@/services/pluginCommands'
 import { writeFrontendRuntimeLog } from '@/services/runtimeLog/client'
 import { getErrorMessage } from '@/utils/api'
 import {
   executeSlashCommand,
   parseSlashCommandInput,
   searchSlashCommands,
+  registerPluginCommands,
+  clearPluginCommands,
   type ParsedSlashCommand,
   type SlashCommandDescriptor,
   type SlashCommandPanelType
@@ -55,12 +58,14 @@ import {
 } from '@/services/agentTeams/runtime'
 
 interface TextSegment {
-  type: 'text' | 'file' | 'slash' | 'memory'
+  type: 'text' | 'file' | 'slash' | 'memory' | 'attachment'
   content: string
   displayContent?: string
   fullPath?: string
   titleContent?: string
   memorySourceLabel?: string
+  attachmentType?: 'image' | 'file'
+  attachmentIndex?: number
 }
 
 interface UploadImageInput {
@@ -91,6 +96,7 @@ interface UseConversationComposerOptions {
 }
 
 const MEMORY_REFERENCE_TOKEN_PATTERN = /\[\[memory-ref:(library_chunk|raw_record):([^\]]+)\]\]/g
+const ATTACHMENT_PLACEHOLDER_PATTERN = /\[(Image|File)(\d+)\]/g
 const MEMORY_SUGGESTION_DEBOUNCE_MS = 350
 const MEMORY_SUGGESTION_AUTO_HIDE_MS = 3000
 const MEMORY_SUGGESTION_EMPTY_STATE_DELAY_MS = 3000
@@ -579,9 +585,11 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
     FILE_MENTION_PATTERN.lastIndex = 0
     MEMORY_REFERENCE_TOKEN_PATTERN.lastIndex = 0
+    ATTACHMENT_PLACEHOLDER_PATTERN.lastIndex = 0
     const tokenMatches: Array<
       { kind: 'file'; match: RegExpExecArray } |
-      { kind: 'memory'; match: RegExpExecArray }
+      { kind: 'memory'; match: RegExpExecArray } |
+      { kind: 'attachment'; match: RegExpExecArray }
     > = []
 
     while ((match = FILE_MENTION_PATTERN.exec(text)) !== null) {
@@ -591,6 +599,11 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     let memoryMatch: RegExpExecArray | null
     while ((memoryMatch = MEMORY_REFERENCE_TOKEN_PATTERN.exec(text)) !== null) {
       tokenMatches.push({ kind: 'memory', match: memoryMatch })
+    }
+
+    let attachmentMatch: RegExpExecArray | null
+    while ((attachmentMatch = ATTACHMENT_PLACEHOLDER_PATTERN.exec(text)) !== null) {
+      tokenMatches.push({ kind: 'attachment', match: attachmentMatch })
     }
 
     tokenMatches.sort((left, right) => left.match.index - right.match.index)
@@ -629,25 +642,44 @@ export function useConversationComposer(options: UseConversationComposerOptions)
         continue
       }
 
-      memoryMatch = entry.match
-      const sourceType = memoryMatch[1] as MemorySuggestionSourceType
-      const sourceId = memoryMatch[2] || ''
-      const mappedReference = currentMemoryReferences.value.find(reference =>
-        reference.sourceType === sourceType && reference.sourceId === sourceId
-      )
-      const memorySourceLabel = sourceType === 'library_chunk'
-        ? t('message.memorySourceLibrary')
-        : t('message.memorySourceRaw')
+      if (entry.kind === 'memory') {
+        memoryMatch = entry.match
+        const sourceType = memoryMatch[1] as MemorySuggestionSourceType
+        const sourceId = memoryMatch[2] || ''
+        const mappedReference = currentMemoryReferences.value.find(reference =>
+          reference.sourceType === sourceType && reference.sourceId === sourceId
+        )
+        const memorySourceLabel = sourceType === 'library_chunk'
+          ? t('message.memorySourceLibrary')
+          : t('message.memorySourceRaw')
 
-      segments.push({
-        type: 'memory',
-        content: memoryMatch[0],
-        displayContent: mappedReference?.title?.trim() || memorySourceLabel,
-        titleContent: mappedReference?.snippet ?? mappedReference?.fullContent ?? mappedReference?.title ?? '',
-        memorySourceLabel
-      })
+        segments.push({
+          type: 'memory',
+          content: memoryMatch[0],
+          displayContent: mappedReference?.title?.trim() || memorySourceLabel,
+          titleContent: mappedReference?.snippet ?? mappedReference?.fullContent ?? mappedReference?.title ?? '',
+          memorySourceLabel
+        })
 
-      lastIndex = memoryMatch.index + memoryMatch[0].length
+        lastIndex = memoryMatch.index + memoryMatch[0].length
+        continue
+      }
+
+      if (entry.kind === 'attachment') {
+        attachmentMatch = entry.match
+        const attachmentIndex = parseInt(attachmentMatch[2], 10)
+        const attachmentKind = attachmentMatch[1]
+        const isImage = attachmentKind === 'Image'
+
+        segments.push({
+          type: 'attachment',
+          content: attachmentMatch[0],
+          attachmentType: isImage ? 'image' : 'file',
+          attachmentIndex
+        })
+
+        lastIndex = attachmentMatch.index + attachmentMatch[0].length
+      }
     }
 
     if (lastIndex < text.length) {
@@ -1068,6 +1100,22 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     } else {
       selectedModelId.value = ''
       selectedReasoningEffort.value = ''
+    }
+  }, { immediate: true })
+
+  const currentProvider = computed(() =>
+    currentAgent.value ? (currentAgent.value.provider || inferAgentProvider(currentAgent.value)) : undefined
+  )
+
+  watch(currentProvider, async (provider) => {
+    clearPluginCommands()
+    if (!provider) return
+
+    try {
+      const commands = await loadPluginSlashCommands(provider, currentProjectPath.value ?? undefined)
+      registerPluginCommands(commands.map(toSlashCommandDescriptor))
+    } catch {
+      // silent fallback
     }
   }, { immediate: true })
 
@@ -1719,12 +1767,56 @@ export function useConversationComposer(options: UseConversationComposerOptions)
 
       const pendingImages = await Promise.all(result.attachments.map(toPendingAttachment))
       sessionExecutionStore.appendPendingImages(sessionId, pendingImages)
+
+      const currentCount = sessionExecutionStore.getPendingImages(sessionId).length
+      insertAttachmentPlaceholders(
+        currentCount - pendingImages.length + 1,
+        currentCount,
+        payload.map(p => p.mimeType)
+      )
     } catch (error) {
       console.error('Failed to upload attachments:', error)
       notificationStore.smartError('上传附件', error instanceof Error ? error : new Error(String(error)))
     } finally {
       sessionExecutionStore.setIsUploadingImages(sessionId, false)
     }
+  }
+
+  const insertAttachmentPlaceholders = (
+    startIndex: number,
+    endIndex: number,
+    mimeTypes: string[]
+  ) => {
+    const textarea = textareaRef.value
+    if (!textarea) return
+
+    const cursorPos = textarea.selectionStart ?? inputText.value.length
+    const before = inputText.value.slice(0, cursorPos)
+    const after = inputText.value.slice(cursorPos)
+
+    const placeholders: string[] = []
+    for (let i = startIndex; i <= endIndex; i++) {
+      const mimeType = mimeTypes[i - startIndex] || ''
+      const isImage = mimeType.startsWith('image/')
+      placeholders.push(isImage ? `[Image${i}]` : `[File${i}]`)
+    }
+
+    const insertText = placeholders.join(' ')
+    const needsSpace = before.length > 0 && !/\s$/.test(before)
+    const fullInsert = `${needsSpace ? ' ' : ''}${insertText} `
+    const newText = sanitizeComposerText(`${before}${fullInsert}${after}`)
+    const newPosition = before.length + fullInsert.length
+
+    textarea.value = newText
+    inputText.value = newText
+
+    requestAnimationFrame(() => {
+      textarea.focus()
+      textarea.setSelectionRange(newPosition, newPosition)
+      if (renderLayerRef.value) {
+        renderLayerRef.value.scrollTop = textarea.scrollTop
+      }
+    })
   }
 
   const openAttachmentPicker = () => {
@@ -2419,6 +2511,46 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     const normalizedEvent = event as KeyboardEvent & { keyCode?: number; isComposing?: boolean }
     if (normalizedEvent.isComposing || isInputComposing.value || normalizedEvent.keyCode === 229) {
       return
+    }
+
+    if (event.key === 'Backspace' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      const textarea = textareaRef.value
+      if (textarea) {
+        const cursorPos = textarea.selectionStart
+        const selEnd = textarea.selectionEnd
+        if (cursorPos === selEnd && cursorPos > 0) {
+          const text = inputText.value
+          const before = text.slice(0, cursorPos)
+
+          const slashMatch = before.match(/\/[^\s\n]*$/)
+          if (slashMatch) {
+            event.preventDefault()
+            const deleteStart = cursorPos - slashMatch[0].length
+            const newText = text.slice(0, deleteStart) + text.slice(cursorPos)
+            textarea.value = newText
+            inputText.value = newText
+            requestAnimationFrame(() => {
+              textarea.focus()
+              textarea.setSelectionRange(deleteStart, deleteStart)
+            })
+            return
+          }
+
+          const attachMatch = before.match(/\[(Image|File)\d+\]\s?$/)
+          if (attachMatch) {
+            event.preventDefault()
+            const deleteStart = cursorPos - attachMatch[0].length
+            const newText = text.slice(0, deleteStart) + text.slice(cursorPos)
+            textarea.value = newText
+            inputText.value = newText
+            requestAnimationFrame(() => {
+              textarea.focus()
+              textarea.setSelectionRange(deleteStart, deleteStart)
+            })
+            return
+          }
+        }
+      }
     }
 
     if (showFileMention.value || showSlashCommand.value || showCdPathSuggestions.value) {

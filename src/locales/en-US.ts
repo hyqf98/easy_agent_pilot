@@ -411,7 +411,9 @@ export default {
       cdDesc: 'Change the mini panel working directory',
       cdUsage: 'Usage: /cd <path>',
       initDesc: 'Run the architecture expert to initialize the current project AGENTS.md',
-      initUsage: 'Analyze the current project and let the CLI write/update AGENTS.md'
+      initUsage: 'Analyze the current project and let the CLI write/update AGENTS.md',
+      builtinGroup: 'Built-in Commands',
+      pluginGroup: 'Plugin / Extension Commands'
     },
     thinking: 'Thinking',
     toolCall: 'Tool Call',

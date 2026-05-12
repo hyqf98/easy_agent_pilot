@@ -1,3 +1,5 @@
+import { reactive } from 'vue'
+
 export type SlashCommandPanelType = 'main' | 'mini'
 
 export interface SlashCommandDescriptor {
@@ -7,6 +9,11 @@ export interface SlashCommandDescriptor {
   descriptionKey: string
   usageKey: string
   insertText: string
+  source?: 'builtin' | 'plugin'
+  pluginName?: string
+  cliType?: string
+  argumentHint?: string
+  cliCommandName?: string
 }
 
 export interface SlashCommandContext {
@@ -39,13 +46,14 @@ type SlashCommandHandler = (
   context: SlashCommandContext
 ) => Promise<SlashCommandExecutionResult>
 
-const COMMANDS: SlashCommandDescriptor[] = [
+const BUILTIN_COMMANDS: SlashCommandDescriptor[] = [
   {
     name: 'clear',
     scopes: ['main', 'mini'],
     descriptionKey: 'message.slash.clearDesc',
     usageKey: 'message.slash.clearUsage',
-    insertText: '/clear'
+    insertText: '/clear',
+    source: 'builtin'
   },
   {
     name: 'compact',
@@ -53,30 +61,53 @@ const COMMANDS: SlashCommandDescriptor[] = [
     scopes: ['main', 'mini'],
     descriptionKey: 'message.slash.compactDesc',
     usageKey: 'message.slash.compactUsage',
-    insertText: '/compact'
+    insertText: '/compact',
+    source: 'builtin'
   },
   {
     name: 'cd',
     scopes: ['mini'],
     descriptionKey: 'message.slash.cdDesc',
     usageKey: 'message.slash.cdUsage',
-    insertText: '/cd '
+    insertText: '/cd ',
+    source: 'builtin'
   },
   {
     name: 'init',
     scopes: ['main'],
     descriptionKey: 'message.slash.initDesc',
     usageKey: 'message.slash.initUsage',
-    insertText: '/init'
+    insertText: '/init',
+    source: 'builtin'
   }
 ]
+
+const BUILTIN_NAMES = new Set(BUILTIN_COMMANDS.map(cmd => cmd.name))
+
+const pluginCommands = reactive<SlashCommandDescriptor[]>([])
+
+export function registerPluginCommands(commands: SlashCommandDescriptor[]): void {
+  pluginCommands.splice(0, pluginCommands.length, ...commands)
+}
+
+export function clearPluginCommands(): void {
+  pluginCommands.splice(0, pluginCommands.length)
+}
 
 function normalizeName(name: string): string {
   return name.trim().toLowerCase()
 }
 
 export function listSlashCommands(panelType: SlashCommandPanelType): SlashCommandDescriptor[] {
-  return COMMANDS.filter(command => command.scopes.includes(panelType))
+  return [...BUILTIN_COMMANDS, ...pluginCommands].filter(command => command.scopes.includes(panelType))
+}
+
+export function listBuiltinCommands(panelType: SlashCommandPanelType): SlashCommandDescriptor[] {
+  return BUILTIN_COMMANDS.filter(command => command.scopes.includes(panelType))
+}
+
+export function listPluginCommands(panelType: SlashCommandPanelType): SlashCommandDescriptor[] {
+  return pluginCommands.filter(command => command.scopes.includes(panelType))
 }
 
 export function searchSlashCommands(
@@ -119,11 +150,38 @@ export function parseSlashCommandInput(rawInput: string): ParsedSlashCommand | n
   }
 }
 
-function resolveCommand(name: string, panelType: SlashCommandPanelType): SlashCommandDescriptor | null {
+function resolveBuiltinCommand(name: string, panelType: SlashCommandPanelType): SlashCommandDescriptor | null {
   const normalized = normalizeName(name)
-  return listSlashCommands(panelType).find(command =>
+  return listBuiltinCommands(panelType).find(command =>
     command.name === normalized || command.aliases?.includes(normalized)
   ) ?? null
+}
+
+function resolvePluginCommand(name: string): SlashCommandDescriptor | null {
+  const normalized = normalizeName(name)
+
+  const exactMatch = pluginCommands.find(cmd => cmd.name === normalized)
+  if (exactMatch) {
+    return exactMatch
+  }
+
+  const shortName = normalized.includes(':')
+    ? normalized.split(':').pop() ?? ''
+    : normalized
+
+  if (!shortName) {
+    return null
+  }
+
+  const matches = pluginCommands.filter(
+    cmd => cmd.name === shortName || cmd.name.endsWith(`:${shortName}`)
+  )
+
+  if (matches.length === 1) {
+    return matches[0]
+  }
+
+  return null
 }
 
 const COMMAND_HANDLERS: Record<string, SlashCommandHandler> = {
@@ -185,21 +243,28 @@ export async function executeSlashCommand(
   parsed: ParsedSlashCommand,
   context: SlashCommandContext
 ): Promise<SlashCommandExecutionResult> {
-  const command = resolveCommand(parsed.name, context.panelType)
+  const builtin = resolveBuiltinCommand(parsed.name, context.panelType)
+  if (builtin) {
+    if (context.isSending) {
+      context.notifyWarning('当前会话正在执行，暂时不能运行斜杠命令。')
+      return { handled: true }
+    }
 
-  if (!command) {
+    const handler = COMMAND_HANDLERS[builtin.name]
+    if (handler) {
+      return handler(parsed, context)
+    }
     return { handled: false }
   }
 
-  if (context.isSending) {
-    context.notifyWarning('当前会话正在执行，暂时不能运行斜杠命令。')
-    return { handled: true }
-  }
-
-  const handler = COMMAND_HANDLERS[command.name]
-  if (!handler) {
+  if (BUILTIN_NAMES.has(normalizeName(parsed.name))) {
     return { handled: false }
   }
 
-  return handler(parsed, context)
+  const plugin = resolvePluginCommand(parsed.name)
+  if (plugin) {
+    return { handled: false }
+  }
+
+  return { handled: false }
 }

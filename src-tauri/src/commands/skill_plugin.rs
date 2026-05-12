@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -858,6 +859,7 @@ pub fn delete_plugin_directory(plugin_path: String) -> Result<(), String> {
 }
 
 /// 目录文件信息
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DirectoryFile {
     pub name: String,
@@ -965,4 +967,406 @@ pub fn list_directory_files(
     files.sort_by(|a, b| a.name.cmp(&b.name));
 
     Ok(files)
+}
+
+// ───── Plugin Slash Commands ─────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginSlashCommand {
+    pub name: String,
+    pub plugin_name: String,
+    pub cli_type: String,
+    pub description: Option<String>,
+    pub argument_hint: Option<String>,
+    pub allowed_tools: Option<Vec<String>>,
+    pub disable_model_invocation: bool,
+}
+
+struct CommandFrontmatter {
+    description: Option<String>,
+    argument_hint: Option<String>,
+    allowed_tools: Option<Vec<String>>,
+    disable_model_invocation: bool,
+}
+
+fn parse_command_frontmatter(content: &str) -> CommandFrontmatter {
+    let lines: Vec<&str> = content.lines().collect();
+
+    let start_idx = lines.iter().position(|line| line.trim() == "---");
+    let end_idx = if let Some(start) = start_idx {
+        lines
+            .iter()
+            .skip(start + 1)
+            .position(|line| line.trim() == "---")
+            .map(|idx| start + 1 + idx)
+    } else {
+        None
+    };
+
+    let mut description = None;
+    let mut argument_hint = None;
+    let mut allowed_tools = None;
+    let mut disable_model_invocation = false;
+
+    if let (Some(start), Some(end)) = (start_idx, end_idx) {
+        let frontmatter_lines = &lines[start + 1..end];
+
+        for line in frontmatter_lines {
+            let line = line.trim();
+            if let Some((key, value)) = line.split_once(':') {
+                let key = key.trim();
+                let value = value.trim();
+
+                match key {
+                    "description" => {
+                        description = Some(unquote_yaml_string(value));
+                    }
+                    "argument-hint" => {
+                        argument_hint = Some(unquote_yaml_string(value));
+                    }
+                    "allowed-tools" => {
+                        let trimmed = value.trim();
+                        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                            let inner = trimmed[1..trimmed.len() - 1].trim();
+                            allowed_tools = Some(
+                                inner
+                                    .split(',')
+                                    .map(|s| s.trim().to_string())
+                                    .filter(|s| !s.is_empty())
+                                    .collect(),
+                            );
+                        } else {
+                            allowed_tools = Some(
+                                value
+                                    .split(|c: char| c == ',' || c.is_whitespace())
+                                    .map(|s| s.trim().to_string())
+                                    .filter(|s| !s.is_empty())
+                                    .collect(),
+                            );
+                        }
+                    }
+                    "disable-model-invocation" => {
+                        disable_model_invocation = value == "true";
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    CommandFrontmatter {
+        description,
+        argument_hint,
+        allowed_tools,
+        disable_model_invocation,
+    }
+}
+
+fn unquote_yaml_string(value: &str) -> String {
+    let trimmed = value.trim();
+    if (trimmed.starts_with('"') && trimmed.ends_with('"'))
+        || (trimmed.starts_with('\'') && trimmed.ends_with('\''))
+    {
+        trimmed[1..trimmed.len() - 1].to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn resolve_cli_plugins_dir(cli_type: &str) -> Option<PathBuf> {
+    let home_dir = dirs::home_dir()?;
+    match cli_type {
+        "claude" | "claude-code" => Some(home_dir.join(".claude").join("plugins")),
+        "codex" => Some(home_dir.join(".codex").join("plugins")),
+        "opencode" => Some(home_dir.join(".config").join("opencode").join("plugins")),
+        _ => None,
+    }
+}
+
+fn resolve_cli_skills_dir(cli_type: &str) -> Option<PathBuf> {
+    let home_dir = dirs::home_dir()?;
+    match cli_type {
+        "opencode" => Some(home_dir.join(".config").join("opencode").join("skill")),
+        _ => None,
+    }
+}
+
+fn scan_skill_commands(skills_dir: &Path) -> Vec<(String, PathBuf)> {
+    let mut result = Vec::new();
+    let Ok(entries) = fs::read_dir(skills_dir) else {
+        return result;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if name.is_empty() || name.starts_with('.') {
+            continue;
+        }
+        let skill_file = path.join("SKILL.md");
+        if skill_file.exists() {
+            result.push((name, skill_file));
+        }
+    }
+    result
+}
+
+fn collect_slash_commands_from_skills(
+    skills: &[(String, PathBuf)],
+    cli_name: &str,
+    commands: &mut Vec<PluginSlashCommand>,
+    seen_names: &mut HashSet<String>,
+) {
+    for (skill_name, skill_file) in skills {
+        if !seen_names.insert(skill_name.clone()) {
+            continue;
+        }
+
+        let frontmatter = fs::read_to_string(skill_file)
+            .map(|content| parse_command_frontmatter(&content))
+            .unwrap_or(CommandFrontmatter {
+                description: None,
+                argument_hint: None,
+                allowed_tools: None,
+                disable_model_invocation: false,
+            });
+
+        commands.push(PluginSlashCommand {
+            name: skill_name.clone(),
+            plugin_name: "skill".to_string(),
+            cli_type: cli_name.to_string(),
+            description: frontmatter.description,
+            argument_hint: frontmatter.argument_hint,
+            allowed_tools: frontmatter.allowed_tools,
+            disable_model_invocation: frontmatter.disable_model_invocation,
+        });
+    }
+}
+
+fn scan_plugins_with_commands(plugins_dir: &Path) -> Vec<(String, PathBuf)> {
+    let mut result = Vec::new();
+
+    let installed_path = plugins_dir.join("installed_plugins.json");
+    if installed_path.exists() {
+        if let Ok(content) = fs::read_to_string(&installed_path) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(plugins_obj) = json.get("plugins").and_then(|v| v.as_object()) {
+                    for (plugin_key, plugin_entries) in plugins_obj {
+                        if let Some(first_entry) = plugin_entries
+                            .as_array()
+                            .and_then(|entries| entries.first())
+                        {
+                            if let Some(install_path_str) =
+                                first_entry.get("installPath").and_then(|v| v.as_str())
+                            {
+                                let install_path = PathBuf::from(install_path_str);
+                                if install_path.exists()
+                                    && install_path.join("commands").exists()
+                                {
+                                    let display_name = plugin_key
+                                        .split('@')
+                                        .next()
+                                        .unwrap_or(plugin_key)
+                                        .to_string();
+                                    result.push((display_name, install_path));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if result.is_empty() {
+        if let Ok(entries) = fs::read_dir(plugins_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() && path.join("commands").exists() {
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    result.push((name, path));
+                }
+            }
+        }
+    }
+
+    result
+}
+
+fn collect_command_files(commands_dir: &Path) -> Vec<(String, PathBuf)> {
+    let mut result = Vec::new();
+    let Ok(entries) = fs::read_dir(commands_dir) else {
+        return result;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if !name.is_empty() && !name.starts_with('.') {
+                result.push((name, path));
+            }
+        } else if path.extension().is_some_and(|ext| ext == "md") {
+            let name = path
+                .file_stem()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if !name.is_empty() {
+                result.push((name, path));
+            }
+        }
+    }
+
+    result
+}
+
+fn resolve_command_content_path(command_path: &Path) -> Option<PathBuf> {
+    if command_path.is_file() {
+        return Some(command_path.to_path_buf());
+    }
+    if command_path.is_dir() {
+        for candidate in &["command.md", "COMMAND.md"] {
+            let file_path = command_path.join(candidate);
+            if file_path.exists() {
+                return Some(file_path);
+            }
+        }
+    }
+    None
+}
+
+fn collect_slash_commands_from_plugins(
+    plugins: &[(String, PathBuf)],
+    cli_name: &str,
+    commands: &mut Vec<PluginSlashCommand>,
+    seen_names: &mut HashSet<String>,
+) {
+    for (plugin_name, plugin_path) in plugins {
+        let commands_dir = plugin_path.join("commands");
+        let command_files = collect_command_files(&commands_dir);
+
+        for (cmd_name, cmd_path) in command_files {
+            let unique_key = format!("{}:{}", plugin_name, cmd_name);
+            if !seen_names.insert(unique_key.clone()) {
+                continue;
+            }
+
+            let content_path = match resolve_command_content_path(&cmd_path) {
+                Some(p) => p,
+                None => continue,
+            };
+
+            let frontmatter = fs::read_to_string(&content_path)
+                .map(|content| parse_command_frontmatter(&content))
+                .unwrap_or(CommandFrontmatter {
+                    description: None,
+                    argument_hint: None,
+                    allowed_tools: None,
+                    disable_model_invocation: false,
+                });
+
+            commands.push(PluginSlashCommand {
+                name: cmd_name,
+                plugin_name: plugin_name.clone(),
+                cli_type: cli_name.to_string(),
+                description: frontmatter.description,
+                argument_hint: frontmatter.argument_hint,
+                allowed_tools: frontmatter.allowed_tools,
+                disable_model_invocation: frontmatter.disable_model_invocation,
+            });
+        }
+    }
+}
+
+#[tauri::command]
+pub fn scan_plugin_slash_commands(
+    cli_type: String,
+    project_path: Option<String>,
+) -> Result<Vec<PluginSlashCommand>, String> {
+    let cli_name = cli_type.trim().to_lowercase();
+    let plugins_dir = match resolve_cli_plugins_dir(&cli_name) {
+        Some(dir) => dir,
+        None => return Err(format!("Unknown CLI type: {}", cli_name)),
+    };
+
+    let mut commands = Vec::new();
+    let mut seen_names = HashSet::new();
+
+    if plugins_dir.exists() {
+        let plugins = scan_plugins_with_commands(&plugins_dir);
+        collect_slash_commands_from_plugins(&plugins, &cli_name, &mut commands, &mut seen_names);
+    }
+
+    if let Some(skills_dir) = resolve_cli_skills_dir(&cli_name) {
+        if skills_dir.exists() {
+            let skills = scan_skill_commands(&skills_dir);
+            collect_slash_commands_from_skills(&skills, &cli_name, &mut commands, &mut seen_names);
+        }
+    }
+
+    let mut commands = Vec::new();
+    let mut seen_names = HashSet::new();
+
+    let plugins = scan_plugins_with_commands(&plugins_dir);
+    collect_slash_commands_from_plugins(&plugins, &cli_name, &mut commands, &mut seen_names);
+
+    if let Some(skills_dir) = resolve_cli_skills_dir(&cli_name) {
+        if skills_dir.exists() {
+            let skills = scan_skill_commands(&skills_dir);
+            collect_slash_commands_from_skills(&skills, &cli_name, &mut commands, &mut seen_names);
+        }
+    }
+
+    if let Some(ref project_root) = project_path {
+        let project_root = PathBuf::from(project_root.trim());
+        if project_root.exists() {
+            let project_plugins_dir = match cli_name.as_str() {
+                "opencode" => Some(project_root.join(".opencode").join("plugins")),
+                _ => None,
+            };
+
+            if let Some(pp_dir) = project_plugins_dir {
+                if pp_dir.exists() {
+                    let project_plugins = scan_plugins_with_commands(&pp_dir);
+                    collect_slash_commands_from_plugins(
+                        &project_plugins,
+                        &cli_name,
+                        &mut commands,
+                        &mut seen_names,
+                    );
+                }
+            }
+
+            let project_skills_dir = match cli_name.as_str() {
+                "opencode" => Some(project_root.join(".opencode").join("skill")),
+                _ => None,
+            };
+
+            if let Some(ps_dir) = project_skills_dir {
+                if ps_dir.exists() {
+                    let project_skills = scan_skill_commands(&ps_dir);
+                    collect_slash_commands_from_skills(
+                        &project_skills,
+                        &cli_name,
+                        &mut commands,
+                        &mut seen_names,
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(commands)
 }

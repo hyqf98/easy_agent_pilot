@@ -45,6 +45,14 @@ defineProps<{
         </span>
       </span>
       <span
+        v-else-if="segment.type === 'attachment'"
+        class="conversation-composer__attachment-placeholder"
+        :class="{
+          'conversation-composer__attachment-placeholder--image': segment.attachmentType === 'image',
+          'conversation-composer__attachment-placeholder--file': segment.attachmentType === 'file'
+        }"
+      >{{ segment.content }}</span>
+      <span
         v-else
         class="conversation-composer__slash-tag"
       >{{ segment.content }}</span>
