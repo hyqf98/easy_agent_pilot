@@ -20,6 +20,44 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const dropdownRef = ref<HTMLElement | null>(null)
 const selectedIndex = ref(0)
+const tipVisible = ref(false)
+const tipTop = ref(0)
+const tipLeft = ref(0)
+let tipTimer: ReturnType<typeof setTimeout> | null = null
+
+const selectedCommand = computed(() => props.commands[selectedIndex.value])
+
+function showTip() {
+  if (tipTimer) clearTimeout(tipTimer)
+  tipVisible.value = true
+  tipTimer = setTimeout(() => {
+    tipVisible.value = false
+  }, 2500)
+}
+
+function hideTip() {
+  if (tipTimer) clearTimeout(tipTimer)
+  tipTimer = null
+  tipVisible.value = false
+}
+
+function updateTipPosition() {
+  nextTick(() => {
+    const selectedEl = dropdownRef.value?.querySelector('.slash-command__item--selected') as HTMLElement | null
+    if (!selectedEl) {
+      hideTip()
+      return
+    }
+    const rect = selectedEl.getBoundingClientRect()
+    tipTop.value = rect.top + rect.height / 2
+    tipLeft.value = rect.right + 8
+  })
+}
+
+function onSelectionChange() {
+  showTip()
+  updateTipPosition()
+}
 
 interface DisplayItem {
   type: 'command'
@@ -110,6 +148,7 @@ function handleKeyDown(event: KeyboardEvent) {
       if (props.commands.length === 0) return
       selectedIndex.value = selectedIndex.value > 0 ? selectedIndex.value - 1 : props.commands.length - 1
       scrollToSelected()
+      onSelectionChange()
       break
     case 'ArrowDown':
       event.preventDefault()
@@ -117,13 +156,14 @@ function handleKeyDown(event: KeyboardEvent) {
       if (props.commands.length === 0) return
       selectedIndex.value = selectedIndex.value < props.commands.length - 1 ? selectedIndex.value + 1 : 0
       scrollToSelected()
+      onSelectionChange()
       break
     case 'Enter': {
-      const selectedCommand = props.commands[selectedIndex.value]
-      if (!selectedCommand) return
+      const cmd = props.commands[selectedIndex.value]
+      if (!cmd) return
       event.preventDefault()
       event.stopPropagation()
-      select(selectedCommand)
+      select(cmd)
       break
     }
     case 'Escape':
@@ -139,12 +179,21 @@ watch(() => props.commands, () => {
   scrollToSelected()
 }, { deep: true })
 
+watch(() => props.visible, (v) => {
+  if (v) {
+    onSelectionChange()
+  } else {
+    hideTip()
+  }
+})
+
 onMounted(() => {
   document.addEventListener('keydown', handleKeyDown, true)
 })
 
 onUnmounted(() => {
   document.removeEventListener('keydown', handleKeyDown, true)
+  if (tipTimer) clearTimeout(tipTimer)
 })
 </script>
 
@@ -198,19 +247,31 @@ onUnmounted(() => {
             v-else
             class="slash-command__item"
             :class="{ 'slash-command__item--selected': entry.globalIndex === selectedIndex }"
-            @mouseenter="selectedIndex = entry.globalIndex"
+            @mousemove="selectedIndex = entry.globalIndex; onSelectionChange()"
             @click="select(entry.command)"
           >
-            <div class="slash-command__item-main">
-              <span class="slash-command__item-name">/{{ entry.command.name }}</span>
-              <span class="slash-command__item-desc">
-                {{ entry.command.source === 'plugin' && entry.command.pluginName ? `[${entry.command.pluginName}] ` : '' }}{{ t(entry.command.descriptionKey) }}
-              </span>
-            </div>
-            <span class="slash-command__item-usage">{{ t(entry.command.usageKey) }}</span>
+            <span class="slash-command__item-name">/{{ entry.command.name }}</span>
+            <span
+              v-if="entry.command.source === 'plugin' && entry.command.pluginName"
+              class="slash-command__item-badge"
+            >{{ entry.command.pluginName }}</span>
+            <span class="slash-command__item-desc">{{ t(entry.command.descriptionKey) }}</span>
           </button>
         </template>
       </div>
+
+      <Teleport to="body">
+        <Transition name="slash-tip">
+          <div
+            v-if="tipVisible && selectedCommand"
+            class="slash-command__tip"
+            :style="{ top: tipTop + 'px', left: tipLeft + 'px' }"
+          >
+            <div class="slash-command__tip-label">{{ t(selectedCommand.descriptionKey) }}</div>
+            <div class="slash-command__tip-usage">{{ t(selectedCommand.usageKey) }}</div>
+          </div>
+        </Transition>
+      </Teleport>
     </div>
   </Teleport>
 </template>
@@ -277,12 +338,11 @@ onUnmounted(() => {
 
 .slash-command__item {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 5px;
+  align-items: center;
+  gap: 6px;
   width: 100%;
-  padding: 10px 12px;
-  border-radius: 12px;
+  padding: 8px 10px;
+  border-radius: 10px;
   text-align: left;
   border: 1px solid transparent;
   transition:
@@ -290,36 +350,45 @@ onUnmounted(() => {
     border-color var(--transition-fast) var(--easing-default);
 }
 
-.slash-command__item:hover,
 .slash-command__item--selected {
   background: color-mix(in srgb, var(--color-warning) 10%, transparent);
   border-color: color-mix(in srgb, var(--color-warning) 24%, transparent);
 }
 
-.slash-command__item-main {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
 .slash-command__item-name {
   display: inline-flex;
   align-items: center;
-  min-height: 24px;
-  padding: 0 8px;
+  flex-shrink: 0;
+  padding: 1px 8px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--color-warning) 12%, transparent);
   color: color-mix(in srgb, var(--color-warning) 76%, var(--color-text-primary));
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
+  white-space: nowrap;
 }
 
-.slash-command__item-desc,
-.slash-command__item-usage {
+.slash-command__item-badge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, #10B981 14%, transparent);
+  color: #10B981;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.slash-command__item-desc {
+  flex: 1;
+  min-width: 0;
   font-size: 11px;
   color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .slash-command__empty {
@@ -354,11 +423,64 @@ onUnmounted(() => {
   color: #fbbf24;
 }
 
-:global([data-theme='dark']) .slash-command__item:hover,
-:global(.dark) .slash-command__item:hover,
+:global([data-theme='dark']) .slash-command__item-badge,
+:global(.dark) .slash-command__item-badge {
+  background: rgba(16, 185, 129, 0.18);
+  color: #34d399;
+}
+
 :global([data-theme='dark']) .slash-command__item--selected,
 :global(.dark) .slash-command__item--selected {
   background: rgba(245, 158, 11, 0.09);
   border-color: rgba(245, 158, 11, 0.22);
+}
+
+.slash-command__tip {
+  position: fixed;
+  z-index: calc(var(--z-dropdown) + 3);
+  max-width: 280px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-bg-elevated) 98%, rgba(15, 23, 42, 0.04));
+  border: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.12);
+  backdrop-filter: blur(12px);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.slash-command__tip-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: 3px;
+}
+
+.slash-command__tip-usage {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+
+.slash-tip-enter-active {
+  transition: opacity 0.15s var(--easing-default);
+}
+
+.slash-tip-leave-active {
+  transition: opacity 0.2s var(--easing-default);
+}
+
+.slash-tip-enter-from,
+.slash-tip-leave-to {
+  opacity: 0;
+}
+
+:global([data-theme='dark']) .slash-command__tip,
+:global(.dark) .slash-command__tip {
+  background: rgba(30, 41, 59, 0.98);
+  border-color: rgba(148, 163, 184, 0.2);
+  box-shadow: 0 8px 20px rgba(2, 6, 23, 0.35);
 }
 </style>
