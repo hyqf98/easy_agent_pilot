@@ -125,7 +125,11 @@ function queueWrite(data: string, immediate = false) {
 }
 
 async function fitTerminal() {
-  if (!props.active || !xterm || !fitAddon || !containerRef.value) {
+  if (!xterm || !fitAddon || !containerRef.value) {
+    return
+  }
+
+  if (!containerRef.value.offsetParent) {
     return
   }
 
@@ -135,6 +139,14 @@ async function fitTerminal() {
     cols: xterm.cols,
     rows: xterm.rows
   }).catch(console.error)
+}
+
+function refreshVisibleTerminal() {
+  if (!xterm || !containerRef.value || !containerRef.value.offsetParent) {
+    return
+  }
+
+  xterm.refresh(0, xterm.buffer.active.length - 1)
 }
 
 async function handleTerminalInput(data: string) {
@@ -316,6 +328,18 @@ watch(() => props.active, async (active) => {
 
   await nextTick()
   await fitTerminal()
+  refreshVisibleTerminal()
+  xterm.focus()
+})
+
+watch(() => terminalStore.isCollapsed, async (collapsed) => {
+  if (collapsed || !props.active || !xterm) {
+    return
+  }
+
+  await nextTick()
+  await fitTerminal()
+  refreshVisibleTerminal()
   xterm.focus()
 })
 

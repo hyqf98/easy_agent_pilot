@@ -1074,6 +1074,10 @@ export class ConversationService {
       if (!updates) {
         return
       }
+      if (updates.toolCalls) {
+        const summary = updates.toolCalls.map((tc: { id: string; name: string; status: string }) => `${tc.name}(${tc.id?.slice(-6)})=${tc.status}`)
+        console.log('[🔧 flushUi] toolCalls update:', summary)
+      }
       messageStore.updateMessageBuffered(aiMessage.id, updates, options)
     }
 
@@ -1439,7 +1443,7 @@ export class ConversationService {
           onToolUse: (toolCall) => {
             clearRetryPresentationOnRecoveredStream()
             markMetric('firstToolAt')
-            // 添加或更新工具调用
+            console.log('[🔧 tool_use] received:', { id: toolCall.id, name: toolCall.name, status: toolCall.status, toolCallsCount: toolCalls.length })
             const existingIndex = toolCalls.findIndex(tc => tc.id === toolCall.id)
             let isNewToolCall = false
             if (existingIndex >= 0) {
@@ -1458,7 +1462,9 @@ export class ConversationService {
             } else {
               toolCalls.push(toolCall)
               isNewToolCall = true
+              console.log('[🔧 tool_use] NEW tool pushed, total:', toolCalls.length)
             }
+            console.log('[🔧 tool_use] buffering update, msgStatus:', getCurrentAiMessage()?.status)
             bufferMessageUpdate({
               toolCalls: [...toolCalls]
             })
@@ -1479,15 +1485,22 @@ export class ConversationService {
             }
 
             targetToolCall.arguments = mergeToolInputArguments(targetToolCall.arguments, toolInput)
+            if (targetToolCall.id && toolInput && Object.keys(toolInput).length > 0) {
+              fileTraceCollector.updateToolArguments(
+                targetToolCall.id,
+                targetToolCall.name,
+                targetToolCall.arguments
+              )
+            }
             bufferMessageUpdate({
               toolCalls: [...toolCalls]
             })
           },
           onToolResult: (toolCallId, result, isError) => {
+            console.log('[🔧 tool_result] received:', { toolCallId, isError, resultLen: result?.length })
             if (!isError) {
               clearRetryPresentationOnRecoveredStream()
             }
-            // 更新工具调用的结果
             const tc = toolCalls.find(t => t.id === toolCallId)
             if (tc) {
               tc.result = result
@@ -1495,9 +1508,12 @@ export class ConversationService {
               if (isError) {
                 tc.errorMessage = result
               }
+              console.log('[🔧 tool_result] updating tool status to', tc.status)
               bufferMessageUpdate({
                 toolCalls: [...toolCalls]
               })
+            } else {
+              console.warn('[🔧 tool_result] toolCallId not found:', toolCallId, 'existing:', toolCalls.map(t => t.id))
             }
 
             if (!isError) {

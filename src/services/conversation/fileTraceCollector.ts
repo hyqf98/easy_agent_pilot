@@ -340,6 +340,7 @@ export class FileTraceCollector {
   private readonly messageId: string
   private readonly projectPath?: string
   private readonly pendingEdits = new Map<string, PendingToolEdit>()
+  private readonly deferredToolArgs = new Map<string, { toolName: string; arguments: Record<string, unknown> }>()
 
   constructor(options: CreateFileTraceCollectorOptions) {
     this.sessionId = options.sessionId
@@ -350,9 +351,16 @@ export class FileTraceCollector {
   async captureToolUse(toolCall: ToolCall): Promise<void> {
     const target = extractToolFileTarget(toolCall.name, toolCall.arguments, this.projectPath)
     if (!target || !this.projectPath) {
+      if (toolCall.id) {
+        this.deferredToolArgs.set(toolCall.id, {
+          toolName: toolCall.name,
+          arguments: toolCall.arguments ?? {}
+        })
+      }
       return
     }
 
+    this.deferredToolArgs.delete(toolCall.id)
     this.pendingEdits.set(toolCall.id, {
       toolCallId: toolCall.id,
       toolName: toolCall.name,
@@ -366,23 +374,93 @@ export class FileTraceCollector {
     })
   }
 
+  updateToolArguments(toolCallId: string, toolName: string, argumentsObj: Record<string, unknown>): void {
+    if (this.pendingEdits.has(toolCallId)) {
+      const pending = this.pendingEdits.get(toolCallId)!
+      const newSnippets = collectReplacementSnippets(argumentsObj)
+      const newReversionEdits = collectReversionEdits(argumentsObj)
+      if (newSnippets.length > 0) {
+        pending.replacementSnippets = newSnippets
+      }
+      if (newReversionEdits.length > 0) {
+        pending.reversionEdits = newReversionEdits
+      }
+      return
+    }
+
+    const deferred = this.deferredToolArgs.get(toolCallId)
+    if (!deferred && !toolName) {
+      return
+    }
+
+    const mergedArgs = { ...(deferred?.arguments ?? {}), ...argumentsObj }
+    const name = toolName || deferred?.toolName
+    if (!name || !this.projectPath) {
+      return
+    }
+
+    const target = extractToolFileTarget(name, mergedArgs, this.projectPath)
+    if (!target) {
+      if (deferred) {
+        deferred.arguments = mergedArgs
+      } else {
+        this.deferredToolArgs.set(toolCallId, { toolName: name, arguments: mergedArgs })
+      }
+      return
+    }
+
+    this.deferredToolArgs.delete(toolCallId)
+    this.pendingEdits.set(toolCallId, {
+      toolCallId,
+      toolName: name,
+      filePath: target.filePath,
+      relativePath: target.relativePath,
+      changeType: target.changeType,
+      requestedAt: new Date().toISOString(),
+      beforeContentPromise: safeReadProjectFile(this.projectPath, target.filePath),
+      replacementSnippets: target.replacementSnippets,
+      reversionEdits: target.reversionEdits
+    })
+  }
+
   async resolveToolResult(toolCallId: string, toolResult?: string): Promise<FileEditTrace | null> {
+    this.deferredToolArgs.delete(toolCallId)
+
     const pending = this.pendingEdits.get(toolCallId)
     if (!pending || !this.projectPath) {
       return null
     }
 
     this.pendingEdits.delete(toolCallId)
-    let beforeContent = await pending.beforeContentPromise
+    let beforeContent: string | null = await pending.beforeContentPromise
     const afterContent = await safeReadProjectFile(this.projectPath, pending.filePath)
+
+    const beforeEqualsAfter = beforeContent !== null && beforeContent === afterContent
+
     if (
       pending.changeType === 'modify'
       && afterContent !== null
       && pending.reversionEdits.length > 0
-      && (beforeContent === null || beforeContent === afterContent)
+      && (beforeContent === null || beforeEqualsAfter)
     ) {
-      beforeContent = reconstructBeforeContent(afterContent, pending.reversionEdits) ?? beforeContent
+      const reconstructed = reconstructBeforeContent(afterContent, pending.reversionEdits)
+      if (reconstructed !== null && reconstructed !== afterContent) {
+        beforeContent = reconstructed
+      }
     }
+
+    if (
+      (pending.changeType === 'create' || pending.changeType === 'modify')
+      && beforeEqualsAfter
+      && pending.reversionEdits.length === 0
+    ) {
+      const resultHint = toolResult?.toLowerCase() ?? ''
+      const hintedCreate = resultHint.includes('created')
+      if (pending.changeType === 'create' || hintedCreate) {
+        beforeContent = null
+      }
+    }
+
     const resultHint = toolResult?.toLowerCase() ?? ''
     const hintedCreate = resultHint.includes('created')
     const hintedDelete = resultHint.includes('deleted') || resultHint.includes('removed')

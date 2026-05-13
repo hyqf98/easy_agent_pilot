@@ -96,8 +96,18 @@ export abstract class BaseAgentStrategy implements AgentStrategy {
       execution.unlistenStream = await listen<BackendStreamEvent>(
         this.getEventName(context.sessionId),
         (event) => {
+          if (event.payload?.type === 'tool_use' || event.payload?.type === 'tool_result') {
+            console.log('[🔧 BackendEvent] raw:', event.payload?.type, {
+              toolName: event.payload?.toolName,
+              toolCallId: event.payload?.toolCallId,
+              hasResult: event.payload?.type === 'tool_result' ? !!event.payload?.toolResult : undefined
+            })
+          }
           const streamEvent = this.transformEvent(event.payload)
           if (!streamEvent) {
+            if (event.payload?.type === 'tool_use' || event.payload?.type === 'tool_result' || event.payload?.type === 'tool_input_delta') {
+              console.warn('[🔧 BackendEvent] transformEvent returned null for:', event.payload?.type, event.payload)
+            }
             return
           }
 
