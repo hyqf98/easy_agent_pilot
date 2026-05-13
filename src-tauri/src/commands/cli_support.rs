@@ -204,6 +204,27 @@ fn parse_shell_lookup_output(output: std::io::Result<Output>) -> Vec<PathBuf> {
         .collect()
 }
 
+#[cfg(target_os = "windows")]
+fn windows_extension_priority(path: &Path) -> u8 {
+    match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("exe") => 0,
+        Some("cmd") => 1,
+        Some("bat") => 2,
+        Some("com") => 3,
+        _ => 4,
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn windows_extension_priority(_path: &Path) -> u8 {
+    0
+}
+
 pub fn find_cli_executables(cli_name: &str, extra_dirs: &[PathBuf]) -> Vec<PathBuf> {
     let path = Path::new(cli_name);
     if path.components().count() > 1 || path.is_absolute() {
@@ -243,6 +264,7 @@ pub fn find_cli_executables(cli_name: &str, extra_dirs: &[PathBuf]) -> Vec<PathB
         }
     }
 
+    matches.sort_by_key(|p| windows_extension_priority(p));
     matches
 }
 
