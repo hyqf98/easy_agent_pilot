@@ -26,6 +26,8 @@ export interface SlashCommandContext {
   clearSession: () => Promise<void>
   setWorkingDirectory?: (path: string) => Promise<string>
   runProjectInit?: (extraPrompt?: string) => Promise<void>
+  createSessionAndSend?: (message?: string) => Promise<void>
+  sendWithPlanMode?: (message: string) => Promise<void>
   notifySuccess: (message: string) => void
   notifyWarning: (message: string) => void
   notifyError: (message: string) => void
@@ -78,6 +80,25 @@ const BUILTIN_COMMANDS: SlashCommandDescriptor[] = [
     descriptionKey: 'message.slash.initDesc',
     usageKey: 'message.slash.initUsage',
     insertText: '/init',
+    source: 'builtin'
+  },
+  {
+    name: 'new',
+    aliases: ['n'],
+    scopes: ['main', 'mini'],
+    descriptionKey: 'message.slash.newDesc',
+    usageKey: 'message.slash.newUsage',
+    insertText: '/new ',
+    argumentHint: 'message',
+    source: 'builtin'
+  },
+  {
+    name: 'plan',
+    scopes: ['main', 'mini'],
+    descriptionKey: 'message.slash.planDesc',
+    usageKey: 'message.slash.planUsage',
+    insertText: '/plan ',
+    argumentHint: 'message',
     source: 'builtin'
   }
 ]
@@ -230,6 +251,42 @@ const COMMAND_HANDLERS: Record<string, SlashCommandHandler> = {
 
     try {
       await context.runProjectInit(parsed.argsText || undefined)
+      return { handled: true, clearInput: true }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      context.notifyError(message)
+      return { handled: true }
+    }
+  },
+
+  async new(parsed, context) {
+    if (!context.createSessionAndSend) {
+      context.notifyWarning('当前环境不支持创建会话。')
+      return { handled: true }
+    }
+
+    try {
+      await context.createSessionAndSend(parsed.argsText || undefined)
+      return { handled: true, clearInput: true }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      context.notifyError(message)
+      return { handled: true }
+    }
+  },
+
+  async plan(parsed, context) {
+    if (!context.sendWithPlanMode) {
+      context.notifyWarning('当前环境不支持计划模式。')
+      return { handled: true }
+    }
+    if (!parsed.argsText) {
+      context.notifyWarning('请提供计划模式的消息内容。用法：/plan <消息>')
+      return { handled: true }
+    }
+
+    try {
+      await context.sendWithPlanMode(parsed.argsText)
       return { handled: true, clearInput: true }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

@@ -325,6 +325,7 @@ export class ConversationService {
       workingDirectory?: string
       modelId?: string
       reasoningEffort?: string
+      extraCliArgs?: string[]
       injectedSystemMessages?: string[]
       dedupeInjectedSystemMessagesBySession?: boolean
       previewContent?: string
@@ -594,7 +595,8 @@ export class ConversationService {
         executionMode: 'chat',
         responseMode: 'stream_text',
         resumeSessionId: reusableCliSessionId,
-        reasoningEffort: options?.reasoningEffort as ReasoningEffortLevel | undefined
+        reasoningEffort: options?.reasoningEffort as ReasoningEffortLevel | undefined,
+        extraCliArgs: options?.extraCliArgs
       }
       const fallbackContext = reusableCliSessionId
         ? {

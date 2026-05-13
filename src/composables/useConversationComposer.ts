@@ -2365,6 +2365,32 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       throw new Error('当前会话未绑定项目，无法执行 /init')
     }
 
+    const executionAgent = getExecutionAgentConfig()
+    const provider = executionAgent
+      ? (executionAgent.provider || inferAgentProvider(executionAgent))
+      : null
+
+    if (provider === 'claude') {
+      const initPrompt = '/init'
+      const fullPrompt = extraPrompt?.trim()
+        ? `${initPrompt}\n\n${extraPrompt.trim()}`
+        : initPrompt
+
+      await conversationService.sendMessage(
+        sessionId,
+        fullPrompt,
+        executionAgent!.id,
+        projectStore.currentProjectId ?? undefined,
+        [],
+        {
+          workingDirectory: currentWorkingDirectory.value || currentProjectPath.value || undefined,
+          modelId: executionAgent!.modelId?.trim() || undefined,
+          previewContent: extraPrompt?.trim() ? `/init ${extraPrompt.trim()}` : '/init'
+        }
+      )
+      return
+    }
+
     await agentTeamsStore.loadExperts()
     const architectExpert = agentTeamsStore.builtinArchitectExpert
       || agentTeamsStore.enabledExperts.find(expert => expert.category === 'architect')
@@ -2386,6 +2412,101 @@ export function useConversationComposer(options: UseConversationComposerOptions)
     }
   }
 
+  const createSessionAndSend = async (message?: string): Promise<void> => {
+    if (!projectStore.currentProjectId) {
+      throw new Error('当前没有可用项目')
+    }
+
+    await Promise.all([
+      agentStore.loadAgents(),
+      agentTeamsStore.loadExperts(true)
+    ])
+    const expert = agentTeamsStore.builtinGeneralExpert || agentTeamsStore.enabledExperts[0] || null
+    const runtime = resolveExpertRuntime(expert, agentStore.agents)
+
+    const newSession = await sessionStore.createSession({
+      projectId: projectStore.currentProjectId,
+      name: message ? message.replace(/\n/g, ' ').slice(0, 20).trim() + (message.length > 20 ? '...' : '') : '未命名会话',
+      expertId: expert?.id,
+      agentId: runtime?.agent.id,
+      agentType: runtime?.agent.provider || runtime?.agent.type || 'claude',
+      status: 'idle'
+    })
+    projectStore.incrementSessionCount(projectStore.currentProjectId)
+
+    await sessionStore.openSession(newSession.id)
+
+    if (message?.trim() && runtime?.agent) {
+      await conversationService.sendMessage(
+        newSession.id,
+        message.trim(),
+        runtime.agent.id,
+        projectStore.currentProjectId,
+        [],
+        {
+          workingDirectory: currentWorkingDirectory.value || currentProjectPath.value || undefined,
+          modelId: runtime.modelId || runtime.agent.modelId || undefined,
+          injectedSystemMessages: expert ? [buildExpertSystemPrompt(expert.prompt)] : [],
+          previewContent: message.trim()
+        }
+      )
+    }
+  }
+
+  const PLAN_MODE_SYSTEM_PROMPT = 'You are in plan mode. Analyze the task and provide a detailed plan, but do NOT make any file changes or execute any commands. Only read files to understand the codebase, then output your analysis and plan. Respond with a clear, actionable plan that another agent could execute.'
+
+  const sendWithPlanMode = async (message: string): Promise<void> => {
+    const sessionId = currentSessionId.value
+    if (!sessionId) {
+      throw new Error('当前没有可用会话')
+    }
+
+    const executionAgent = getExecutionAgentConfig()
+    if (!executionAgent) {
+      throw new Error('未找到可用专家运行时')
+    }
+
+    const provider = executionAgent.provider || inferAgentProvider(executionAgent)
+    let extraCliArgs: string[] | undefined
+    let planSystemPrompt: string | undefined
+
+    switch (provider) {
+      case 'claude':
+        extraCliArgs = ['--permission-mode', 'plan']
+        break
+      case 'codex':
+        extraCliArgs = ['-s', 'read-only']
+        break
+      default:
+        planSystemPrompt = PLAN_MODE_SYSTEM_PROMPT
+        break
+    }
+
+    const expert = resolveExpertById(currentExpert.value?.id, agentTeamsStore.experts)
+    const systemMessages: string[] = []
+    if (expert) {
+      systemMessages.push(buildExpertSystemPrompt(expert.prompt))
+    }
+    if (planSystemPrompt) {
+      systemMessages.push(planSystemPrompt)
+    }
+
+    await conversationService.sendMessage(
+      sessionId,
+      message,
+      executionAgent.id,
+      projectStore.currentProjectId ?? undefined,
+      [],
+      {
+        workingDirectory: currentWorkingDirectory.value || currentProjectPath.value || undefined,
+        modelId: executionAgent.modelId?.trim() || undefined,
+        extraCliArgs,
+        injectedSystemMessages: systemMessages,
+        previewContent: `/plan ${message}`
+      }
+    )
+  }
+
   const runSlashCommand = async (parsedSlashCommand: ParsedSlashCommand) => {
     const sessionId = currentSessionId.value
     if (!sessionId) {
@@ -2402,6 +2523,8 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       clearSession: clearCurrentSession,
       setWorkingDirectory: options.setWorkingDirectory,
       runProjectInit,
+      createSessionAndSend,
+      sendWithPlanMode,
       notifySuccess: message => notificationStore.success(message),
       notifyWarning: message => notificationStore.warning(message),
       notifyError: message => notificationStore.error(t('common.error'), message)

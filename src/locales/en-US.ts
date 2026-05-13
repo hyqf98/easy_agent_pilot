@@ -422,6 +422,10 @@ export default {
       cdUsage: 'Usage: /cd <path>',
       initDesc: 'Run the architecture expert to initialize the current project AGENTS.md',
       initUsage: 'Analyze the current project and let the CLI write/update AGENTS.md',
+      newDesc: 'Quickly create a new session, optionally with a message to send',
+      newUsage: 'Usage: /new [message]',
+      planDesc: 'Send a message in plan mode (read-only), analyze without making changes',
+      planUsage: 'Usage: /plan <message>',
       builtinGroup: 'Built-in Commands',
       pluginGroup: 'Plugin / Extension Commands'
     },

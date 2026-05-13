@@ -338,6 +338,10 @@ const zhCN = {
       cdUsage: '用法：/cd <路径>',
       initDesc: '调用架构分析专家初始化当前项目的 AGENTS.md',
       initUsage: '分析当前项目并让 CLI 自行写入/更新 AGENTS.md',
+      newDesc: '快速创建新会话，可附带消息直接发送',
+      newUsage: '用法：/new [消息内容]',
+      planDesc: '以计划模式（只读）发送消息，仅分析不执行修改',
+      planUsage: '用法：/plan <消息内容>',
       builtinGroup: '内置命令',
       pluginGroup: '插件/扩展命令'
     },
