@@ -2,6 +2,7 @@ use super::support::{
     bind_optional, bind_optional_mapped, bind_value, bool_from_int, now_rfc3339,
     open_db_connection, UpdateSqlBuilder,
 };
+use super::provider_profile::read_current_cli_config;
 use anyhow::Result;
 use rusqlite::{Connection, Row};
 use serde::{Deserialize, Serialize};
@@ -57,7 +58,7 @@ fn open_conn() -> Result<Connection, String> {
     open_db_connection().map_err(|e| e.to_string())
 }
 
-type BuiltinModelDef = (&'static str, &'static str, i32, bool, Option<i32>);
+type BuiltinModelDefOwned = (String, String, i32, bool, Option<i32>);
 
 const MCP_SELECT_BY_AGENT_SQL: &str = r#"
     SELECT id, agent_id, name, transport_type, command, args, env, url, headers, scope, enabled, created_at, updated_at
@@ -107,9 +108,26 @@ const MODELS_SELECT_BY_ID_SQL: &str = r#"
     WHERE id = ?1
 "#;
 
-const CODEX_BUILTIN_MODELS: &[BuiltinModelDef] = &[("", "使用默认模型", 0, true, Some(1050000))];
+fn resolve_cli_default_model_display(provider: &str) -> (String, Option<i32>) {
+    let cli_type = match provider {
+        "codex" => "codex",
+        _ => "claude",
+    };
+    if let Ok(profile) = read_current_cli_config(cli_type.to_string()) {
+        if let Some(ref main_model) = profile.main_model {
+            if !main_model.trim().is_empty() {
+                let context_window = if provider == "codex" { Some(1050000) } else { Some(200000) };
+                return (main_model.clone(), context_window);
+            }
+        }
+    }
+    ("使用默认模型".to_string(), if provider == "codex" { Some(1050000) } else { Some(200000) })
+}
 
-const CLAUDE_BUILTIN_MODELS: &[BuiltinModelDef] = &[("", "使用默认模型", 0, true, Some(200000))];
+fn build_builtin_models_for_provider(provider: &str) -> Vec<BuiltinModelDefOwned> {
+    let (display_name, context_window) = resolve_cli_default_model_display(provider);
+    vec![(String::new(), display_name, 0, true, context_window)]
+}
 
 fn bool_from_db(value: Option<i32>, default: bool) -> bool {
     bool_from_int(value).unwrap_or(default)
@@ -227,13 +245,7 @@ fn parse_opencode_verbose_models(stdout: &str) -> Result<Vec<(String, Option<i32
     Ok(models)
 }
 
-fn builtin_models_for_provider(provider: &str) -> &'static [BuiltinModelDef] {
-    if provider == "codex" {
-        CODEX_BUILTIN_MODELS
-    } else {
-        CLAUDE_BUILTIN_MODELS
-    }
-}
+fn _unused_legacy_builtin_models() {}
 
 fn is_legacy_codex_builtin_model(model_id: &str) -> bool {
     matches!(
@@ -378,7 +390,7 @@ fn insert_builtin_models(
     tx: &rusqlite::Transaction<'_>,
     agent_id: &str,
     now: &str,
-    models: &[BuiltinModelDef],
+    models: &[BuiltinModelDefOwned],
 ) -> Result<Vec<AgentModelConfig>, String> {
     let mut configs = Vec::with_capacity(models.len());
 
@@ -424,7 +436,7 @@ fn sync_builtin_models(
     tx: &rusqlite::Transaction<'_>,
     agent_id: &str,
     now: &str,
-    models: &[BuiltinModelDef],
+    models: &[BuiltinModelDefOwned],
 ) -> Result<(), String> {
     let expected_model_ids = models
         .iter()
@@ -494,13 +506,9 @@ fn sync_builtin_models(
             existing_is_default,
             existing_enabled,
             existing_context_window,
-        )) = existing_builtin_map.get(*model_id)
+        )) = existing_builtin_map.get(model_id)
         {
-            let next_display_name = if existing_display_name.trim().is_empty() {
-                *display_name
-            } else {
-                existing_display_name.as_str()
-            };
+        let next_display_name = display_name.as_str();
 
             tx.execute(
                 "UPDATE agent_models
@@ -530,8 +538,8 @@ fn sync_builtin_models(
             agent_id,
             now,
             &[(
-                *model_id,
-                *display_name,
+                model_id.clone(),
+                display_name.clone(),
                 *sort_order,
                 *is_default,
                 *context_window,
@@ -1095,7 +1103,7 @@ pub fn create_builtin_models(
         &tx,
         &input.agent_id,
         &now,
-        builtin_models_for_provider(&input.provider),
+        &build_builtin_models_for_provider(&input.provider),
     )?;
 
     tx.commit().map_err(|e| e.to_string())?;
@@ -1333,7 +1341,7 @@ pub fn reset_builtin_models(
         &tx,
         &input.agent_id,
         &now,
-        builtin_models_for_provider(&input.provider),
+        &build_builtin_models_for_provider(&input.provider),
     )?;
 
     tx.commit().map_err(|e| e.to_string())?;

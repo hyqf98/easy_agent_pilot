@@ -327,7 +327,7 @@ const handleClose = () => {
                     >禁用</span>
                   </div>
                   <div class="model-id">
-                    {{ model.modelId || '使用默认模型' }}
+                    {{ model.modelId || `CLI 默认: ${model.displayName}` }}
                   </div>
                   <div class="model-meta">
                     上下文窗口 {{ formatContextWindowCount(model.contextWindow) }}
@@ -397,7 +397,7 @@ const handleClose = () => {
                   >禁用</span>
                 </div>
                 <div class="model-id">
-                  {{ model.modelId || '使用默认模型' }}
+                  {{ model.modelId || `CLI 默认: ${model.displayName}` }}
                 </div>
                 <div class="model-meta">
                   上下文窗口 {{ formatContextWindowCount(model.contextWindow) }}
