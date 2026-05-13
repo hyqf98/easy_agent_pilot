@@ -258,7 +258,16 @@ const zhCN = {
     closeLeft: '关闭左边标签页',
     closeRight: '关闭右边标签页',
     maxSessionsReached: '最多同时打开 {n} 个会话',
-    switchShortcut: '切换到会话 {n}'
+    switchShortcut: '切换到会话 {n}',
+    splitPane: '分屏显示',
+    exitSplit: '退出分屏',
+    addPane: '新增面板'
+  },
+  splitPane: {
+    ...enUS.splitPane,
+    newPane: '新对话',
+    closePane: '关闭面板',
+    dropToNewRow: '拖放到此处创建新行'
   },
   message: {
     ...enUS.message,

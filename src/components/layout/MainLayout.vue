@@ -3,12 +3,14 @@ import { onMounted, onUnmounted, watch } from 'vue'
 import { useLayoutStore, PANEL_LIMITS } from '@/stores/layout'
 import { useUIStore } from '@/stores/ui'
 import { useProjectStore } from '@/stores/project'
+import { useSplitPaneStore } from '@/stores/splitPane'
 import AppHeader from './AppHeader.vue'
 import BottomTerminalPanel from './BottomTerminalPanel.vue'
 import SideNavRail from './SideNavRail.vue'
 import PanelContainer from './PanelContainer.vue'
 import SessionTabs from './SessionTabs.vue'
 import MessageArea from './messageArea/MessageArea.vue'
+import { SplitContainer } from './splitPane'
 import PanelResizer from './PanelResizer.vue'
 import WelcomePage from './WelcomePage.vue'
 import { PlanModePanel } from '@/components/plan'
@@ -20,6 +22,7 @@ import { OfficeViewerWorkspace } from '@/modules/officeViewer'
 const layoutStore = useLayoutStore()
 const uiStore = useUIStore()
 const projectStore = useProjectStore()
+const splitPaneStore = useSplitPaneStore()
 
 // 面板拖拽
 const handlePanelResize = (delta: number) => {
@@ -137,7 +140,8 @@ watch(
               class="main-layout__chat-content"
             >
               <SessionTabs />
-              <MessageArea />
+              <SplitContainer v-if="splitPaneStore.isSplitActive" />
+              <MessageArea v-else />
             </div>
             <FileEditorWorkspace
               v-show="uiStore.mainContentMode === 'fileEditor'"

@@ -340,7 +340,17 @@ export default {
     closeLeft: 'Close tabs to the left',
     closeRight: 'Close tabs to the right',
     maxSessionsReached: 'Maximum {n} sessions can be open at the same time',
-    switchShortcut: 'Switch to session {n}'
+    switchShortcut: 'Switch to session {n}',
+    splitPane: 'Split pane',
+    exitSplit: 'Exit split view',
+    addPane: 'Add pane'
+  },
+
+  // Split pane
+  splitPane: {
+    newPane: 'New chat',
+    closePane: 'Close pane',
+    dropToNewRow: 'Drop here to create new row'
   },
 
   // Message area

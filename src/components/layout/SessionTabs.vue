@@ -5,6 +5,7 @@ import { useSessionStore, type SessionStatus } from '@/stores/session'
 import { useProjectStore } from '@/stores/project'
 import { useLayoutStore } from '@/stores/layout'
 import { useWindowManagerStore } from '@/stores/windowManager'
+import { useSplitPaneStore } from '@/stores/splitPane'
 import { EaIcon } from '@/components/common'
 import { useMessage } from 'naive-ui'
 import { useSessionView } from '@/composables'
@@ -14,6 +15,7 @@ const sessionStore = useSessionStore()
 const projectStore = useProjectStore()
 const layoutStore = useLayoutStore()
 const windowManagerStore = useWindowManagerStore()
+const splitPaneStore = useSplitPaneStore()
 const message = useMessage()
 const { openSessionTarget } = useSessionView()
 
@@ -199,7 +201,7 @@ const showContextMenu = (event: MouseEvent, sessionId: string) => {
   }
 }
 
-const handleContextMenuAction = (action: 'closeAll' | 'closeOthers' | 'closeLeft' | 'closeRight') => {
+const handleContextMenuAction = (action: 'closeAll' | 'closeOthers' | 'closeLeft' | 'closeRight' | 'splitPane') => {
   const sessionId = contextMenuState.value.sessionId
   if (!sessionId) {
     return
@@ -218,6 +220,9 @@ const handleContextMenuAction = (action: 'closeAll' | 'closeOthers' | 'closeLeft
     case 'closeRight':
       sessionStore.closeSessionsToRight(sessionId)
       break
+    case 'splitPane':
+      handleContextMenuSplit()
+      return
   }
 
   hideContextMenu()
@@ -233,6 +238,56 @@ const handleGlobalKeydown = (event: KeyboardEvent) => {
   if (event.key === 'Escape' && contextMenuState.value.visible) {
     hideContextMenu()
   }
+}
+
+const handleSplitPane = async (sessionId?: string) => {
+  const targetId = sessionId ?? sessionStore.currentSessionId
+  if (!targetId) return
+
+  if (splitPaneStore.isSplitActive) {
+    splitPaneStore.addPane(targetId)
+  } else {
+    const session = sessionStore.sessions.find(s => s.id === targetId)
+    const newSession = await sessionStore.createSession({
+      projectId: session?.projectId ?? '',
+      name: '',
+      agentType: session?.agentType ?? 'cli',
+      status: 'idle'
+    })
+    splitPaneStore.enterSplitMode(targetId, newSession.id)
+  }
+  splitPaneStore.focusPane(splitPaneStore.focusedPaneId!)
+}
+
+const handleExitSplit = () => {
+  splitPaneStore.exitSplitMode()
+}
+
+const handleContextMenuSplit = () => {
+  const sessionId = contextMenuState.value.sessionId
+  if (sessionId) {
+    handleSplitPane(sessionId)
+  }
+  hideContextMenu()
+}
+
+const handleAddPane = async () => {
+  const session = sessionStore.currentSession
+  if (!session) return
+
+  const newSession = await sessionStore.createSession({
+    projectId: session.projectId,
+    name: '',
+    agentType: session.agentType ?? 'cli',
+    status: 'idle'
+  })
+
+  if (!splitPaneStore.isSplitActive) {
+    splitPaneStore.enterSplitMode(session.id, newSession.id)
+  } else {
+    splitPaneStore.addPane(newSession.id)
+  }
+  splitPaneStore.focusPane(splitPaneStore.focusedPaneId!)
 }
 
 // 处理鼠标滚轮滚动（横向滚动）
@@ -356,6 +411,43 @@ watch(() => sessionStore.openSessionIds.join(':'), () => {
     <!-- 溢出指示器 -->
     <div class="session-tabs__overflow-indicator" />
 
+    <!-- 分屏按钮 -->
+    <div class="session-tabs__actions">
+      <button
+        v-if="splitPaneStore.isSplitActive"
+        class="session-tabs__action-btn"
+        :title="t('sessionTabs.addPane')"
+        @click="handleAddPane"
+      >
+        <EaIcon
+          name="plus"
+          :size="14"
+        />
+      </button>
+      <button
+        v-if="splitPaneStore.isSplitActive"
+        class="session-tabs__action-btn"
+        :title="t('sessionTabs.exitSplit')"
+        @click="handleExitSplit"
+      >
+        <EaIcon
+          name="minimize-2"
+          :size="14"
+        />
+      </button>
+      <button
+        v-else-if="sessionStore.openSessions.length >= 1 && sessionStore.currentSessionId"
+        class="session-tabs__action-btn"
+        :title="t('sessionTabs.splitPane')"
+        @click="handleSplitPane()"
+      >
+        <EaIcon
+          name="columns"
+          :size="14"
+        />
+      </button>
+    </div>
+
     <div
       v-if="contextMenuState.visible"
       class="session-tabs__context-menu"
@@ -395,6 +487,18 @@ watch(() => sessionStore.openSessionIds.join(':'), () => {
         @click="handleContextMenuAction('closeRight')"
       >
         {{ t('sessionTabs.closeRight') }}
+      </button>
+      <div class="session-tabs__context-divider" />
+      <button
+        class="session-tabs__context-action session-tabs__context-action--split"
+        type="button"
+        @click="handleContextMenuAction('splitPane')"
+      >
+        <EaIcon
+          name="columns"
+          :size="14"
+        />
+        {{ t('sessionTabs.splitPane') }}
       </button>
     </div>
   </div>
@@ -583,6 +687,50 @@ watch(() => sessionStore.openSessionIds.join(':'), () => {
 .session-tabs__context-action:disabled {
   color: var(--color-text-tertiary);
   cursor: not-allowed;
+}
+
+.session-tabs__context-divider {
+  height: 1px;
+  background: var(--color-border);
+  margin: 4px 2px;
+}
+
+.session-tabs__context-action--split {
+  color: var(--color-primary);
+  gap: 6px;
+}
+
+.session-tabs__context-action--split:hover {
+  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
+}
+
+.session-tabs__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--color-border);
+  margin-left: 4px;
+}
+
+.session-tabs__action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: all var(--transition-fast) var(--easing-default);
+}
+
+.session-tabs__action-btn:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
 }
 
 [data-theme='dark'] .session-tabs__context-menu {

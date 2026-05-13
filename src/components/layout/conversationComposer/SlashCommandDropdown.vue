@@ -267,8 +267,12 @@ onUnmounted(() => {
             class="slash-command__tip"
             :style="{ top: tipTop + 'px', left: tipLeft + 'px' }"
           >
-            <div class="slash-command__tip-label">{{ t(selectedCommand.descriptionKey) }}</div>
-            <div class="slash-command__tip-usage">{{ t(selectedCommand.usageKey) }}</div>
+            <div class="slash-command__tip-label">
+              {{ t(selectedCommand.descriptionKey) }}
+            </div>
+            <div class="slash-command__tip-usage">
+              {{ t(selectedCommand.usageKey) }}
+            </div>
           </div>
         </Transition>
       </Teleport>
