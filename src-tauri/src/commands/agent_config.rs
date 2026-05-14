@@ -502,7 +502,7 @@ fn sync_builtin_models(
     for (model_id, display_name, sort_order, is_default, context_window) in models {
         if let Some((
             existing_id,
-            existing_display_name,
+            _existing_display_name,
             existing_is_default,
             existing_enabled,
             existing_context_window,
