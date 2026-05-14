@@ -20,11 +20,22 @@ const props = withDefaults(defineProps<PanelResizerProps>(), {
 const emit = defineEmits<{
   resize: [delta: number]
   resizeEnd: [width: number]
+  resizeStart: []
 }>()
 
 const isDragging = ref(false)
 const startX = ref(0)
 const startWidth = ref(0)
+let rafId = 0
+let pendingDelta = 0
+let hasPending = false
+
+function flushDelta() {
+  if (hasPending) {
+    emit('resize', pendingDelta)
+    hasPending = false
+  }
+}
 
 const handleMouseDown = (e: MouseEvent) => {
   if (props.disabled) return
@@ -33,7 +44,8 @@ const handleMouseDown = (e: MouseEvent) => {
   isDragging.value = true
   startX.value = e.clientX
   startWidth.value = props.currentWidth
-  document.addEventListener('mousemove', handleMouseMove)
+  emit('resizeStart')
+  document.addEventListener('mousemove', handleMouseMove, { passive: true })
   document.addEventListener('mouseup', handleMouseUp)
 }
 
@@ -44,13 +56,20 @@ const handleMouseMove = (e: MouseEvent) => {
     ? e.clientX - startX.value
     : startX.value - e.clientX
 
-  emit('resize', delta)
+  pendingDelta = delta
+  if (!hasPending) {
+    hasPending = true
+    rafId = requestAnimationFrame(flushDelta)
+  }
 }
 
 const handleMouseUp = (e: MouseEvent) => {
   if (!isDragging.value) return
 
+  cancelAnimationFrame(rafId)
+  hasPending = false
   isDragging.value = false
+
   const delta = props.direction === 'right'
     ? e.clientX - startX.value
     : startX.value - e.clientX
@@ -61,6 +80,7 @@ const handleMouseUp = (e: MouseEvent) => {
 }
 
 onUnmounted(() => {
+  cancelAnimationFrame(rafId)
   document.removeEventListener('mousemove', handleMouseMove)
   document.removeEventListener('mouseup', handleMouseUp)
 })

@@ -94,12 +94,23 @@ const {
           :class="{ 'message-area__conversation--trace-active': showDesktopTracePane }"
         >
           <!-- Token 进度条，固定在会话面板顶部 -->
-          <div class="message-area__token-bar">
-            <TokenProgressBar
-              :session-id="sessionStore.currentSessionId"
-              :show-compress-button="true"
-              @compress="handleOpenCompress"
-            />
+          <div
+            class="message-area__token-bar"
+            :class="`message-area__token-bar--${currentTokenUsage.level}`"
+          >
+            <div class="message-area__token-peek">
+              <div
+                class="message-area__token-peek-fill"
+                :style="{ width: currentTokenUsage.percentage > 0 && currentTokenUsage.percentage < 1 ? '1%' : `${Math.min(100, currentTokenUsage.percentage)}%` }"
+              />
+            </div>
+            <div class="message-area__token-full">
+              <TokenProgressBar
+                :session-id="sessionStore.currentSessionId"
+                :show-compress-button="true"
+                @compress="handleOpenCompress"
+              />
+            </div>
           </div>
 
           <MessageList

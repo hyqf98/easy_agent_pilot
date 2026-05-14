@@ -56,10 +56,74 @@
 /* Token 进度条，悬浮在会话面板顶部 */
 .message-area__token-bar {
   position: absolute;
-  top: 8px;
-  left: 50%;
-  transform: translateX(-50%);
+  top: 0;
+  left: 0;
+  right: 0;
   z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.message-area__token-peek {
+  width: 100%;
+  height: 3px;
+  background: var(--color-bg-tertiary);
+  border-radius: 0 0 2px 2px;
+  overflow: hidden;
+  transition: opacity 0.2s ease, height 0.2s ease;
+}
+
+.message-area__token-peek-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+
+.message-area__token-bar--safe .message-area__token-peek-fill {
+  background: var(--color-primary);
+}
+
+.message-area__token-bar--warning .message-area__token-peek-fill {
+  background: var(--color-warning);
+}
+
+.message-area__token-bar--danger .message-area__token-peek-fill {
+  background: var(--color-orange-500, #f97316);
+}
+
+.message-area__token-bar--critical .message-area__token-peek-fill {
+  background: var(--color-error);
+  animation: ma-peek-pulse 0.8s ease-in-out infinite;
+}
+
+@keyframes ma-peek-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.message-area__token-full {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  padding: 0 12px;
+  opacity: 0;
+  max-height: 0;
+  overflow: hidden;
+  transform: translateY(-4px);
+  transition: opacity 0.2s ease, max-height 0.25s ease, padding 0.25s ease, transform 0.2s ease;
+}
+
+.message-area__token-bar:hover .message-area__token-peek {
+  opacity: 0;
+  height: 0;
+}
+
+.message-area__token-bar:hover .message-area__token-full {
+  opacity: 1;
+  max-height: 48px;
+  padding: 4px 12px;
+  transform: translateY(0);
 }
 
 .message-area__conversation--trace-active {

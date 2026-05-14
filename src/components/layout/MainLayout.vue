@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, watch } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { useLayoutStore, PANEL_LIMITS } from '@/stores/layout'
 import { useUIStore } from '@/stores/ui'
 import { useProjectStore } from '@/stores/project'
@@ -24,13 +24,19 @@ const uiStore = useUIStore()
 const projectStore = useProjectStore()
 const splitPaneStore = useSplitPaneStore()
 
-// 面板拖拽
+const isPanelResizing = ref(false)
+
+const handlePanelResizeStart = () => {
+  isPanelResizing.value = true
+}
+
 const handlePanelResize = (delta: number) => {
   const newWidth = layoutStore.panelWidth + delta
   layoutStore.setPanelWidth(newWidth)
 }
 
 const handlePanelResizeEnd = (width: number) => {
+  isPanelResizing.value = false
   layoutStore.setPanelWidth(width)
 }
 
@@ -119,6 +125,7 @@ watch(
           <template v-if="layoutStore.isPanelOpen">
             <div
               class="main-layout__panel"
+              :class="{ 'main-layout__panel--resizing': isPanelResizing }"
               :style="{ width: `${layoutStore.panelWidth}px` }"
             >
               <PanelContainer />
@@ -129,6 +136,7 @@ watch(
               :min-width="PANEL_LIMITS.panel.minWidth"
               :max-width="PANEL_LIMITS.panel.maxWidth"
               :current-width="layoutStore.panelWidth"
+              @resize-start="handlePanelResizeStart"
               @resize="handlePanelResize"
               @resize-end="handlePanelResizeEnd"
             />
@@ -194,6 +202,10 @@ watch(
   min-width: 0;
   overflow: hidden;
   transition: width var(--transition-normal) var(--easing-default);
+}
+
+.main-layout__panel--resizing {
+  transition: none;
 }
 
 .main-layout__main {

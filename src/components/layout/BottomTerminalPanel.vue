@@ -13,6 +13,16 @@ const terminalStore = useTerminalStore()
 const isResizing = ref(false)
 let startY = 0
 let startHeight = 0
+let rafId = 0
+let pendingDelta = 0
+let hasPending = false
+
+function flushResize() {
+  if (hasPending) {
+    terminalStore.setPanelHeight(startHeight + pendingDelta)
+    hasPending = false
+  }
+}
 
 const activeTab = computed(() => terminalStore.activeTab)
 const projectOptions = computed<SelectOption[]>(() => [
@@ -64,8 +74,11 @@ function handleResizeMove(event: MouseEvent) {
     return
   }
 
-  const delta = startY - event.clientY
-  terminalStore.setPanelHeight(startHeight + delta)
+  pendingDelta = startY - event.clientY
+  if (!hasPending) {
+    hasPending = true
+    rafId = requestAnimationFrame(flushResize)
+  }
 }
 
 function handleResizeEnd() {
@@ -73,6 +86,8 @@ function handleResizeEnd() {
     return
   }
 
+  cancelAnimationFrame(rafId)
+  hasPending = false
   isResizing.value = false
   document.body.style.userSelect = ''
   document.removeEventListener('mousemove', handleResizeMove)
@@ -88,7 +103,7 @@ function handleResizeStart(event: MouseEvent) {
   startY = event.clientY
   startHeight = terminalStore.panelHeight
   document.body.style.userSelect = 'none'
-  document.addEventListener('mousemove', handleResizeMove)
+  document.addEventListener('mousemove', handleResizeMove, { passive: true })
   document.addEventListener('mouseup', handleResizeEnd)
 }
 

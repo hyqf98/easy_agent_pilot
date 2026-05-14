@@ -229,12 +229,16 @@ export const useLayoutStore = defineStore('layout', () => {
     }
   }
 
-  // 监听状态变化并持久化
+  // 监听状态变化并持久化（防抖 300ms）
+  let saveTimer: ReturnType<typeof setTimeout> | null = null
   watch([activePanel, panelWidth], () => {
-    savePanelState({
-      activePanel: activePanel.value,
-      panelWidth: panelWidth.value
-    })
+    if (saveTimer) clearTimeout(saveTimer)
+    saveTimer = setTimeout(() => {
+      savePanelState({
+        activePanel: activePanel.value,
+        panelWidth: panelWidth.value
+      })
+    }, 300)
   })
 
   return {

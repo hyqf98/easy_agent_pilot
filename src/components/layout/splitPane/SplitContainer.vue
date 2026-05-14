@@ -11,9 +11,18 @@ interface DropTarget {
   position: 'before' | 'after' | 'new-row-below' | 'new-row'
 }
 
-type PreviewCell =
-  | { type: 'pane'; paneId: string }
-  | { type: 'ghost' }
+type CellRole = 'normal' | 'dragging' | 'ghost'
+
+interface GridCell {
+  key: string
+  role: CellRole
+  paneId: string | null
+}
+
+interface DisplayRow {
+  key: string
+  cells: GridCell[]
+}
 
 const DRAG_Y_SPLIT = 0.5
 
@@ -26,79 +35,62 @@ const dropTarget = ref<DropTarget | null>(null)
 
 let onMouseMove: ((e: MouseEvent) => void) | null = null
 let onMouseUp: (() => void) | null = null
-
-const paneGrid = computed(() => splitPaneStore.paneGrid)
-const rowCount = computed(() => paneGrid.value.length)
-const rowHeight = computed(() => {
-  if (rowCount.value === 0) return 100
-  return 100 / rowCount.value
-})
+let rafId = 0
+let pendingX = 0
+let pendingY = 0
+let hasPendingMove = false
 
 function getPaneSessionId(paneId: string): string {
   const pane = splitPaneStore.getPaneById(paneId)
   return pane?.sessionId ?? ''
 }
 
-const previewGrid = computed(() => {
-  if (!draggingPaneId.value || !dropTarget.value) return null
-
+const displayRows = computed<DisplayRow[]>(() => {
+  const grid = splitPaneStore.paneGrid
   const pid = draggingPaneId.value
   const dt = dropTarget.value
-  const grid = splitPaneStore.paneGrid
+  const isDragging = !!pid
 
-  const result: PreviewCell[][] = []
+  if (!isDragging || !dt) {
+    return grid.map((row, r) => ({
+      key: `row-${r}`,
+      cells: row.map(id => ({ key: id, role: 'normal' as CellRole, paneId: id }))
+    }))
+  }
+
+  const ghost: GridCell = { key: 'ghost', role: 'ghost', paneId: null }
+  const sourceRows: GridCell[][] = []
+
   for (let r = 0; r < grid.length; r++) {
-    const row: PreviewCell[] = []
+    const row: GridCell[] = []
     for (let c = 0; c < grid[r].length; c++) {
       const id = grid[r][c]
-      if (id === pid) continue
-      row.push({ type: 'pane', paneId: id })
+      row.push({
+        key: id,
+        role: id === pid ? 'dragging' : 'normal',
+        paneId: id
+      })
     }
-    result.push(row)
+    sourceRows.push(row)
   }
-
-  const ghost: PreviewCell = { type: 'ghost' }
 
   if (dt.position === 'new-row') {
-    result.push([ghost])
+    sourceRows.push([ghost])
   } else if (dt.position === 'new-row-below') {
-    const insertRowAt = dt.row + 1
-    const targetRow = result[dt.row]
-    if (targetRow) {
-      result.splice(insertRowAt, 0, [ghost])
-    } else {
-      result.push([ghost])
-    }
+    const insertAt = Math.min(dt.row + 1, sourceRows.length)
+    sourceRows.splice(insertAt, 0, [ghost])
   } else {
-    let targetRow = result[dt.row]
-    if (!targetRow) {
-      targetRow = []
-      result[dt.row] = targetRow
+    const targetRow = sourceRows[dt.row]
+    if (targetRow) {
+      let insertCol = dt.position === 'after' ? Math.min(dt.col + 1, targetRow.length) : dt.col
+      if (insertCol < 0) insertCol = 0
+      targetRow.splice(insertCol, 0, ghost)
     }
-
-    let insertCol = dt.col
-    const actualCount = targetRow.length
-    if (dt.position === 'after') {
-      insertCol = Math.min(dt.col + 1, actualCount)
-    }
-    if (insertCol < 0) insertCol = 0
-    if (insertCol > actualCount) insertCol = actualCount
-
-    targetRow.splice(insertCol, 0, ghost)
   }
 
-  return result.filter(row => row.length > 0)
-})
-
-const previewRowCount = computed(() => {
-  if (!previewGrid.value) return rowCount.value
-  return previewGrid.value.length
-})
-
-const previewRowHeight = computed(() => {
-  const count = previewRowCount.value
-  if (count === 0) return 100
-  return 100 / count
+  return sourceRows
+    .filter(row => row.length > 0)
+    .map((row, r) => ({ key: `row-${r}`, cells: row }))
 })
 
 function onPaneClose(paneId: string) {
@@ -108,20 +100,32 @@ function onPaneClose(paneId: string) {
   }
 }
 
+function flushMove() {
+  if (hasPendingMove) {
+    hasPendingMove = false
+    updateDropTarget(pendingX, pendingY)
+  }
+}
+
 function onPaneDragStart(paneId: string) {
   draggingPaneId.value = paneId
   dropTarget.value = null
 
   onMouseMove = (e: MouseEvent) => {
     if (!draggingPaneId.value) return
-    updateDropTarget(e.clientX, e.clientY)
+    pendingX = e.clientX
+    pendingY = e.clientY
+    if (!hasPendingMove) {
+      hasPendingMove = true
+      rafId = requestAnimationFrame(flushMove)
+    }
   }
 
   onMouseUp = () => {
     finishDrag()
   }
 
-  document.addEventListener('mousemove', onMouseMove)
+  document.addEventListener('mousemove', onMouseMove, { passive: true })
   document.addEventListener('mouseup', onMouseUp)
   document.body.style.userSelect = 'none'
   document.body.style.cursor = 'grabbing'
@@ -131,20 +135,20 @@ function updateDropTarget(clientX: number, clientY: number) {
   const container = containerRef.value
   if (!container) return
 
-  const rows = container.querySelectorAll('.split-row')
-  if (rows.length === 0) return
+  const allRows = container.querySelectorAll('.split-row')
+  if (allRows.length === 0) return
 
   const grid = splitPaneStore.paneGrid
 
-  const lastRowRect = rows[rows.length - 1].getBoundingClientRect()
+  const lastRowRect = allRows[allRows.length - 1].getBoundingClientRect()
   if (clientY > lastRowRect.bottom) {
     dropTarget.value = { row: grid.length, col: 0, position: 'new-row' }
     return
   }
 
   let hitRow = -1
-  for (let r = 0; r < rows.length; r++) {
-    const rr = rows[r].getBoundingClientRect()
+  for (let r = 0; r < allRows.length; r++) {
+    const rr = allRows[r].getBoundingClientRect()
     if (clientY >= rr.top && clientY <= rr.bottom) {
       hitRow = r
       break
@@ -156,7 +160,7 @@ function updateDropTarget(clientX: number, clientY: number) {
     return
   }
 
-  const rowWrappers = rows[hitRow].querySelectorAll<HTMLElement>('.split-pane-wrapper')
+  const rowWrappers = allRows[hitRow].querySelectorAll<HTMLElement>('.split-pane-wrapper')
   const paneCount = rowWrappers.length
 
   let hitCol = -1
@@ -216,6 +220,8 @@ function updateDropTarget(clientX: number, clientY: number) {
 }
 
 function finishDrag() {
+  cancelAnimationFrame(rafId)
+  hasPendingMove = false
   if (onMouseMove) document.removeEventListener('mousemove', onMouseMove)
   if (onMouseUp) document.removeEventListener('mouseup', onMouseUp)
   document.body.style.userSelect = ''
@@ -248,6 +254,7 @@ function finishDrag() {
 }
 
 onUnmounted(() => {
+  cancelAnimationFrame(rafId)
   if (onMouseMove) document.removeEventListener('mousemove', onMouseMove)
   if (onMouseUp) document.removeEventListener('mouseup', onMouseUp)
 })
@@ -258,70 +265,42 @@ onUnmounted(() => {
     ref="containerRef"
     class="split-container"
   >
-    <!-- Dragging: show preview grid with ghost -->
-    <template v-if="previewGrid && draggingPaneId">
-      <div
-        v-for="(row, rowIdx) in previewGrid"
-        :key="'preview-row-' + rowIdx"
-        class="split-row split-row--preview"
-        :style="{ height: previewRowHeight + '%' }"
-      >
-        <template v-for="(cell, colIdx) in row" :key="'preview-' + rowIdx + '-' + colIdx">
-          <div
-            v-if="cell.type === 'ghost'"
-            class="split-ghost"
-          >
-            <div class="split-ghost__inner">
-              <EaIcon
-                name="plus"
-                :size="20"
-              />
-              <span class="split-ghost__label">{{ getPaneSessionId(draggingPaneId!) ? '' : t('splitPane.newPane') }}</span>
-            </div>
-          </div>
-          <div
-            v-else
-            class="split-pane-wrapper split-pane-wrapper--shrunk"
-            :data-pane-id="cell.paneId"
-          >
-            <PaneWrapper
-              :pane-id="cell.paneId"
-              :session-id="getPaneSessionId(cell.paneId)"
-              @close="onPaneClose"
-              @dragstart="onPaneDragStart"
-            />
-          </div>
-        </template>
-      </div>
-    </template>
-
-    <!-- Not dragging: normal grid -->
-    <template v-else>
-      <div
-        v-for="(row, rowIdx) in paneGrid"
-        :key="'row-' + rowIdx"
-        class="split-row"
-        :style="{ height: rowHeight + '%' }"
-      >
+    <div
+      v-for="(row, rowIdx) in displayRows"
+      :key="row.key"
+      class="split-row"
+    >
+      <template v-for="(cell, colIdx) in row.cells" :key="cell.key">
         <div
-          v-for="(paneId, colIdx) in row"
-          :key="paneId"
+          v-if="cell.role === 'ghost'"
+          class="split-ghost"
+        >
+          <div class="split-ghost__inner">
+            <EaIcon
+              name="plus"
+              :size="20"
+            />
+            <span class="split-ghost__label">{{ t('splitPane.newPane') }}</span>
+          </div>
+        </div>
+        <div
+          v-else
           class="split-pane-wrapper"
-          :data-pane-id="paneId"
+          :class="{ 'split-pane-wrapper--shrunk': cell.role === 'dragging' }"
+          :data-pane-id="cell.paneId"
           :data-row="rowIdx"
           :data-col="colIdx"
         >
           <PaneWrapper
-            :pane-id="paneId"
-            :session-id="getPaneSessionId(paneId)"
+            :pane-id="cell.paneId!"
+            :session-id="getPaneSessionId(cell.paneId!)"
             @close="onPaneClose"
             @dragstart="onPaneDragStart"
           />
         </div>
-      </div>
-    </template>
+      </template>
+    </div>
 
-    <!-- Full-overlay to capture mouse events -->
     <div
       v-if="draggingPaneId"
       class="drag-overlay"
@@ -340,13 +319,10 @@ onUnmounted(() => {
 }
 
 .split-row {
+  flex: 1;
   display: flex;
   min-height: 0;
   overflow: hidden;
-}
-
-.split-row--preview {
-  transition: height 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .split-row + .split-row {
@@ -368,13 +344,9 @@ onUnmounted(() => {
 }
 
 .split-pane-wrapper--shrunk {
-  transition: flex 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.split-pane-wrapper--shrunk + .split-pane-wrapper--shrunk,
-.split-ghost + .split-pane-wrapper--shrunk,
-.split-pane-wrapper--shrunk + .split-ghost {
-  border-left: 2px solid var(--color-border);
+  opacity: 0.3;
+  pointer-events: none;
+  min-width: 60px;
 }
 
 .split-ghost {
@@ -386,7 +358,11 @@ onUnmounted(() => {
   overflow: hidden;
   position: relative;
   padding: 8px;
-  transition: flex 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.split-ghost + .split-pane-wrapper,
+.split-pane-wrapper + .split-ghost {
+  border-left: 2px solid var(--color-border);
 }
 
 .split-ghost__inner {

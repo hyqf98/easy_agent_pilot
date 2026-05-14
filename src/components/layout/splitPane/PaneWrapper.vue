@@ -257,12 +257,21 @@ function handleCancelCompress() {
       <div
         v-if="!isMiniMode && !isHeightMini"
         class="pane-wrapper__token-bar"
+        :class="`pane-wrapper__token-bar--${currentTokenUsage.level}`"
       >
-        <TokenProgressBar
-          :session-id="sessionId"
-          :show-compress-button="true"
-          @compress="handleOpenCompress"
-        />
+        <div class="pane-wrapper__token-peek">
+          <div
+            class="pane-wrapper__token-peek-fill"
+            :style="{ width: currentTokenUsage.percentage > 0 && currentTokenUsage.percentage < 1 ? '1%' : `${Math.min(100, currentTokenUsage.percentage)}%` }"
+          />
+        </div>
+        <div class="pane-wrapper__token-full">
+          <TokenProgressBar
+            :session-id="sessionId"
+            :show-compress-button="true"
+            @compress="handleOpenCompress"
+          />
+        </div>
       </div>
 
       <MessageList
@@ -412,6 +421,71 @@ function handleCancelCompress() {
 
 .pane-wrapper__token-bar {
   flex-shrink: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.pane-wrapper__token-peek {
+  width: 100%;
+  height: 3px;
+  background: var(--color-bg-tertiary);
+  border-radius: 0 0 2px 2px;
+  overflow: hidden;
+  transition: opacity 0.2s ease, height 0.2s ease;
+}
+
+.pane-wrapper__token-peek-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+
+.pane-wrapper__token-bar--safe .pane-wrapper__token-peek-fill {
+  background: var(--color-primary);
+}
+
+.pane-wrapper__token-bar--warning .pane-wrapper__token-peek-fill {
+  background: var(--color-warning);
+}
+
+.pane-wrapper__token-bar--danger .pane-wrapper__token-peek-fill {
+  background: var(--color-orange-500, #f97316);
+}
+
+.pane-wrapper__token-bar--critical .pane-wrapper__token-peek-fill {
+  background: var(--color-error);
+  animation: peek-pulse 0.8s ease-in-out infinite;
+}
+
+@keyframes peek-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.pane-wrapper__token-full {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  padding: 0 12px;
+  opacity: 0;
+  max-height: 0;
+  overflow: hidden;
+  transform: translateY(-4px);
+  transition: opacity 0.2s ease, max-height 0.25s ease, padding 0.25s ease, transform 0.2s ease;
+}
+
+.pane-wrapper__token-bar:hover .pane-wrapper__token-peek {
+  opacity: 0;
+  height: 0;
+}
+
+.pane-wrapper__token-bar:hover .pane-wrapper__token-full {
+  opacity: 1;
+  max-height: 48px;
+  padding: 4px 12px;
+  transform: translateY(0);
 }
 
 .pane-wrapper__list {
