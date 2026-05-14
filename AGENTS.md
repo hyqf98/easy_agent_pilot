@@ -102,7 +102,7 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **easy-agent-pilot** (16347 symbols, 30791 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **easy_agent_pilot** (16347 symbols, 30791 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -125,10 +125,10 @@ This project is indexed by GitNexus as **easy-agent-pilot** (16347 symbols, 3079
 
 | Resource | Use for |
 |----------|---------|
-| `gitnexus://repo/easy-agent-pilot/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/easy-agent-pilot/clusters` | All functional areas |
-| `gitnexus://repo/easy-agent-pilot/processes` | All execution flows |
-| `gitnexus://repo/easy-agent-pilot/process/{name}` | Step-by-step execution trace |
+| `gitnexus://repo/easy_agent_pilot/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/easy_agent_pilot/clusters` | All functional areas |
+| `gitnexus://repo/easy_agent_pilot/processes` | All execution flows |
+| `gitnexus://repo/easy_agent_pilot/process/{name}` | Step-by-step execution trace |
 
 ## CLI
 

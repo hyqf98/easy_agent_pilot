@@ -1,5 +1,5 @@
 [package]
-name = "easy-agent-pilot"
+name = "easy_agent_pilot"
 version = "1.4.8"
 description = "Easy Agent Pilot - AI Agent 管理工具"
 authors = ["you"]
