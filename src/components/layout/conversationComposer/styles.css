@@ -527,7 +527,8 @@
   color: var(--color-text-primary);
   text-align: start;
   text-indent: 0;
-  scrollbar-width: none;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
   border: 1px solid transparent;
 }
 
@@ -703,12 +704,6 @@
 :deep(.conversation-composer__attachment-placeholder--file) {
   background:
     linear-gradient(180deg, rgba(220, 252, 231, 0.96), rgba(240, 253, 244, 0.94));
-}
-
-:deep(.conversation-composer__token-gap) {
-  display: inline;
-  font: inherit;
-  white-space: pre;
 }
 
 :deep(.conversation-composer__memory-tag) {

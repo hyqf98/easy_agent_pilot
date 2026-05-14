@@ -29,10 +29,6 @@ defineProps<{
           class="conversation-composer__file-tag"
           :title="segment.titleContent"
         >{{ segment.displayContent || segment.content }}</span>
-        <span
-          v-if="segment.trailingSpace"
-          class="conversation-composer__token-gap"
-        >&nbsp;</span>
       </template>
       <template v-else-if="segment.type === 'memory'">
         <span
@@ -57,19 +53,11 @@ defineProps<{
             'conversation-composer__attachment-placeholder--file': segment.attachmentType === 'file'
           }"
         >{{ segment.content }}</span>
-        <span
-          v-if="segment.trailingSpace"
-          class="conversation-composer__token-gap"
-        >&nbsp;</span>
       </template>
       <template v-else>
         <span
           class="conversation-composer__slash-tag"
         >{{ segment.content }}</span>
-        <span
-          v-if="segment.trailingSpace"
-          class="conversation-composer__token-gap"
-        >&nbsp;</span>
       </template>
     </template>
   </template>

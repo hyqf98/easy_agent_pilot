@@ -1599,14 +1599,15 @@ fn parse_claude_json_output(
             // Claude CLI 在一次 agentic 执行中会输出多条 assistant 事件，
             // 同一 message/turn 的 usage 可能被重复附带在多条事件里。
             // 对标准 Claude，最终 result.usage 仍然是 canonical 来源；
-            // 但部分 Claude 兼容源只会把 usage 挂在 assistant.message 上。
-            // 这里仅透传 raw usage，交给前端按 runtime 归一化，避免重复累计。
-            let input_tokens = None;
-            let output_tokens = None;
-            let _assistant_raw_input = usage.raw_input_tokens;
-            let _assistant_raw_output = usage.raw_output_tokens;
-            let _assistant_cache_read = usage.cache_read_input_tokens;
-            let _assistant_cache_create = usage.cache_creation_input_tokens;
+            // 但部分 Claude 兼容源只会把 usage 挂在 assistant.message 上，
+            // 或者对话中断时 result 事件不会到达。
+            // 这里透传 raw usage，交给前端按 runtime 归一化，避免重复累计。
+            let input_tokens = usage.raw_input_tokens;
+            let output_tokens = usage.output_tokens;
+            let raw_input_tokens = usage.raw_input_tokens;
+            let raw_output_tokens = usage.raw_output_tokens;
+            let cache_read_input_tokens = usage.cache_read_input_tokens;
+            let cache_creation_input_tokens = usage.cache_creation_input_tokens;
 
             // 遍历所有 content items，找到第一个有效的并返回
             // 优先级：thinking > text > tool_use
@@ -1633,10 +1634,10 @@ fn parse_claude_json_output(
                                 output_tokens,
                                 model: model.clone(),
                                 external_session_id: extract_external_session_id(json),
-                                raw_input_tokens: None,
-                                raw_output_tokens: None,
-                                cache_read_input_tokens: None,
-                                cache_creation_input_tokens: None,
+                                raw_input_tokens,
+                                raw_output_tokens,
+                                cache_read_input_tokens,
+                                cache_creation_input_tokens,
                                 ..build_thinking_event(session_id, thinking_text)
                             });
                         }
@@ -1661,10 +1662,10 @@ fn parse_claude_json_output(
                             output_tokens,
                             model: model.clone(),
                             external_session_id: extract_external_session_id(json),
-                            raw_input_tokens: None,
-                            raw_output_tokens: None,
-                            cache_read_input_tokens: None,
-                            cache_creation_input_tokens: None,
+                            raw_input_tokens,
+                            raw_output_tokens,
+                            cache_read_input_tokens,
+                            cache_creation_input_tokens,
                         });
                     }
                     "tool_use" => {
@@ -1687,10 +1688,10 @@ fn parse_claude_json_output(
                             output_tokens,
                             model: model.clone(),
                             external_session_id: extract_external_session_id(json),
-                            raw_input_tokens: None,
-                            raw_output_tokens: None,
-                            cache_read_input_tokens: None,
-                            cache_creation_input_tokens: None,
+                            raw_input_tokens,
+                            raw_output_tokens,
+                            cache_read_input_tokens,
+                            cache_creation_input_tokens,
                         });
                     }
                     _ => {

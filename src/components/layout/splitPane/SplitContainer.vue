@@ -270,7 +270,10 @@ onUnmounted(() => {
       :key="row.key"
       class="split-row"
     >
-      <template v-for="(cell, colIdx) in row.cells" :key="cell.key">
+      <template
+        v-for="(cell, colIdx) in row.cells"
+        :key="cell.key"
+      >
         <div
           v-if="cell.role === 'ghost'"
           class="split-ghost"

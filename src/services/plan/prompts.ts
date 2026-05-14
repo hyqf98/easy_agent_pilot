@@ -74,17 +74,17 @@ export function appendPlanSplitInstructionGuard(
   const guardLines = isChineseLocale()
     ? [
         '输出约束：',
-        '1. 只输出一个 JSON；form_request 顶层仅允许 type/question/forms；task_split 顶层仅允许 type/status/summary/tasks。',
-        '2. task_split 时，summary 是本轮修改/拆分总结（1-3 句），tasks 是完整任务列表；不要在 JSON 外重复输出任务列表。',
+        '1. 只输出一个 JSON，用 XML 标签包裹：<form-request> 或 <task-split>。form_request 顶层仅允许 type/question/forms；task_split 顶层仅允许 type/status/summary/tasks。',
+        '2. task_split 时，summary 是本轮修改/拆分总结（1-3 句），tasks 是完整任务列表；不要在 XML 标签外重复输出任务列表。',
         `3. ${countRule}`,
         scopedRule ? `4. ${scopedRule}` : '4. 不要输出 Markdown、代码块、解释性前后文或别名键。'
       ]
     : [
         'Output constraints:',
-        '1. Return exactly one JSON object; form_request may only use type/question/forms, and task_split may only use type/status/summary/tasks.',
-        '2. For task_split, summary is the 1-3 sentence change/split recap and tasks is the full task list; do not repeat the task list outside JSON.',
+        '1. Return exactly one JSON object wrapped in an XML tag: <form-request> or <task-split>. form_request may only use type/question/forms, and task_split may only use type/status/summary/tasks.',
+        '2. For task_split, summary is the 1-3 sentence change/split recap and tasks is the full task list; do not repeat the task list outside the XML tag.',
         `3. ${countRule}`,
-        scopedRule ? `4. ${scopedRule}` : '4. Do not output markdown, code fences, prose outside JSON, or alias keys.'
+        scopedRule ? `4. ${scopedRule}` : '4. Do not output markdown, code fences, prose outside the XML tag, or alias keys.'
       ]
 
   return `${content.trim()}\n\n${guardLines.filter(Boolean).join('\n')}`.trim()

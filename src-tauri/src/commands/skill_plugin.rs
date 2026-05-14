@@ -1316,19 +1316,6 @@ pub fn scan_plugin_slash_commands(
         }
     }
 
-    let mut commands = Vec::new();
-    let mut seen_names = HashSet::new();
-
-    let plugins = scan_plugins_with_commands(&plugins_dir);
-    collect_slash_commands_from_plugins(&plugins, &cli_name, &mut commands, &mut seen_names);
-
-    if let Some(skills_dir) = resolve_cli_skills_dir(&cli_name) {
-        if skills_dir.exists() {
-            let skills = scan_skill_commands(&skills_dir);
-            collect_slash_commands_from_skills(&skills, &cli_name, &mut commands, &mut seen_names);
-        }
-    }
-
     if let Some(ref project_root) = project_path {
         let project_root = PathBuf::from(project_root.trim());
         if project_root.exists() {

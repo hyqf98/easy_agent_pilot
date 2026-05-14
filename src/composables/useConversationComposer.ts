@@ -29,7 +29,7 @@ import { useMemoryStore } from '@/stores/memory'
 import { useAgentTeamsStore } from '@/stores/agentTeams'
 import { compressionService } from '@/services/compression'
 import { conversationService } from '@/services/conversation'
-import { loadPluginSlashCommands, toSlashCommandDescriptor } from '@/services/pluginCommands'
+import { clearPluginCommandsCache, loadPluginSlashCommands, toSlashCommandDescriptor } from '@/services/pluginCommands'
 import { writeFrontendRuntimeLog } from '@/services/runtimeLog/client'
 import { getErrorMessage } from '@/utils/api'
 import {
@@ -241,17 +241,10 @@ function buildTokenInsertPayload(before: string, token: string, after: string) {
   return { newText, newPosition }
 }
 
-function consumeTokenGap(text: string, startIndex: number) {
-  if (text[startIndex] !== ' ') {
-    return {
-      trailingSpace: false,
-      nextIndex: startIndex
-    }
-  }
-
+function consumeTokenGap(_text: string, startIndex: number) {
   return {
-    trailingSpace: true,
-    nextIndex: startIndex + 1
+    trailingSpace: false,
+    nextIndex: startIndex
   }
 }
 
@@ -1212,6 +1205,12 @@ export function useConversationComposer(options: UseConversationComposerOptions)
       focusInput()
       sessionExecutionStore.clearMemorySuggestions(sessionId)
       sessionExecutionStore.clearDismissedMemorySuggestionKeys(sessionId)
+      if (currentProvider.value) {
+        clearPluginCommandsCache()
+        loadPluginSlashCommands(currentProvider.value, currentProjectPath.value ?? undefined)
+          .then(commands => registerPluginCommands(commands.map(toSlashCommandDescriptor)))
+          .catch(() => { /* silent */ })
+      }
     }
   }, { immediate: true })
 

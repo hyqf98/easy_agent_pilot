@@ -514,7 +514,7 @@ export function buildSoloExecutionPrompt(input: {
   lines.push('- 把自己当成 harness 里的执行工位：你的职责是把这一步做完并留下证据，而不是重新设计整套流程。')
   lines.push('- 不要输出“我将要做什么”“我正在做什么”这类元叙述进度播报，除非是在最终结构化结果中总结。')
   lines.push('- 不要为了可选基础设施、后续优化或与当前步骤无关的环境问题偏航；例如未被本步明确要求时，不要自行扩展到 MCP bridge、CI、发布脚本或额外重构。')
-  lines.push('- 若必须补充信息，输出 form_request JSON。')
+  lines.push('- 若必须补充信息，输出 <form-request> 包裹的 form_request JSON。')
   lines.push('- 你只能在自己的专家会话里完成当前步骤；不要模拟协调师，不要替其他专家做后续调度。')
   lines.push('- 如果可以运行命令、浏览器或 Tauri MCP 验证，就优先给出真实验证证据，不要只做静态猜测。')
   lines.push('- 如果完成本步，请在最后输出一个结构化 JSON，把当前专家结果明确交回给规划协调师。')
@@ -571,7 +571,7 @@ export function buildSoloExecutionRepairPrompt(input: {
     rawOutput.trim() || '（空）',
     '',
     '重新输出规则:',
-    '- 如果确实还需要用户补充信息，输出一个合法的 form_request JSON。',
+    '- 如果确实还需要用户补充信息，输出一个 <form-request> 包裹的 form_request JSON。',
     '- 否则输出一个合法的结果 JSON，至少包含 result_summary，并尽量补齐 generated_files / modified_files / changed_files / deleted_files。',
     '- 可以补充 task_overview、task_status、completed_points，但最终只能返回一个 JSON 对象。',
     '- 禁止附加解释、前后缀文本、Markdown 代码块或第二个对象。'
@@ -584,7 +584,7 @@ export function buildSoloExecutionSystemPrompt(expertPrompt: string | null | und
       '你当前在 SOLO 模式下执行一个具体步骤。',
       '保持执行导向，优先交付可以验证的结果。',
       '只处理当前步骤，不要自己切换为宏观项目规划。',
-      '遇到缺失信息时，优先最小化提问；如果确实无法继续，可输出 form_request。',
+      '遇到缺失信息时，优先最小化提问；如果确实无法继续，可输出 <form-request> 包裹的 form_request。',
       '若步骤是实现类任务，最多做少量必要读取后就开始落代码，不要长时间停留在分析或自述状态。',
       '不要把回复写成工作日志；中间过程以工具调用和实际改动为主，最终再用结构化 JSON 总结结果。',
       '如果你被分配的是测试或验证类步骤，优先实际使用浏览器自动化、Tauri MCP、命令行验证、控制台检查或端到端路径验证，而不是只停留在代码静态判断。'

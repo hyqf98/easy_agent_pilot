@@ -45,6 +45,7 @@ const {
   isInterrupted,
   canRetryCurrentAssistant,
   canRetryCurrentUser,
+  isAutoRetryPending,
   formattedTime,
   userFormResponseDisplay,
   processedUserMessage,
@@ -366,7 +367,7 @@ const {
         </span>
         <!-- 停止按钮 - 仅在流式输出时显示 -->
         <button
-          v-if="isAssistant && isStreaming && isCurrentStreamingMessage"
+          v-if="isAssistant && (isStreaming || isAutoRetryPending) && isCurrentStreamingMessage"
           class="message-bubble__stop"
           :title="t('common.stop')"
           @click="handleStop"

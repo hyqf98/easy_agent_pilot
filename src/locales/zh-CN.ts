@@ -1722,25 +1722,29 @@ const zhCN = {
 
 当你还不能继续当前任务、必须向用户补充收集明确参数、范围、偏好、环境信息时：
 1. 不要用普通段落、编号列表或 markdown 提问。
-2. 必须只输出一个 JSON 对象，且不要放在代码块里。
+2. 必须只输出一个 <form-request> XML 标签，内含 JSON 对象，且不要放在代码块里。
 3. JSON 格式如下：
-{"type":"form_request","question":"一句话说明为什么需要补充这些信息","forms":[{"formId":"request_more_info","title":"请补充以下信息","description":"可选补充说明","submitText":"继续","fields":[{"name":"goal","label":"目标","type":"text","required":true,"placeholder":"请输入"}]}]}
+<form-request>
+{"type":"form_request","question":"一句话说明为什么需要补充这些信息","forms":[{"formId":"request_more_info","title":"请补充以下信息","description":"可选补充说明","submitText":"继续","fields":[{"name":"goal","label":"目标","type":"text","required":true,"placeholder":"请输入","suggestion":"你的推荐默认值","allowOther":true,"otherLabel":"其他（自定义）"}]}]}
+</form-request>
 4. 优先输出 forms 数组；字段 type 只能是 text、textarea、select、multiselect、number、checkbox、radio、date、slider。
 5. select、radio、multiselect 必须提供 options，格式为 [{"label":"显示名","value":"实际值"}]。
 6. 只有在确实需要用户补充信息才能继续时，才输出 form_request；其余场景正常回答。
 7. 如果用户发送 {"type":"form_response","formId":"...","values":{...}}，把它视为表单回答并继续处理，不要要求用户改写格式。
-8. 输出 form_request 时，JSON 前后不要再附加解释、标题、列表或其他文本。
+8. 输出 form_request 时，<form-request> 标签前后不要再附加解释、标题、列表或其他文本。
 9. 顶层键名只能使用 type、question、forms；禁止输出 action、reason、data、payload 等替代键名。
 10. forms 必须是表单 schema 数组，每一项都要包含 formId、title、fields；禁止把字段数组直接放进 forms。
-11. 输出前先自行检查该字符串可以被 JSON.parse 直接解析，且不要使用单引号、尾逗号或 markdown 代码围栏。`
+11. 输出前先自行检查该字符串可以被 JSON.parse 直接解析，且不要使用单引号、尾逗号或 markdown 代码围栏。
+12. 每个字段必须填写 suggestion（你的推荐默认值），用于回显你的建议，让用户可以直接采纳或修改。
+13. select、radio、multiselect 字段必须设置 "allowOther": true 和 "otherLabel": "其他（自定义）"，让用户在选项都不合适时可以自己输入。`
     },
     plan: {
       splitSystem: `你是项目规划助手，目标是把需求拆成可执行任务。
 
 规则：
-1. 只输出单个 JSON 对象，不要 markdown 或解释。
-2. 首轮收到原始需求时，先判断信息是否足以稳定拆分；只要关键维度缺失、冲突或模糊，就必须输出 form_request，禁止直接猜测后拆分。
-3. 在输出 task_split 之前，你必须确认以下维度已经足够明确：目标与范围、交付物、技术/运行环境、约束与依赖、验收与测试要求；任一维度缺失都要先收集。
+1. 只输出单个 JSON 对象，不要 markdown 或解释。必须用 XML 标签包裹：<form-request>...</form-request> 或 <task-split>...</task-split>。
+2. 首轮收到原始需求时，先判断信息是否足以稳定拆分；只要关键维度缺失、冲突或模糊，就必须输出 <form-request> 包裹的 form_request，禁止直接猜测后拆分。
+3. 在输出 <task-split> 之前，你必须确认以下维度已经足够明确：目标与范围、交付物、技术/运行环境、约束与依赖、验收与测试要求；任一维度缺失都要先收集。
 4. form_request 优先输出 forms 数组；字段 type 只能是 text、textarea、select、multiselect、number、checkbox、radio、date、slider。
 5. form_request 应一次性收集当前轮次缺失的关键信息，优先设计 3-8 个高信息量字段，并尽量提供 suggestion、suggestionReason、optionReasons、allowOther。
 6. select / radio / multiselect 的 options 必须是 [{'{' } "label": "...", "value": "..." {'}'}]，并保留 allowOther；可补充 suggestion、suggestionReason、optionReasons。
@@ -1748,17 +1752,17 @@ const zhCN = {
 8. task_split 必须包含 status:"DONE"、summary、tasks；summary 用 1-3 句自然语言概括本次修改/拆分思路或结果，不能在 summary 里重复粘贴整份 tasks 列表；每个任务都要有 title、description、priority、implementationSteps、testSteps、acceptanceCriteria。
 9. 任务要边界清晰、可直接执行，禁止把仍然依赖用户补充信息的模糊事项直接塞进任务。
 10. description 不能写成泛泛的一句话，必须明确这个任务要完成什么业务目标、涉及哪些页面/模块/服务/数据、使用什么技术或方案来实现什么结果。
-11. implementationSteps 必须写成可直接执行的实现步骤，至少覆盖：改动位置、核心逻辑、关键数据流/状态流、边界处理；避免“完善功能”“处理逻辑”“完成开发”这类空话。
+11. implementationSteps 必须写成可直接执行的实现步骤，至少覆盖：改动位置、核心逻辑、关键数据流/状态流、边界处理；避免"完善功能""处理逻辑""完成开发"这类空话。
 12. 如果任务涉及前端，description 或 implementationSteps 中要写清楚页面/组件/状态管理/接口联动；如果涉及后端，要写清楚接口、服务、存储、调度、权限、事务或异常处理；如果跨端，要写清楚前后端协作边界。
-13. testSteps 不能只写“测试功能正常”，必须写清楚如何验证：测试前置条件、操作步骤、输入样例、预期结果，必要时区分手工验证、自动化测试、接口验证、回归验证。
+13. testSteps 不能只写"测试功能正常"，必须写清楚如何验证：测试前置条件、操作步骤、输入样例、预期结果，必要时区分手工验证、自动化测试、接口验证、回归验证。
 14. acceptanceCriteria 必须是可观察、可验收、可判定通过/失败的结果标准，优先描述业务结果、界面/接口表现、异常分支和性能/稳定性要求，禁止写成重复 implementationSteps 的过程描述。
-15. 当用户是在“继续拆分 / 优化已有任务列表”场景下给出追加指令时，默认采用最小修改原则：只允许修改用户明确点名的任务，禁止顺带修改其他任务。
-16. 只要用户消息里明确引用了某个具体任务（例如引用右侧任务、写出任务编号、写出唯一可识别的任务标题，或表达“只优化任务1 / 仅调整这个任务”），就必须视为局部修改请求；除非用户明确写出“整体优化 / 全量优化 / 优化全部任务 / 重整整个列表”，否则不得修改其他任务。
-17. 对于局部修改请求，如果其余任务无需变动，就必须在输出的 tasks 中保留其余任务原样，且保持原顺序，不得润色、重排、补充或顺手优化；如果用户指令仍然存在歧义，应先输出 form_request 澄清，而不是擅自扩展到全量优化。
-18. 优先输出少而完整的高质量任务，而不是很多个描述空泛的任务；每个任务都应该让执行者在不反复追问的情况下理解“做什么、怎么做、如何测试、何时算完成”。
+15. 当用户是在"继续拆分 / 优化已有任务列表"场景下给出追加指令时，默认采用最小修改原则：只允许修改用户明确点名的任务，禁止顺带修改其他任务。
+16. 只要用户消息里明确引用了某个具体任务（例如引用右侧任务、写出任务编号、写出唯一可识别的任务标题，或表达"只优化任务1 / 仅调整这个任务"），就必须视为局部修改请求；除非用户明确写出"整体优化 / 全量优化 / 优化全部任务 / 重整整个列表"，否则不得修改其他任务。
+17. 对于局部修改请求，如果其余任务无需变动，就必须在输出的 tasks 中保留其余任务原样，且保持原顺序，不得润色、重排、补充或顺手优化；如果用户指令仍然存在歧义，应先输出 <form-request> 澄清，而不是擅自扩展到全量优化。
+18. 优先输出少而完整的高质量任务，而不是很多个描述空泛的任务；每个任务都应该让执行者在不反复追问的情况下理解"做什么、怎么做、如何测试、何时算完成"。
 19. 顶层键名必须严格匹配标准结构：form_request 只能使用 type、question、forms；task_split 只能使用 type、status、summary、tasks。禁止使用 action、reason、state、phase、payload、data 等替代键。
 20. forms 必须是 form schema 数组，不能把字段数组直接塞进 forms；每个表单必须包含 formId、title、fields。
-21. 输出前必须自行检查：内容可被 JSON.parse 直接解析、没有 markdown 代码块、没有 JSON 之外的额外文字、没有单引号和尾逗号。`,
+21. 输出前必须自行检查：内容可被 JSON.parse 直接解析、没有 markdown 代码块、没有 XML 标签之外的额外文字、没有单引号和尾逗号。`,
       kickoffPlanName: '计划名称',
       kickoffPlanDescription: '计划描述',
       kickoffMinTaskCount: '最少任务数',
@@ -1775,9 +1779,9 @@ const zhCN = {
       directTaskSplitDone: '在保证每个任务都具备清晰的技术实现说明、实现步骤、测试步骤、验收标准的前提下，直接输出 task_split（status=DONE）；必须同时包含 summary 和 tasks。',
       formResponse: '表单 {formId} 回答: {valueStr}',
       formResponseContinue: '继续：需要更多信息就输出 form_request；足够则输出 task_split（status=DONE），并同时输出 summary 和 tasks。',
-      outputCorrection: `输出格式错误，请重新输出标准 JSON：
-- form_request：只能使用 type、question、forms，且 forms 必须是表单 schema 数组
-- task_split：只能使用 type、status、summary、tasks，且必须包含 status:DONE、非空 summary，tasks >= {minTaskCount}
+      outputCorrection: `输出格式错误，请重新输出标准 JSON 并用 XML 标签包裹：
+- form_request：只能使用 type、question、forms，且 forms 必须是表单 schema 数组，用 <form-request> 包裹
+- task_split：只能使用 type、status、summary、tasks，且必须包含 status:DONE、非空 summary，tasks >= {minTaskCount}，用 <task-split> 包裹
 - 禁止 action、reason、state、phase、payload、data 等替代键
 - 禁止 markdown 代码块、额外文字、单引号、尾逗号
 - 重新输出前先确认整段内容可以被 JSON.parse 直接解析`,
@@ -1795,10 +1799,10 @@ const zhCN = {
       userSupplement: '用户补充',
       requirements: '要求',
       continueFromContext: '- 基于已有上下文继续，不重复已完成步骤。',
-      formRequestJsonOnly: '- 需要用户补充信息时，只输出 JSON：',
+      formRequestJsonOnly: '- 需要用户补充信息时，只输出 XML 包裹的 JSON：',
       resultJsonOnly: '- 完成后，只输出 JSON：',
       resultSummaryRule: '- result_summary 只写结果、关键改动和遗留风险。',
-      formRequestExample: '{"type":"form_request","question":"问题描述","formSchema":{"formId":"id","title":"标题","fields":[{"name":"字段","label":"标签","type":"text"}]}}',
+      formRequestExample: '<form-request>\n{"type":"form_request","question":"问题描述","formSchema":{"formId":"id","title":"标题","fields":[{"name":"字段","label":"标签","type":"select","suggestion":"推荐值","allowOther":true,"otherLabel":"其他（自定义）","options":[{"label":"选项A","value":"a"},{"label":"选项B","value":"b"}]}]}}\n</form-request>',
       resultExample: '{"result_summary":"1-3句总结本次执行结果","generated_files":[],"modified_files":[],"deleted_files":[]}',
       planProgress: '## 计划进度',
       totalTasksLine: '总任务: {total}，已完成 {completed}，进行中 {inProgress}，阻塞 {blocked}，失败 {failed}，待执行 {pending}',

@@ -368,6 +368,33 @@ function toResultBlock(value: Record<string, unknown>): StructuredContentBlock |
   }
 }
 
+function mergeFormSchemas(schemas: DynamicFormSchema[], question?: string): StructuredContentBlock {
+  if (schemas.length === 1) {
+    return { type: 'form' as const, question, formSchema: schemas[0] }
+  }
+
+  const primary = schemas[0]
+  const mergedFields = schemas.flatMap(schema => {
+    const fields = schema.fields || []
+    if (schema !== primary && fields.length > 0) {
+      const sectionLabel = schema.title || ''
+      if (sectionLabel) {
+        return [{ name: `__section_${schema.formId}`, label: sectionLabel, type: 'text' as const, placeholder: '' }, ...fields]
+      }
+    }
+    return fields
+  })
+
+  return {
+    type: 'form' as const,
+    question,
+    formSchema: {
+      ...primary,
+      fields: mergedFields
+    }
+  }
+}
+
 function toFormBlocks(value: Record<string, unknown>): StructuredContentBlock[] | null {
   if (value.type !== 'form_request') {
     return null
@@ -383,11 +410,7 @@ function toFormBlocks(value: Record<string, unknown>): StructuredContentBlock[] 
     return null
   }
 
-  return formSchemas.map(formSchema => ({
-    type: 'form' as const,
-    question,
-    formSchema
-  }))
+  return [mergeFormSchemas(formSchemas, question)]
 }
 
 function parseNestedStructuredJsonValue(value: Record<string, unknown>): StructuredContentBlock[] | null {
@@ -628,6 +651,40 @@ function tryParseStructuredBlocks(rawJson: string): StructuredContentBlock[] | n
   }
 }
 
+function extractXmlWrappedBlocks(content: string): StructuredContentBlock[] | null {
+  const xmlPattern = /<(form-request|task-split)>([\s\S]*?)<\/\1>/g
+  let match = xmlPattern.exec(content)
+  if (!match) {
+    return null
+  }
+
+  const blocks: StructuredContentBlock[] = []
+  let lastIndex = 0
+
+  xmlPattern.lastIndex = 0
+  while ((match = xmlPattern.exec(content)) !== null) {
+    const matchStart = match.index
+    const matchEnd = matchStart + match[0].length
+
+    pushMarkdownBlock(blocks, content.slice(lastIndex, matchStart))
+
+    const innerJson = match[2].trim()
+    if (innerJson) {
+      const parsed = tryParseStructuredBlocks(innerJson)
+      if (parsed && parsed.length > 0) {
+        blocks.push(...parsed)
+      } else {
+        pushMarkdownBlock(blocks, match[0])
+      }
+    }
+
+    lastIndex = matchEnd
+  }
+
+  pushMarkdownBlock(blocks, content.slice(lastIndex))
+  return blocks
+}
+
 function extractBalancedJsonRanges(content: string): Array<{ start: number, end: number }> {
   const ranges: Array<{ start: number, end: number }> = []
   const stack: string[] = []
@@ -760,6 +817,11 @@ export function parseStructuredContent(content: string): StructuredContentBlock[
   const fullStructuredBlocks = tryParseStructuredBlocks(trimmed)
   if (fullStructuredBlocks && fullStructuredBlocks.length > 0) {
     return setStructuredContentCache(content, fullStructuredBlocks)
+  }
+
+  const xmlBlocks = extractXmlWrappedBlocks(content)
+  if (xmlBlocks && xmlBlocks.length > 0) {
+    return setStructuredContentCache(content, xmlBlocks)
   }
 
   const inlineStructuredBlocks = parseInlineStructuredBlocks(content)

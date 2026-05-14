@@ -25,8 +25,8 @@ function getCurrentLocale(): string {
 
 function buildFormRequestExample(): string {
   return getCurrentLocale() === 'en-US'
-    ? '{"type":"form_request","question":"Describe the missing information","formSchema":{"formId":"id","title":"Title","fields":[{"name":"field","label":"Label","type":"text"}]}}'
-    : '{"type":"form_request","question":"问题描述","formSchema":{"formId":"id","title":"标题","fields":[{"name":"字段","label":"标签","type":"text"}]}}'
+    ? '<form-request>\n{"type":"form_request","question":"Describe the missing information","formSchema":{"formId":"id","title":"Title","fields":[{"name":"field","label":"Label","type":"select","suggestion":"recommended value","allowOther":true,"otherLabel":"Other (custom)","options":[{"label":"Option A","value":"a"},{"label":"Option B","value":"b"}]}]}}\n</form-request>'
+    : '<form-request>\n{"type":"form_request","question":"问题描述","formSchema":{"formId":"id","title":"标题","fields":[{"name":"字段","label":"标签","type":"select","suggestion":"推荐值","allowOther":true,"otherLabel":"其他（自定义）","options":[{"label":"选项A","value":"a"},{"label":"选项B","value":"b"}]}]}}\n</form-request>'
 }
 
 function buildResultExample(): string {
@@ -133,7 +133,7 @@ export function buildExecutionPrompt(
 
   parts.push('执行要求:')
   parts.push('1. 基于当前工作区和已有上下文继续推进，不要重复已经完成的工作。')
-  parts.push('2. 如果缺少继续执行所必需的信息，只输出一个 `form_request` JSON。')
+  parts.push('2. 如果缺少继续执行所必需的信息，只输出一个 <form-request> 包裹的 form_request JSON。')
   parts.push('```json')
   parts.push(buildFormRequestExample())
   parts.push('```')

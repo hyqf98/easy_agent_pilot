@@ -2136,25 +2136,29 @@ export default {
 
 When you cannot continue the current task and must collect explicit parameters, scope, preferences, or environment details from the user:
 1. Do not ask using normal paragraphs, numbered lists, or markdown.
-2. You must output exactly one JSON object and do not wrap it in a code block.
+2. You must output exactly one <form-request> XML tag containing a valid JSON object. Do NOT wrap it in a code block.
 3. Use this JSON shape:
-{"type":"form_request","question":"One sentence explaining why the missing information is needed","forms":[{"formId":"request_more_info","title":"Please provide the following information","description":"Optional clarification","submitText":"Continue","fields":[{"name":"goal","label":"Goal","type":"text","required":true,"placeholder":"Please enter"}]}]}
+<form-request>
+{"type":"form_request","question":"One sentence explaining why the missing information is needed","forms":[{"formId":"request_more_info","title":"Please provide the following information","description":"Optional clarification","submitText":"Continue","fields":[{"name":"goal","label":"Goal","type":"text","required":true,"placeholder":"Please enter","suggestion":"Your recommended default value","allowOther":true,"otherLabel":"Other (custom)"}]}]}
+</form-request>
 4. Prefer the forms array. Field type may only be text, textarea, select, multiselect, number, checkbox, radio, date, or slider.
 5. select, radio, and multiselect must provide options in the format [{"label":"Visible Label","value":"actual_value"}].
 6. Output form_request only when you truly need more user input to continue. Otherwise reply normally.
 7. If the user sends {"type":"form_response","formId":"...","values":{...}}, treat it as the form answer and continue. Do not ask the user to rewrite the format.
-8. When outputting form_request, do not add explanations, headings, lists, or any extra text before or after the JSON.
+8. When outputting form_request, do not add explanations, headings, lists, or any extra text before or after the <form-request> tag.
 9. Top-level keys may only be type, question, and forms. Do not output alias keys such as action, reason, data, or payload.
 10. forms must be an array of form schemas, and every form must contain formId, title, and fields. Do not put a raw field array directly into forms.
-11. Before responding, self-check that the entire string can be parsed by JSON.parse directly, with no single quotes, trailing commas, or markdown fences.`
+11. Before responding, self-check that the entire string can be parsed by JSON.parse directly, with no single quotes, trailing commas, or markdown fences.
+12. Every field MUST include a "suggestion" value — your recommended default answer. This is shown as a pre-filled hint so the user can accept it or change it.
+13. For select, radio, and multiselect fields, you MUST set "allowOther": true and "otherLabel": "Other (custom)" so the user can type their own answer when none of the provided options fit.`
     },
     plan: {
       splitSystem: `You are a project planning assistant. Your goal is to split requirements into executable tasks.
 
 Rules:
-1. Output exactly one JSON object. No markdown and no explanations.
-2. On the first pass over the raw requirement, do not output task_split unless the requirement is already specific and stable enough; when any critical dimension is missing, conflicting, or ambiguous, you must output form_request instead of guessing.
-3. Before outputting task_split, make sure you have enough clarity on goal and scope, deliverables, technical/runtime environment, constraints and dependencies, and acceptance/testing expectations. If any dimension is incomplete, ask first.
+1. Output exactly one JSON object wrapped in an XML tag. Use <form-request> for form_request or <task-split> for task_split. No markdown and no explanations outside the tag.
+2. On the first pass over the raw requirement, do not output task_split unless the requirement is already specific and stable enough; when any critical dimension is missing, conflicting, or ambiguous, you must output <form-request> instead of guessing.
+3. Before outputting <task-split>, make sure you have enough clarity on goal and scope, deliverables, technical/runtime environment, constraints and dependencies, and acceptance/testing expectations. If any dimension is incomplete, ask first.
 4. For form_request, prefer the forms array. Field type may only be text, textarea, select, multiselect, number, checkbox, radio, date, or slider.
 5. A form_request should collect the currently missing high-value information in one round when possible. Prefer 3-8 focused fields and provide suggestion, suggestionReason, optionReasons, and allowOther whenever useful.
 6. select / radio / multiselect options must be [{'{' } "label": "...", "value": "..." {'}'}], and keep allowOther. You may also provide suggestion, suggestionReason, and optionReasons.
@@ -2168,11 +2172,11 @@ Rules:
 14. acceptanceCriteria must be observable and pass/fail oriented. Prefer business outcomes, UI/API behavior, error-path expectations, and performance/stability constraints. Do not repeat implementation steps as acceptance criteria.
 15. When the user is continuing or optimizing an existing task list, default to the smallest possible change set: only modify the task(s) the user explicitly pointed to, and do not opportunistically rewrite other tasks.
 16. If the user clearly references a specific task (for example via an @ reference, an explicit task number, a uniquely identifiable task title, or wording such as "only optimize task 1"), you must treat it as a local edit request. Do not modify any other task unless the user explicitly asks for whole-list optimization such as "optimize all tasks", "full optimization", or "rework the entire list".
-17. For local edit requests, all non-target tasks must remain unchanged in the returned tasks array and keep the same order. Do not polish, reorder, expand, or improve them. If the instruction is still ambiguous, output form_request to clarify instead of silently expanding the scope to the whole list.
+17. For local edit requests, all non-target tasks must remain unchanged in the returned tasks array and keep the same order. Do not polish, reorder, expand, or improve them. If the instruction is still ambiguous, output <form-request> to clarify instead of silently expanding the scope to the whole list.
 18. Prefer fewer but more complete high-quality tasks over many vague tasks. Each task should let an executor understand what to do, how to do it, how to test it, and when it is considered done without repeated clarification.
 19. Top-level keys must strictly follow the canonical structure: form_request may only use type, question, and forms; task_split may only use type, status, summary, and tasks. Do not use alias keys such as action, reason, state, phase, payload, or data.
 20. forms must be an array of form schemas. Do not place a raw field array directly into forms; each form must include formId, title, and fields.
-21. Before responding, self-check that the output can be parsed by JSON.parse directly, contains no markdown code fences, no extra prose outside JSON, and no single quotes or trailing commas.`,
+21. Before responding, self-check that the output can be parsed by JSON.parse directly, contains no markdown code fences, no extra prose outside the XML tag, and no single quotes or trailing commas.`,
       kickoffPlanName: 'Plan Name',
       kickoffPlanDescription: 'Plan Description',
       kickoffMinTaskCount: 'Minimum Task Count',
@@ -2189,9 +2193,9 @@ Rules:
       directTaskSplitDone: 'Output task_split directly (status=DONE) only when every task already has a clear technical implementation description, implementation steps, test steps, and acceptance criteria. task_split must include both summary and tasks.',
       formResponse: 'Form {formId} response: {valueStr}',
       formResponseContinue: 'Continue: if more information is needed, output form_request; if sufficient, output task_split (status=DONE) with both summary and tasks.',
-      outputCorrection: `Output format is invalid. Re-output strict JSON:
-- form_request: may only use type, question, and forms, and forms must be an array of form schemas
-- task_split: may only use type, status, summary, and tasks, and must contain status:DONE, a non-empty summary, and tasks >= {minTaskCount}
+      outputCorrection: `Output format is invalid. Re-output strict JSON wrapped in an XML tag:
+- form_request: may only use type, question, and forms, and forms must be an array of form schemas; wrap in <form-request>
+- task_split: may only use type, status, summary, and tasks, and must contain status:DONE, a non-empty summary, and tasks >= {minTaskCount}; wrap in <task-split>
 - Do not use alias keys such as action, reason, state, phase, payload, or data
 - Do not output markdown fences, extra prose, single quotes, or trailing commas
 - Before responding again, verify the full string can be parsed by JSON.parse directly`,
@@ -2209,10 +2213,10 @@ Rules:
       userSupplement: 'User Supplement',
       requirements: 'Requirements',
       continueFromContext: '- Continue from the existing context and do not repeat completed work.',
-      formRequestJsonOnly: '- If you need more information from the user, output JSON only:',
+      formRequestJsonOnly: '- If you need more information from the user, output XML-wrapped JSON only:',
       resultJsonOnly: '- When finished, output JSON only:',
       resultSummaryRule: '- result_summary should contain only the result, key changes, and residual risks.',
-      formRequestExample: '{"type":"form_request","question":"Describe the missing information","formSchema":{"formId":"id","title":"Title","fields":[{"name":"field","label":"Label","type":"text"}]}}',
+      formRequestExample: '<form-request>\n{"type":"form_request","question":"Describe the missing information","formSchema":{"formId":"id","title":"Title","fields":[{"name":"field","label":"Label","type":"select","suggestion":"recommended value","allowOther":true,"otherLabel":"Other (custom)","options":[{"label":"Option A","value":"a"},{"label":"Option B","value":"b"}]}]}}\n</form-request>',
       resultExample: '{"result_summary":"Summarize the execution result in 1-3 sentences","generated_files":[],"modified_files":[],"deleted_files":[]}',
       planProgress: '## Plan Progress',
       totalTasksLine: 'Total tasks: {total}, completed {completed}, in progress {inProgress}, blocked {blocked}, failed {failed}, pending {pending}',

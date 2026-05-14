@@ -127,6 +127,12 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
     && canRetry.value
     && latestUserMessageId.value === props.message.id
   )
+  const isAutoRetryPending = computed(() => {
+    if (!props.sessionId || !isAssistant.value || isStreaming.value) return false
+    const executionState = sessionExecutionStore.getExecutionState(props.sessionId)
+    return executionState.isAwaitingRetry
+      && props.message.runtimeNotices?.some(notice => notice.id === 'conversation-auto-retry')
+  })
 
   watch(
     isStreaming,
@@ -559,6 +565,7 @@ export function useMessageBubble(props: MessageBubbleProps, emit: MessageBubbleE
     canRetry,
     canRetryCurrentAssistant,
     canRetryCurrentUser,
+    isAutoRetryPending,
     formattedTime,
     userFormResponseDisplay,
     processedUserMessage,
