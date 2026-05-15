@@ -3,16 +3,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
-// 活动定时器存储
-lazy_static! {
-    static ref ACTIVE_TIMERS: Arc<RwLock<HashMap<String, JoinHandle<()>>>> =
-        Arc::new(RwLock::new(HashMap::new()));
-}
+static ACTIVE_TIMERS: Lazy<Arc<RwLock<HashMap<String, JoinHandle<()>>>>> =
+    Lazy::new(|| Arc::new(RwLock::new(HashMap::new())));
 
 /// 启动后台调度器循环
 pub fn start_scheduler(app_handle: AppHandle) {
@@ -30,7 +27,7 @@ pub fn start_scheduler(app_handle: AppHandle) {
 
 /// 恢复待执行的定时计划
 pub async fn restore_scheduled_plans(app_handle: &AppHandle) {
-    let db_path = match get_db_path() {
+    let db_path = match crate::commands::support::get_db_path() {
         Ok(path) => path,
         Err(e) => {
             eprintln!("Failed to get db path: {}", e);
@@ -91,13 +88,12 @@ pub async fn restore_scheduled_plans(app_handle: &AppHandle) {
 async fn check_and_trigger_scheduled_plans(
     app_handle: &AppHandle,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let db_path = get_db_path()?;
+    let db_path = crate::commands::support::get_db_path()?;
     let conn = rusqlite::Connection::open(&db_path)?;
 
     let now = Utc::now();
     let now_str = now.to_rfc3339();
 
-    // 查询所有到期但未触发的计划
     let due_plans: Vec<String> = conn
         .prepare(
             "SELECT id FROM plans WHERE schedule_status = 'scheduled' AND scheduled_at IS NOT NULL AND scheduled_at <= ?1",
@@ -170,8 +166,7 @@ async fn trigger_plan_execution(
     app_handle: &AppHandle,
     plan_id: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // 更新数据库状态
-    let db_path = get_db_path()?;
+    let db_path = crate::commands::support::get_db_path()?;
     let conn = rusqlite::Connection::open(&db_path)?;
 
     let now = Utc::now().to_rfc3339();
@@ -201,10 +196,4 @@ async fn trigger_plan_execution(
     println!("Emitted plan:scheduled-trigger event for plan {}", plan_id);
 
     Ok(())
-}
-
-/// 获取数据库路径（与 commands/mod.rs 保持一致）
-fn get_db_path() -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
-    let persistence_dir = crate::commands::get_persistence_dir_path()?;
-    Ok(persistence_dir.join("data").join("easy-agent.db"))
 }

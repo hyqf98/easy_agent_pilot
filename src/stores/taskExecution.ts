@@ -1176,6 +1176,12 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
       if (wasStopped) {
         await appendExecutionUsageNotice(taskId)
         await markTaskStopped(taskId)
+        try {
+          await updateTaskSafely(taskId, { status: 'cancelled' })
+        } catch (statusError) {
+          console.warn('[TaskExecution] Failed to update task status to cancelled:', statusError)
+        }
+        skipQueueAdvance = true
         recordTaskUsageOnce()
       } else {
         const currentRetryCount = task.retryCount + 1
@@ -1800,6 +1806,11 @@ export const useTaskExecutionStore = defineStore('taskExecution', () => {
       finalizeRunningToolCalls(state.toolCalls)
       agentExecutor.abort(sessionId)
       removeTaskFromQueue(queue, taskId)
+      try {
+        await updateTaskSafely(taskId, { status: 'cancelled' })
+      } catch (statusError) {
+        console.warn('[TaskExecution] Failed to update task status to cancelled:', statusError)
+      }
       normalizePlanExecutionStates(task.planId)
 
       if (autoAdvance && !pauseQueue) {

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::message::remove_session_uploads;
 use super::support::{
-    now_rfc3339, open_db_connection, open_db_connection_with_foreign_keys,
+    now_rfc3339, open_db_connection,
     repair_memory_search_indexes,
 };
 
@@ -413,7 +413,7 @@ fn get_session_by_id(conn: &Connection, id: &str) -> Result<Session, String> {
 /// 删除会话
 #[tauri::command]
 pub fn delete_session(id: String) -> Result<(), String> {
-    let mut conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let mut conn = open_db_connection().map_err(|e| e.to_string())?;
     repair_memory_search_indexes(&conn).map_err(|e| format!("修复记忆搜索索引失败: {}", e))?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
 

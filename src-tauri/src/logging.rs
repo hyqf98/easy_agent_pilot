@@ -152,7 +152,13 @@ fn sanitize_log_name(name: &str) -> Option<String> {
 pub fn init_runtime_logging() -> Result<()> {
     let _ = get_log_dir()?;
 
-    let mut installed = PANIC_HOOK_INSTALLED.lock().expect("panic hook poisoned");
+    let mut installed = match PANIC_HOOK_INSTALLED.lock() {
+        Ok(guard) => guard,
+        Err(e) => {
+            eprintln!("panic hook mutex poisoned: {}", e);
+            return Ok(());
+        }
+    };
     if !*installed {
         let previous_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |panic_info| {
@@ -198,7 +204,13 @@ pub fn write_log(level: &str, target: &str, message: &str) {
         .to_string();
     let line = format!("[{timestamp}] [{level}] [{target}] {normalized}\n");
 
-    let _guard = LOG_WRITE_LOCK.lock().expect("log writer poisoned");
+    let _guard = match LOG_WRITE_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(e) => {
+            eprintln!("log writer mutex poisoned: {}", e);
+            return;
+        }
+    };
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
         let _ = file.write_all(line.as_bytes());
     }
@@ -305,7 +317,13 @@ pub fn write_crash_log(source: &str, message: &str, stack_trace: Option<&str>) {
         timestamp, source, message, trace_section
     );
 
-    let _guard = LOG_WRITE_LOCK.lock().expect("log writer poisoned");
+    let _guard = match LOG_WRITE_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(e) => {
+            eprintln!("crash log writer mutex poisoned: {}", e);
+            return;
+        }
+    };
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
         let _ = file.write_all(entry.as_bytes());
     }

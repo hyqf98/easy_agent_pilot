@@ -1,14 +1,7 @@
 use anyhow::Result;
-use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
-/// 获取数据库连接
-fn get_db_connection() -> Result<Connection> {
-    let persistence_dir = super::get_persistence_dir_path()?;
-    Ok(Connection::open(
-        persistence_dir.join("data").join("easy-agent.db"),
-    )?)
-}
+use super::support::open_db_connection;
 
 /// 项目访问记录
 #[allow(dead_code)]
@@ -22,7 +15,7 @@ pub struct ProjectAccessLog {
 /// 记录项目访问
 #[tauri::command]
 pub fn record_project_access(project_id: String) -> Result<(), String> {
-    let conn = get_db_connection().map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
 
     conn.execute(
         "INSERT INTO project_access_log (project_id, last_accessed_at, access_count) VALUES (?1, strftime('%s', 'now'), 1) ON CONFLICT(project_id) DO UPDATE SET last_accessed_at = strftime('%s', 'now'), access_count = access_count + 1",
@@ -36,7 +29,7 @@ pub fn record_project_access(project_id: String) -> Result<(), String> {
 /// 获取最近访问的项目
 #[tauri::command]
 pub fn get_recent_projects(limit: i32) -> Result<Vec<String>, String> {
-    let conn = get_db_connection().map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
 
     let mut stmt = conn
         .prepare(
@@ -56,7 +49,7 @@ pub fn get_recent_projects(limit: i32) -> Result<Vec<String>, String> {
 /// 删除项目访问记录
 #[tauri::command]
 pub fn delete_project_access_log(project_id: String) -> Result<(), String> {
-    let conn = get_db_connection().map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
 
     conn.execute(
         "DELETE FROM project_access_log WHERE project_id = ?1",

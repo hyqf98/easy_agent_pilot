@@ -1422,6 +1422,78 @@ pub fn sync_all_opencode_models(
     list_models_for_agent(&conn, &input.agent_id)
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncConfiguredOpencodeModelsInput {
+    pub agent_id: String,
+    pub providers: Vec<ConfiguredProviderInput>,
+    pub context_windows: Option<HashMap<String, i32>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfiguredProviderInput {
+    pub provider: String,
+    pub models: Vec<String>,
+    pub default_model: Option<String>,
+}
+
+#[tauri::command]
+pub fn sync_configured_opencode_models(
+    input: SyncConfiguredOpencodeModelsInput,
+) -> Result<Vec<AgentModelConfig>, String> {
+    let mut conn = open_conn()?;
+    let now = now_rfc3339();
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+    tx.execute(
+        "DELETE FROM agent_models WHERE agent_id = ?1 AND model_id != ''",
+        [&input.agent_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    let mut sort_index = 1;
+
+    for provider in &input.providers {
+        if provider.models.is_empty() {
+            continue;
+        }
+
+        for model_name in &provider.models {
+            let full_model_id = format!("{}/{}", provider.provider, model_name);
+            let id = uuid::Uuid::new_v4().to_string();
+            let is_default = provider.default_model.as_deref() == Some(model_name.as_str());
+            let context_window = resolve_context_window_from_map(
+                &full_model_id,
+                input.context_windows.as_ref(),
+            );
+
+            tx.execute(
+                "INSERT INTO agent_models (id, agent_id, model_id, display_name, is_builtin, is_default, sort_order, enabled, context_window, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, 1, ?7, ?8, ?9)",
+                rusqlite::params![
+                    &id,
+                    &input.agent_id,
+                    &full_model_id,
+                    &full_model_id,
+                    is_default as i32,
+                    sort_index,
+                    context_window,
+                    &now,
+                    &now
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+
+            sort_index += 1;
+        }
+    }
+
+    tx.commit().map_err(|e| e.to_string())?;
+
+    list_models_for_agent(&conn, &input.agent_id)
+}
+
 #[tauri::command]
 pub fn list_opencode_provider_models() -> Result<Vec<OpencodeProviderModels>, String> {
     let output = crate::commands::cli_support::run_cli_command(
@@ -1476,7 +1548,7 @@ fn format_opencode_provider_display_name(id: &str) -> String {
         "ai", "api", "sdk", "llm", "cpu", "gpu", "db", "io", "url", "gpt",
     ];
 
-    id.split(|c: char| c == '-' || c == '.')
+    id.split(|c: char| c == '-')
         .filter(|word| *word != "plan")
         .map(|word| {
             if upper_words.contains(&word.to_lowercase().as_str()) {

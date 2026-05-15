@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use super::support::{now_rfc3339, open_db_connection, open_db_connection_with_foreign_keys};
+use super::support::{now_rfc3339, open_db_connection};
 
 /// 计划数据结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -309,7 +309,7 @@ pub fn get_plan(id: String) -> Result<Plan, String> {
 /// 创建新计划
 #[tauri::command]
 pub fn create_plan(input: CreatePlanInput) -> Result<Plan, String> {
-    let mut conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let mut conn = open_db_connection().map_err(|e| e.to_string())?;
 
     let id = uuid::Uuid::new_v4().to_string();
     let now = now_rfc3339();
@@ -398,7 +398,7 @@ pub fn create_plan(input: CreatePlanInput) -> Result<Plan, String> {
 /// 更新计划
 #[tauri::command]
 pub fn update_plan(id: String, input: UpdatePlanInput) -> Result<Plan, String> {
-    let conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
     let now = now_rfc3339();
 
     let mut updates: Vec<String> = vec!["updated_at = ?1".to_string()];
@@ -607,7 +607,7 @@ pub fn update_plan(id: String, input: UpdatePlanInput) -> Result<Plan, String> {
 /// 删除计划
 #[tauri::command]
 pub fn delete_plan(id: String) -> Result<(), String> {
-    let mut conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let mut conn = open_db_connection().map_err(|e| e.to_string())?;
     let task_ids = collect_plan_task_ids(&conn, &id)?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
 

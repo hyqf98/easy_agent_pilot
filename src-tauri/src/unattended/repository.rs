@@ -2,7 +2,7 @@ use anyhow::Result;
 use rusqlite::{params, OptionalExtension};
 
 use crate::commands::support::{
-    now_rfc3339, open_db_connection, open_db_connection_with_foreign_keys,
+    now_rfc3339, open_db_connection,
 };
 
 use super::constants::{
@@ -126,7 +126,7 @@ pub fn list_channels() -> Result<Vec<UnattendedChannel>, String> {
 
 /// 创建无人值守渠道配置。
 pub fn create_channel(input: CreateUnattendedChannelInput) -> Result<UnattendedChannel, String> {
-    let conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
     let id = uuid::Uuid::new_v4().to_string();
     let now = now_rfc3339();
     let enabled = input.enabled.unwrap_or(true);
@@ -165,7 +165,7 @@ pub fn update_channel(
     id: String,
     input: UpdateUnattendedChannelInput,
 ) -> Result<UnattendedChannel, String> {
-    let conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
     let current = get_channel(&id)?;
     let now = now_rfc3339();
     let next_default_project_id = if input.default_project_id.is_some() {
@@ -214,7 +214,7 @@ pub fn update_channel(
 
 /// 删除无人值守渠道配置。
 pub fn delete_channel(id: String) -> Result<(), String> {
-    let conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM unattended_channels WHERE id = ?1", [&id])
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -279,7 +279,7 @@ pub fn upsert_weixin_account(
     channel_id: &str,
     login_status: &WeixinLoginStatus,
 ) -> Result<UnattendedChannelAccount, String> {
-    let mut conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let mut conn = open_db_connection().map_err(|e| e.to_string())?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     let now = now_rfc3339();
 
@@ -345,7 +345,7 @@ pub fn upsert_weixin_account(
 
 /// 删除无人值守账号。
 pub fn delete_account(account_row_id: &str) -> Result<(), String> {
-    let conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
     conn.execute(
         "DELETE FROM unattended_channel_accounts WHERE id = ?1",
         [account_row_id],
@@ -410,7 +410,7 @@ pub fn upsert_thread(
     peer_name_snapshot: Option<&str>,
     context_token: Option<&str>,
 ) -> Result<UnattendedThread, String> {
-    let mut conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let mut conn = open_db_connection().map_err(|e| e.to_string())?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     let now = now_rfc3339();
 
@@ -516,7 +516,7 @@ pub fn update_thread_context(
     thread_id: &str,
     input: UpdateUnattendedThreadContextInput,
 ) -> Result<UnattendedThread, String> {
-    let conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
     conn.execute(
         "UPDATE unattended_threads
          SET session_id = COALESCE(?1, session_id),
@@ -561,7 +561,7 @@ pub fn get_thread(thread_id: &str) -> Result<UnattendedThread, String> {
 
 /// 记录无人值守审计事件。
 pub fn record_event(input: RecordUnattendedEventInput) -> Result<UnattendedEventRecord, String> {
-    let conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
     let id = uuid::Uuid::new_v4().to_string();
     let now = now_rfc3339();
     let status = input.status.unwrap_or_else(|| "success".to_string());

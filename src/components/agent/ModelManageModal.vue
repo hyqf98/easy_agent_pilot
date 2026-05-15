@@ -8,6 +8,7 @@ import { useAgentStore } from '@/stores/agent'
 import { EaButton, EaIcon } from '@/components/common'
 import { formatContextWindowCount } from '@/utils/contextWindow'
 import ModelEditModal from './ModelEditModal.vue'
+import OpenCodeModelAddModal from './OpenCodeModelAddModal.vue'
 
 const agentConfigStore = useAgentConfigStore()
 const agentStore = useAgentStore()
@@ -70,7 +71,7 @@ const providerGroups = computed<ProviderGroup[]>(() => {
 const formatProviderName = (provider: string): string => {
   if (!provider) return ''
   return provider
-    .split(/[-.]/)
+    .split(/[-]/)
     .filter(w => w !== 'plan')
     .map(w => {
       const upper = ['ai', 'api', 'sdk', 'llm', 'cpu', 'gpu', 'db', 'io', 'url', 'gpt']
@@ -93,11 +94,12 @@ const displayModelName = (model: AgentModelConfig): string => {
 
 const syncButtonLabel = computed(() => {
   if (isSyncing.value) return '正在同步...'
-  return isOpenCodeAgent.value ? '从 CLI 同步模型' : '同步最新模型'
+  return isOpenCodeAgent.value ? '同步已配置模型' : '同步最新模型'
 })
 
 const showEditModal = ref(false)
 const editingModel = ref<AgentModelConfig | null>(null)
+const showOpenCodeAddModal = ref(false)
 
 const initBuiltinModelsIfNeeded = async () => {
   const provider = currentAgent.value?.provider || 'claude'
@@ -125,8 +127,12 @@ watch(() => props.agentId, async (newAgentId) => {
 })
 
 const handleAdd = () => {
-  editingModel.value = null
-  showEditModal.value = true
+  if (isOpenCodeAgent.value) {
+    showOpenCodeAddModal.value = true
+  } else {
+    editingModel.value = null
+    showEditModal.value = true
+  }
 }
 
 const handleEdit = (model: AgentModelConfig) => {
@@ -162,7 +168,7 @@ const handleSyncRemoteModels = async () => {
   syncResult.value = null
   try {
     if (isOpenCodeAgent.value) {
-      await agentConfigStore.syncOpencodeModels(props.agentId)
+      await agentConfigStore.syncConfiguredOpencodeModels(props.agentId)
     } else {
       const provider = currentAgent.value?.provider || 'claude'
       await agentConfigStore.syncRemoteModels(props.agentId, provider)
@@ -194,6 +200,11 @@ const handleSyncRemoteModels = async () => {
 const handleEditComplete = async () => {
   showEditModal.value = false
   editingModel.value = null
+  await agentConfigStore.loadModelsConfigs(props.agentId)
+}
+
+const handleOpenCodeAddComplete = async () => {
+  showOpenCodeAddModal.value = false
   await agentConfigStore.loadModelsConfigs(props.agentId)
 }
 
@@ -451,6 +462,13 @@ const handleClose = () => {
       :provider="currentAgent?.provider || 'claude'"
       :model="editingModel"
       @close="handleEditComplete"
+    />
+
+    <!-- OpenCode 添加模型弹窗 -->
+    <OpenCodeModelAddModal
+      v-if="showOpenCodeAddModal"
+      :agent-id="agentId"
+      @close="handleOpenCodeAddComplete"
     />
   </div>
 </template>

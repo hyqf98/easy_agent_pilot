@@ -4,12 +4,6 @@ export interface SoloAgentOption {
   description?: string
 }
 
-export interface SoloModelOption {
-  label: string
-  value: string
-  isDefault: boolean
-}
-
 export type SoloRunFormMode = 'create' | 'edit'
 
 export interface SoloCreateFormState {
@@ -22,5 +16,4 @@ export interface SoloCreateFormState {
   maxDispatchDepth: number
   participantExpertIds: string[]
   coordinatorExpertId: string | null
-  coordinatorModelId: string
 }

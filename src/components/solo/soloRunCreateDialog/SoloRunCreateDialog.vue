@@ -129,42 +129,16 @@ const isEditMode = computed(() => props.mode === 'edit')
             </div>
           </div>
 
-          <div class="solo-create-dialog__grid">
-            <div class="solo-create-dialog__field">
-              <label>统一调度模型</label>
-              <select
-                class="solo-create-dialog__select"
-                :value="form.coordinatorModelId"
-                :disabled="modelOptions.length === 0"
-                @change="updateField('coordinatorModelId', ($event.target as HTMLSelectElement).value)"
-              >
-                <option
-                  v-if="modelOptions.length === 0"
-                  value=""
-                >
-                  使用运行时默认模型
-                </option>
-                <option
-                  v-for="option in modelOptions"
-                  :key="option.value"
-                  :value="option.value"
-                >
-                  {{ option.label }}
-                </option>
-              </select>
-            </div>
-
-            <div class="solo-create-dialog__field">
-              <label>最大调度层数</label>
-              <input
-                :value="form.maxDispatchDepth"
-                class="solo-create-dialog__number-input"
-                type="number"
-                min="1"
-                max="100"
-                @input="updateField('maxDispatchDepth', Number(($event.target as HTMLInputElement).value || 1))"
-              >
-            </div>
+          <div class="solo-create-dialog__field">
+            <label>最大调度层数</label>
+            <input
+              :value="form.maxDispatchDepth"
+              class="solo-create-dialog__number-input"
+              type="number"
+              min="1"
+              max="100"
+              @input="updateField('maxDispatchDepth', Number(($event.target as HTMLInputElement).value || 1))"
+            >
           </div>
 
           <div class="solo-create-dialog__field">

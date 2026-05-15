@@ -50,6 +50,8 @@ use std::sync::Mutex;
 
 static CUSTOM_PERSISTENCE_PATH: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
 
+const PERSISTENCE_SUB_DIRS: &[&str] = &["data", "logs", "cache", "tools", "data/session-uploads"];
+
 /// 获取开发模式下默认的持久化路径（当前项目下的 data 目录）
 #[cfg(debug_assertions)]
 fn get_dev_default_persistence_path() -> Option<PathBuf> {
@@ -65,9 +67,10 @@ fn get_prod_default_persistence_path() -> Result<PathBuf> {
 
 /// 获取持久化目录路径
 pub fn get_persistence_dir_path() -> Result<PathBuf> {
-    let custom = CUSTOM_PERSISTENCE_PATH
-        .lock()
-        .expect("persistence path poisoned");
+    let custom = CUSTOM_PERSISTENCE_PATH.lock().unwrap_or_else(|e| {
+        eprintln!("persistence path mutex poisoned, recovering: {}", e);
+        e.into_inner()
+    });
     if let Some(ref path) = *custom {
         return Ok(path.clone());
     }
@@ -85,9 +88,10 @@ pub fn get_persistence_dir_path() -> Result<PathBuf> {
 
 /// 设置自定义持久化路径（仅在运行时切换）
 pub fn set_persistence_dir_path(path: &PathBuf) {
-    let mut custom = CUSTOM_PERSISTENCE_PATH
-        .lock()
-        .expect("persistence path poisoned");
+    let mut custom = CUSTOM_PERSISTENCE_PATH.lock().unwrap_or_else(|e| {
+        eprintln!("persistence path mutex poisoned, recovering: {}", e);
+        e.into_inner()
+    });
     *custom = Some(path.clone());
 }
 
@@ -97,7 +101,7 @@ pub fn init_persistence_dirs() -> Result<()> {
 
     fs::create_dir_all(&base_dir)?;
 
-    let sub_dirs = ["data", "logs", "cache", "data/session-uploads"];
+    let sub_dirs = PERSISTENCE_SUB_DIRS;
     for dir in sub_dirs {
         fs::create_dir_all(base_dir.join(dir))?;
     }
@@ -132,6 +136,7 @@ pub fn check_database_exists() -> Result<bool, String> {
 }
 
 #[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PersistenceMigrationResult {
     pub success: bool,
     pub old_path: String,
@@ -161,8 +166,7 @@ pub fn migrate_persistence_path(new_path: String) -> Result<PersistenceMigration
         });
     }
 
-    let sub_dirs = ["data", "logs", "cache", "tools", "data/session-uploads"];
-    for dir in sub_dirs {
+    for dir in PERSISTENCE_SUB_DIRS {
         let target = new_dir.join(dir);
         if !target.exists() {
             fs::create_dir_all(&target).map_err(|e| format!("创建子目录 {} 失败: {}", dir, e))?;

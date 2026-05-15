@@ -3,6 +3,79 @@ use rusqlite::{CachedStatement, Connection, ToSql};
 use std::path::PathBuf;
 use std::time::Duration;
 
+pub const RAW_MEMORY_FTS_TABLE_SQL: &str = r#"
+    CREATE VIRTUAL TABLE IF NOT EXISTS raw_memory_records_fts USING fts5(
+        content,
+        tokenize = 'trigram',
+        content = 'raw_memory_records',
+        content_rowid = 'rowid'
+    );
+"#;
+
+pub const MEMORY_CHUNKS_FTS_TABLE_SQL: &str = r#"
+    CREATE VIRTUAL TABLE IF NOT EXISTS memory_library_chunks_fts USING fts5(
+        chunk_text,
+        tokenize = 'trigram',
+        content = 'memory_library_chunks',
+        content_rowid = 'rowid'
+    );
+"#;
+
+pub const MEMORY_SEARCH_TRIGGERS_SQL: &[&str] = &[
+    r#"
+    CREATE TRIGGER IF NOT EXISTS raw_memory_records_ai
+    AFTER INSERT ON raw_memory_records
+    BEGIN
+        INSERT INTO raw_memory_records_fts(rowid, content)
+        VALUES (new.rowid, new.content);
+    END;
+    "#,
+    r#"
+    CREATE TRIGGER IF NOT EXISTS raw_memory_records_ad
+    AFTER DELETE ON raw_memory_records
+    BEGIN
+        INSERT INTO raw_memory_records_fts(raw_memory_records_fts, rowid, content)
+        VALUES ('delete', old.rowid, old.content);
+    END;
+    "#,
+    r#"
+    CREATE TRIGGER IF NOT EXISTS raw_memory_records_au
+    AFTER UPDATE ON raw_memory_records
+    BEGIN
+        INSERT INTO raw_memory_records_fts(raw_memory_records_fts, rowid, content)
+        VALUES ('delete', old.rowid, old.content);
+        INSERT INTO raw_memory_records_fts(rowid, content)
+        VALUES (new.rowid, new.content);
+    END;
+    "#,
+    r#"
+    CREATE TRIGGER IF NOT EXISTS memory_library_chunks_ai
+    AFTER INSERT ON memory_library_chunks
+    BEGIN
+        INSERT INTO memory_library_chunks_fts(rowid, chunk_text)
+        VALUES (new.rowid, new.chunk_text);
+    END;
+    "#,
+    r#"
+    CREATE TRIGGER IF NOT EXISTS memory_library_chunks_ad
+    AFTER DELETE ON memory_library_chunks
+    BEGIN
+        INSERT INTO memory_library_chunks_fts(memory_library_chunks_fts, rowid, chunk_text)
+        VALUES ('delete', old.rowid, old.chunk_text);
+    END;
+    "#,
+    r#"
+    CREATE TRIGGER IF NOT EXISTS memory_library_chunks_au
+    AFTER UPDATE ON memory_library_chunks
+    BEGIN
+        INSERT INTO memory_library_chunks_fts(memory_library_chunks_fts, rowid, chunk_text)
+        VALUES ('delete', old.rowid, old.chunk_text);
+        INSERT INTO memory_library_chunks_fts(rowid, chunk_text)
+        VALUES (new.rowid, new.chunk_text);
+    END;
+    "#,
+];
+
 pub fn get_db_path() -> Result<PathBuf> {
     let persistence_dir = super::get_persistence_dir_path()?;
     Ok(persistence_dir.join("data").join("easy-agent.db"))
@@ -12,15 +85,7 @@ pub fn open_db_connection() -> Result<Connection> {
     let db_path = get_db_path()?;
     let conn = Connection::open(&db_path)?;
     conn.busy_timeout(Duration::from_secs(5))?;
-    // WAL 模式允许并发读写，避免 "database is locked" 错误
-    // execute_batch 不处理返回值，适合 PRAGMA journal_mode（该语句会返回结果行，execute 会报错）
     conn.execute_batch("PRAGMA journal_mode = WAL")?;
-    conn.execute("PRAGMA foreign_keys = ON", [])?;
-    Ok(conn)
-}
-
-pub fn open_db_connection_with_foreign_keys() -> Result<Connection> {
-    let conn = open_db_connection()?;
     conn.execute("PRAGMA foreign_keys = ON", [])?;
     Ok(conn)
 }
@@ -57,39 +122,13 @@ pub fn repair_memory_search_indexes(conn: &Connection) -> Result<()> {
     )?;
 
     if raw_memory_exists {
-        conn.execute_batch(
-            r#"
-            CREATE VIRTUAL TABLE IF NOT EXISTS raw_memory_records_fts USING fts5(
-                content,
-                tokenize = 'trigram',
-                content = 'raw_memory_records',
-                content_rowid = 'rowid'
-            );
-
-            CREATE TRIGGER IF NOT EXISTS raw_memory_records_ai
-            AFTER INSERT ON raw_memory_records
-            BEGIN
-                INSERT INTO raw_memory_records_fts(rowid, content)
-                VALUES (new.rowid, new.content);
-            END;
-
-            CREATE TRIGGER IF NOT EXISTS raw_memory_records_ad
-            AFTER DELETE ON raw_memory_records
-            BEGIN
-                INSERT INTO raw_memory_records_fts(raw_memory_records_fts, rowid, content)
-                VALUES ('delete', old.rowid, old.content);
-            END;
-
-            CREATE TRIGGER IF NOT EXISTS raw_memory_records_au
-            AFTER UPDATE ON raw_memory_records
-            BEGIN
-                INSERT INTO raw_memory_records_fts(raw_memory_records_fts, rowid, content)
-                VALUES ('delete', old.rowid, old.content);
-                INSERT INTO raw_memory_records_fts(rowid, content)
-                VALUES (new.rowid, new.content);
-            END;
-            "#,
-        )?;
+        conn.execute_batch(&format!(
+            "{}\n{}\n{}\n{}",
+            RAW_MEMORY_FTS_TABLE_SQL,
+            MEMORY_SEARCH_TRIGGERS_SQL[0],
+            MEMORY_SEARCH_TRIGGERS_SQL[1],
+            MEMORY_SEARCH_TRIGGERS_SQL[2],
+        ))?;
         conn.execute_batch("REINDEX raw_memory_records;")?;
         conn.execute(
             "INSERT INTO raw_memory_records_fts(raw_memory_records_fts) VALUES('rebuild')",
@@ -98,39 +137,13 @@ pub fn repair_memory_search_indexes(conn: &Connection) -> Result<()> {
     }
 
     if memory_chunks_exists {
-        conn.execute_batch(
-            r#"
-            CREATE VIRTUAL TABLE IF NOT EXISTS memory_library_chunks_fts USING fts5(
-                chunk_text,
-                tokenize = 'trigram',
-                content = 'memory_library_chunks',
-                content_rowid = 'rowid'
-            );
-
-            CREATE TRIGGER IF NOT EXISTS memory_library_chunks_ai
-            AFTER INSERT ON memory_library_chunks
-            BEGIN
-                INSERT INTO memory_library_chunks_fts(rowid, chunk_text)
-                VALUES (new.rowid, new.chunk_text);
-            END;
-
-            CREATE TRIGGER IF NOT EXISTS memory_library_chunks_ad
-            AFTER DELETE ON memory_library_chunks
-            BEGIN
-                INSERT INTO memory_library_chunks_fts(memory_library_chunks_fts, rowid, chunk_text)
-                VALUES ('delete', old.rowid, old.chunk_text);
-            END;
-
-            CREATE TRIGGER IF NOT EXISTS memory_library_chunks_au
-            AFTER UPDATE ON memory_library_chunks
-            BEGIN
-                INSERT INTO memory_library_chunks_fts(memory_library_chunks_fts, rowid, chunk_text)
-                VALUES ('delete', old.rowid, old.chunk_text);
-                INSERT INTO memory_library_chunks_fts(rowid, chunk_text)
-                VALUES (new.rowid, new.chunk_text);
-            END;
-            "#,
-        )?;
+        conn.execute_batch(&format!(
+            "{}\n{}\n{}\n{}",
+            MEMORY_CHUNKS_FTS_TABLE_SQL,
+            MEMORY_SEARCH_TRIGGERS_SQL[3],
+            MEMORY_SEARCH_TRIGGERS_SQL[4],
+            MEMORY_SEARCH_TRIGGERS_SQL[5],
+        ))?;
         conn.execute_batch("REINDEX memory_library_chunks;")?;
         conn.execute(
             "INSERT INTO memory_library_chunks_fts(memory_library_chunks_fts) VALUES('rebuild')",

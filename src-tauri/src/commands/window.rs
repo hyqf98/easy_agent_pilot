@@ -1,19 +1,12 @@
 use anyhow::Result;
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
-use crate::commands::get_persistence_dir_path;
-
-/// 获取数据库连接
-fn get_db_connection() -> Result<Connection> {
-    let persistence_dir = get_persistence_dir_path()?;
-    Ok(Connection::open(
-        persistence_dir.join("data").join("easy-agent.db"),
-    )?)
-}
+use super::support::open_db_connection;
 /// 窗口上下文信息
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WindowContext {
     pub label: String,
     pub project_id: Option<String>,
@@ -25,7 +18,8 @@ pub async fn open_project_in_new_window(
     app: AppHandle,
     project_id: String,
 ) -> Result<String, String> {
-    let window_label = format!("project-{}", &project_id[..8]);
+    let short_id = if project_id.len() > 8 { &project_id[..8] } else { &project_id };
+    let window_label = format!("project-{}", short_id);
     // 检查窗口是否已存在
     if app.get_webview_window(&window_label).is_some() {
         // 聚焦已存在的窗口
@@ -74,7 +68,7 @@ pub fn get_window_context(window: tauri::Window) -> WindowContext {
 /// 锁定会话到窗口
 #[tauri::command]
 pub fn lock_session(session_id: String, window_label: String) -> Result<(), String> {
-    let conn = get_db_connection().map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT OR REPLACE INTO window_session_locks (session_id, window_label, locked_at) VALUES (?1, ?2, strftime('%s', 'now'))",
         [&session_id, &window_label],
@@ -85,7 +79,7 @@ pub fn lock_session(session_id: String, window_label: String) -> Result<(), Stri
 /// 释放会话锁定
 #[tauri::command]
 pub fn release_session(session_id: String) -> Result<(), String> {
-    let conn = get_db_connection().map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
     conn.execute(
         "DELETE FROM window_session_locks WHERE session_id = ?1",
         [&session_id],
@@ -96,7 +90,7 @@ pub fn release_session(session_id: String) -> Result<(), String> {
 /// 检查会话是否被锁定
 #[tauri::command]
 pub fn is_session_locked(session_id: String) -> Result<Option<String>, String> {
-    let conn = get_db_connection().map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare("SELECT window_label FROM window_session_locks WHERE session_id = ?1")
         .map_err(|e| e.to_string())?;
@@ -109,7 +103,7 @@ pub fn is_session_locked(session_id: String) -> Result<Option<String>, String> {
 /// 释放窗口的所有会话锁定
 #[tauri::command]
 pub fn release_window_sessions(window_label: String) -> Result<(), String> {
-    let conn = get_db_connection().map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
     conn.execute(
         "DELETE FROM window_session_locks WHERE window_label = ?1",
         [&window_label],

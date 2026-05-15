@@ -21,6 +21,7 @@ use super::mcp_shared::{
     build_stdio_command, ensure_mcp_servers_object, format_call_tool_result, parse_args_string,
     read_json_config_or_default, write_json_config_pretty,
 };
+use super::support::open_db_connection;
 
 /// MCP 服务器配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,13 +85,6 @@ pub struct UpdateMcpServerInput {
     pub url: Option<String>,
     pub headers: Option<String>,
     pub enabled: bool,
-}
-
-/// 获取数据库连接
-fn get_db_connection() -> Result<Connection, String> {
-    let persistence_dir = crate::commands::get_persistence_dir_path().map_err(|e| e.to_string())?;
-    let db_path = persistence_dir.join("data").join("easy-agent.db");
-    Connection::open(&db_path).map_err(|e| e.to_string())
 }
 
 /// 获取 MCP 配置文件路径
@@ -184,7 +178,7 @@ fn remove_mcp_from_config_file(server_type: &str, server_name: &str) -> Result<(
 /// 获取所有 MCP 服务器配置 (Tauri 命令)
 #[tauri::command]
 pub fn list_mcp_servers() -> Result<Vec<McpServer>, String> {
-    let conn = get_db_connection()?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
 
     let mut stmt = conn
         .prepare(
@@ -293,7 +287,7 @@ fn validate_server_input(
 }
 
 fn load_runtime_server_config(id: &str) -> Result<StoredServerRuntime, String> {
-    let conn = get_db_connection()?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
             "SELECT name, server_type, command, args, env, url, headers FROM mcp_servers WHERE id = ?1",
@@ -350,7 +344,7 @@ fn map_rmcp_tools(tools: Vec<rmcp::model::Tool>) -> Vec<McpTool> {
 /// 添加 MCP 服务器配置 (Tauri 命令)
 #[tauri::command]
 pub fn add_mcp_server(input: CreateMcpServerInput) -> Result<McpServer, String> {
-    let conn = get_db_connection()?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
     let server_type = validate_server_input(
         &input.name,
         &input.server_type,
@@ -402,7 +396,7 @@ pub fn add_mcp_server(input: CreateMcpServerInput) -> Result<McpServer, String> 
 /// 更新 MCP 服务器配置 (Tauri 命令)
 #[tauri::command]
 pub fn update_mcp_server(input: UpdateMcpServerInput) -> Result<McpServer, String> {
-    let conn = get_db_connection()?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
     let server_type = validate_server_input(
         &input.name,
         &input.server_type,
@@ -468,7 +462,7 @@ pub fn update_mcp_server(input: UpdateMcpServerInput) -> Result<McpServer, Strin
 /// 删除 MCP 服务器配置 (Tauri 命令)
 #[tauri::command]
 pub fn delete_mcp_server(id: String) -> Result<(), String> {
-    let conn = get_db_connection()?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
 
     // 先获取服务器信息，以便删除配置文件
     let server: Option<(String, String)> = conn
@@ -494,7 +488,7 @@ pub fn delete_mcp_server(id: String) -> Result<(), String> {
 /// 切换 MCP 服务器启用状态 (Tauri 命令)
 #[tauri::command]
 pub fn toggle_mcp_server(id: String, enabled: bool) -> Result<(), String> {
-    let conn = get_db_connection()?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
     let now = Utc::now().to_rfc3339();
     let enabled_int = if enabled { 1 } else { 0 };
 
@@ -527,7 +521,7 @@ pub async fn test_mcp_connection(id: String) -> Result<McpTestResult, String> {
     };
 
     // 重新获取连接来更新数据库
-    let conn = get_db_connection()?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
     conn.execute(
         "UPDATE mcp_servers SET test_status = ?1, test_message = ?2, tool_count = ?3, tested_at = ?4 WHERE id = ?5",
         params![status, test_result.message.clone(), test_result.tool_count, now, id],

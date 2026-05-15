@@ -1,6 +1,10 @@
 use anyhow::Result;
 use rusqlite::Connection;
 
+use crate::commands::support::{
+    MEMORY_CHUNKS_FTS_TABLE_SQL, MEMORY_SEARCH_TRIGGERS_SQL, RAW_MEMORY_FTS_TABLE_SQL,
+};
+
 /// 数据库初始化 SQL 脚本
 const INIT_SQL: &str = r#"
     -- 项目�?
@@ -763,7 +767,8 @@ pub fn init_database() -> Result<()> {
     let db_path = persistence_dir.join("data").join("easy-agent.db");
 
     // 确保目录存在
-    std::fs::create_dir_all(db_path.parent().unwrap())?;
+    let db_dir = db_path.parent().ok_or_else(|| anyhow::anyhow!("invalid database path: no parent directory"))?;
+    std::fs::create_dir_all(db_dir)?;
 
     println!("Database path: {:?}", db_path);
 
@@ -1541,85 +1546,15 @@ pub fn init_database() -> Result<()> {
         );
     }
 
-    let raw_memory_records_fts_sql = r#"
-        CREATE VIRTUAL TABLE IF NOT EXISTS raw_memory_records_fts USING fts5(
-            content,
-            tokenize = 'trigram',
-            content = 'raw_memory_records',
-            content_rowid = 'rowid'
-        )
-    "#;
-    if let Err(e) = conn.execute(raw_memory_records_fts_sql, []) {
+    if let Err(e) = conn.execute(RAW_MEMORY_FTS_TABLE_SQL, []) {
         println!("Raw memory FTS table migration warning: {}", e);
     }
 
-    let memory_library_chunks_fts_sql = r#"
-        CREATE VIRTUAL TABLE IF NOT EXISTS memory_library_chunks_fts USING fts5(
-            chunk_text,
-            tokenize = 'trigram',
-            content = 'memory_library_chunks',
-            content_rowid = 'rowid'
-        )
-    "#;
-    if let Err(e) = conn.execute(memory_library_chunks_fts_sql, []) {
+    if let Err(e) = conn.execute(MEMORY_CHUNKS_FTS_TABLE_SQL, []) {
         println!("Memory library chunks FTS table migration warning: {}", e);
     }
 
-    let memory_search_triggers = [
-        r#"
-        CREATE TRIGGER IF NOT EXISTS raw_memory_records_ai
-        AFTER INSERT ON raw_memory_records
-        BEGIN
-            INSERT INTO raw_memory_records_fts(rowid, content)
-            VALUES (new.rowid, new.content);
-        END;
-        "#,
-        r#"
-        CREATE TRIGGER IF NOT EXISTS raw_memory_records_ad
-        AFTER DELETE ON raw_memory_records
-        BEGIN
-            INSERT INTO raw_memory_records_fts(raw_memory_records_fts, rowid, content)
-            VALUES ('delete', old.rowid, old.content);
-        END;
-        "#,
-        r#"
-        CREATE TRIGGER IF NOT EXISTS raw_memory_records_au
-        AFTER UPDATE ON raw_memory_records
-        BEGIN
-            INSERT INTO raw_memory_records_fts(raw_memory_records_fts, rowid, content)
-            VALUES ('delete', old.rowid, old.content);
-            INSERT INTO raw_memory_records_fts(rowid, content)
-            VALUES (new.rowid, new.content);
-        END;
-        "#,
-        r#"
-        CREATE TRIGGER IF NOT EXISTS memory_library_chunks_ai
-        AFTER INSERT ON memory_library_chunks
-        BEGIN
-            INSERT INTO memory_library_chunks_fts(rowid, chunk_text)
-            VALUES (new.rowid, new.chunk_text);
-        END;
-        "#,
-        r#"
-        CREATE TRIGGER IF NOT EXISTS memory_library_chunks_ad
-        AFTER DELETE ON memory_library_chunks
-        BEGIN
-            INSERT INTO memory_library_chunks_fts(memory_library_chunks_fts, rowid, chunk_text)
-            VALUES ('delete', old.rowid, old.chunk_text);
-        END;
-        "#,
-        r#"
-        CREATE TRIGGER IF NOT EXISTS memory_library_chunks_au
-        AFTER UPDATE ON memory_library_chunks
-        BEGIN
-            INSERT INTO memory_library_chunks_fts(memory_library_chunks_fts, rowid, chunk_text)
-            VALUES ('delete', old.rowid, old.chunk_text);
-            INSERT INTO memory_library_chunks_fts(rowid, chunk_text)
-            VALUES (new.rowid, new.chunk_text);
-        END;
-        "#,
-    ];
-    for migration in memory_search_triggers {
+    for migration in MEMORY_SEARCH_TRIGGERS_SQL {
         if let Err(e) = conn.execute(migration, []) {
             println!("Memory search trigger migration warning: {}", e);
         }

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use uuid::Uuid;
 
-use super::support::{now_rfc3339, open_db_connection, open_db_connection_with_foreign_keys};
+use super::support::{now_rfc3339, open_db_connection};
 
 pub const MINI_PANEL_WINDOW_LABEL: &str = "mini-panel";
 pub const MINI_PANEL_PROJECT_ID_KEY: &str = "miniPanelProjectId";
@@ -344,7 +344,7 @@ fn ensure_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
 
 #[tauri::command]
 pub fn ensure_mini_panel_state() -> Result<MiniPanelState, String> {
-    let conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
     ensure_mini_panel_state_internal(&conn)
 }
 

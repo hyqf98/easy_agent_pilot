@@ -13,7 +13,7 @@ use std::process::Command;
 
 use super::message::remove_session_uploads;
 use super::support::{
-    now_rfc3339, open_db_connection, open_db_connection_with_foreign_keys,
+    now_rfc3339, open_db_connection,
     repair_memory_search_indexes,
 };
 
@@ -372,7 +372,7 @@ pub fn list_projects() -> Result<Vec<Project>, String> {
 /// 创建新项目
 #[tauri::command]
 pub fn create_project(input: CreateProjectInput) -> Result<Project, String> {
-    let mut conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let mut conn = open_db_connection().map_err(|e| e.to_string())?;
 
     // 解析并创建项目目录
     let resolved_path = resolve_path(&input.path)?;
@@ -422,7 +422,7 @@ pub fn create_project(input: CreateProjectInput) -> Result<Project, String> {
 /// 更新项目
 #[tauri::command]
 pub fn update_project(id: String, input: CreateProjectInput) -> Result<Project, String> {
-    let mut conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let mut conn = open_db_connection().map_err(|e| e.to_string())?;
 
     let now = now_rfc3339();
     let memory_library_ids = normalize_memory_library_ids(&input.memory_library_ids);
@@ -456,7 +456,7 @@ pub fn update_project(id: String, input: CreateProjectInput) -> Result<Project, 
 /// 删除项目（级联删除关联的会话和消息）
 #[tauri::command]
 pub fn delete_project(id: String) -> Result<(), String> {
-    let conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
     repair_memory_search_indexes(&conn).map_err(|e| format!("修复记忆搜索索引失败: {}", e))?;
 
     conn.execute("DELETE FROM projects WHERE id = ?1", [&id])
@@ -469,7 +469,7 @@ pub fn delete_project(id: String) -> Result<(), String> {
 pub fn clear_project_runtime_data(
     project_id: String,
 ) -> Result<ProjectRuntimeCleanupResult, String> {
-    let mut conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let mut conn = open_db_connection().map_err(|e| e.to_string())?;
     repair_memory_search_indexes(&conn).map_err(|e| format!("修复记忆搜索索引失败: {}", e))?;
 
     let session_ids = {

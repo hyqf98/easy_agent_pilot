@@ -4,9 +4,7 @@ use rusqlite::{params, params_from_iter, OptionalExtension, ToSql};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-use super::support::{
-    now_rfc3339, open_db_connection_with_foreign_keys, repair_memory_search_indexes,
-};
+use super::support::{now_rfc3339, open_db_connection, repair_memory_search_indexes};
 
 const REFERENCED_MEMORY_BLOCK_HEADER: &str = "[用户主动引用的历史记忆]";
 const CURRENT_INPUT_BLOCK_HEADER: &str = "[用户当前输入]";
@@ -196,10 +194,6 @@ pub struct RecordSessionMemoryReferencesInput {
     pub session_id: String,
     pub message_id: String,
     pub references: Vec<RecordSessionMemoryReferenceItem>,
-}
-
-fn get_db_connection() -> Result<rusqlite::Connection> {
-    open_db_connection_with_foreign_keys()
 }
 
 fn generate_id() -> String {
@@ -967,7 +961,7 @@ fn search_raw_memory_suggestions(
 
 #[tauri::command]
 pub fn list_memory_libraries() -> Result<Vec<MemoryLibrary>, String> {
-    let conn = get_db_connection().map_err(|error| error.to_string())?;
+    let conn = open_db_connection().map_err(|error| error.to_string())?;
     let mut stmt = conn
         .prepare(
             r#"
@@ -989,13 +983,13 @@ pub fn list_memory_libraries() -> Result<Vec<MemoryLibrary>, String> {
 
 #[tauri::command]
 pub fn get_memory_library(id: String) -> Result<MemoryLibrary, String> {
-    let conn = get_db_connection().map_err(|error| error.to_string())?;
+    let conn = open_db_connection().map_err(|error| error.to_string())?;
     get_memory_library_by_id(&conn, &id)
 }
 
 #[tauri::command]
 pub fn create_memory_library(input: CreateMemoryLibraryInput) -> Result<MemoryLibrary, String> {
-    let mut conn = get_db_connection().map_err(|error| error.to_string())?;
+    let mut conn = open_db_connection().map_err(|error| error.to_string())?;
     let now = now_rfc3339();
     let id = generate_id();
     let name = normalize_required_string(input.name, "记忆库名称")?;
@@ -1022,7 +1016,7 @@ pub fn update_memory_library(
     id: String,
     input: UpdateMemoryLibraryInput,
 ) -> Result<MemoryLibrary, String> {
-    let mut conn = get_db_connection().map_err(|error| error.to_string())?;
+    let mut conn = open_db_connection().map_err(|error| error.to_string())?;
     let existing = get_memory_library_by_id(&conn, &id)?;
     let now = now_rfc3339();
 
@@ -1056,7 +1050,7 @@ pub fn update_memory_library(
 
 #[tauri::command]
 pub fn delete_memory_library(id: String) -> Result<(), String> {
-    let mut conn = get_db_connection().map_err(|error| error.to_string())?;
+    let mut conn = open_db_connection().map_err(|error| error.to_string())?;
     let tx = conn.transaction().map_err(|error| error.to_string())?;
     tx.execute(
         "DELETE FROM memory_library_chunks WHERE library_id = ?1",
@@ -1073,7 +1067,7 @@ pub fn delete_memory_library(id: String) -> Result<(), String> {
 pub fn list_raw_memory_records(
     query: ListRawMemoryRecordsQuery,
 ) -> Result<Vec<RawMemoryRecord>, String> {
-    let conn = get_db_connection().map_err(|error| error.to_string())?;
+    let conn = open_db_connection().map_err(|error| error.to_string())?;
     let mut sql = String::from(
         r#"
         SELECT
@@ -1114,7 +1108,7 @@ pub fn list_raw_memory_records(
 pub fn create_raw_memory_record(
     input: CreateRawMemoryRecordInput,
 ) -> Result<RawMemoryRecord, String> {
-    let conn = get_db_connection().map_err(|error| error.to_string())?;
+    let conn = open_db_connection().map_err(|error| error.to_string())?;
     let now = now_rfc3339();
     let id = generate_id();
     let content = normalize_required_string(input.content, "原始记忆内容")?;
@@ -1162,7 +1156,7 @@ pub fn update_raw_memory_record(
     id: String,
     input: UpdateRawMemoryRecordInput,
 ) -> Result<RawMemoryRecord, String> {
-    let conn = get_db_connection().map_err(|error| error.to_string())?;
+    let conn = open_db_connection().map_err(|error| error.to_string())?;
     let existing = get_raw_memory_record_by_id(&conn, &id)?;
     let now = now_rfc3339();
     let content = match input.content {
@@ -1186,7 +1180,7 @@ pub fn update_raw_memory_record(
 
 #[tauri::command]
 pub fn delete_raw_memory_record(id: String) -> Result<(), String> {
-    let conn = get_db_connection().map_err(|error| error.to_string())?;
+    let conn = open_db_connection().map_err(|error| error.to_string())?;
     repair_memory_search_indexes(&conn)
         .map_err(|error| format!("修复记忆搜索索引失败: {}", error))?;
     conn.execute("DELETE FROM raw_memory_records WHERE id = ?1", [&id])
@@ -1231,7 +1225,7 @@ pub fn batch_delete_raw_memory_records(
         search: input.search,
     };
 
-    let conn = get_db_connection().map_err(|error| error.to_string())?;
+    let conn = open_db_connection().map_err(|error| error.to_string())?;
     repair_memory_search_indexes(&conn)
         .map_err(|error| format!("修复记忆搜索索引失败: {}", error))?;
     let mut sql = String::from("SELECT r.id FROM raw_memory_records r WHERE 1 = 1");
@@ -1289,7 +1283,7 @@ pub fn batch_delete_raw_memory_records(
 
 #[tauri::command]
 pub fn capture_user_message(input: CaptureUserMessageInput) -> Result<RawMemoryRecord, String> {
-    let conn = get_db_connection().map_err(|error| error.to_string())?;
+    let conn = open_db_connection().map_err(|error| error.to_string())?;
     let message_id = normalize_required_string(input.message_id, "消息 ID")?;
 
     let existing = conn
@@ -1366,7 +1360,7 @@ pub fn capture_user_message(input: CaptureUserMessageInput) -> Result<RawMemoryR
 pub fn search_memory_suggestions(
     input: SearchMemorySuggestionsInput,
 ) -> Result<SearchMemorySuggestionsResult, String> {
-    let conn = get_db_connection().map_err(|error| error.to_string())?;
+    let conn = open_db_connection().map_err(|error| error.to_string())?;
     let session_id = normalize_required_string(input.session_id, "会话 ID")?;
     let candidates = build_search_candidates(&input.draft_text);
     let match_query = match build_fts_match_query(&candidates) {
@@ -1427,7 +1421,7 @@ pub fn record_session_memory_references(
         return Ok(());
     }
 
-    let mut conn = get_db_connection().map_err(|error| error.to_string())?;
+    let mut conn = open_db_connection().map_err(|error| error.to_string())?;
     let session_id = normalize_required_string(input.session_id, "会话 ID")?;
     let message_id = normalize_required_string(input.message_id, "消息 ID")?;
     let now = now_rfc3339();
@@ -1469,7 +1463,7 @@ pub fn record_session_memory_references(
 pub fn list_memory_merge_runs(
     query: ListMemoryMergeRunsQuery,
 ) -> Result<Vec<MemoryMergeRun>, String> {
-    let conn = get_db_connection().map_err(|error| error.to_string())?;
+    let conn = open_db_connection().map_err(|error| error.to_string())?;
     let mut stmt = conn
         .prepare(
             r#"
@@ -1509,7 +1503,7 @@ pub fn merge_raw_memories_into_library(
 
     let merged_content_md =
         normalize_required_string(input.merged_content_md, "合并后的 Markdown")?;
-    let mut conn = get_db_connection().map_err(|error| error.to_string())?;
+    let mut conn = open_db_connection().map_err(|error| error.to_string())?;
     let library = get_memory_library_by_id(&conn, &input.library_id)?;
     let existing_count = count_existing_raw_records(&conn, &input.source_record_ids)?;
 
@@ -1565,7 +1559,7 @@ pub fn merge_raw_memories_into_library(
 
     tx.commit().map_err(|error| error.to_string())?;
 
-    let conn = get_db_connection().map_err(|error| error.to_string())?;
+    let conn = open_db_connection().map_err(|error| error.to_string())?;
     Ok(MergeRawMemoriesIntoLibraryResult {
         library: get_memory_library_by_id(&conn, &input.library_id)?,
         merge_run: get_memory_merge_run_by_id(&conn, &merge_run_id)?,

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use super::support::{
-    bind_value, now_rfc3339, open_db_connection, open_db_connection_with_foreign_keys,
+    bind_value, now_rfc3339, open_db_connection,
     UpdateSqlBuilder,
 };
 
@@ -961,7 +961,7 @@ pub fn reorder_tasks(input: ReorderTasksInput) -> Result<(), String> {
 /// 删除任务
 #[tauri::command]
 pub fn delete_task(id: String) -> Result<(), String> {
-    let mut conn = open_db_connection_with_foreign_keys().map_err(|e| e.to_string())?;
+    let mut conn = open_db_connection().map_err(|e| e.to_string())?;
     let deleted_task_ids = collect_task_subtree_ids(&conn, &id)?;
     if deleted_task_ids.is_empty() {
         return Ok(());

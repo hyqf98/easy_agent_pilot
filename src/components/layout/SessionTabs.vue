@@ -9,6 +9,9 @@ import { useSplitPaneStore } from '@/stores/splitPane'
 import { EaIcon } from '@/components/common'
 import { useMessage } from 'naive-ui'
 import { useSessionView } from '@/composables'
+import { useAgentStore } from '@/stores/agent'
+import { useAgentTeamsStore } from '@/stores/agentTeams'
+import { resolveExpertRuntime } from '@/services/agentTeams/runtime'
 
 const { t } = useI18n()
 const sessionStore = useSessionStore()
@@ -16,6 +19,8 @@ const projectStore = useProjectStore()
 const layoutStore = useLayoutStore()
 const windowManagerStore = useWindowManagerStore()
 const splitPaneStore = useSplitPaneStore()
+const agentStore = useAgentStore()
+const agentTeamsStore = useAgentTeamsStore()
 const message = useMessage()
 const { openSessionTarget } = useSessionView()
 
@@ -240,6 +245,23 @@ const handleGlobalKeydown = (event: KeyboardEvent) => {
   }
 }
 
+async function resolveDefaultExpertSession(projectId: string) {
+  await Promise.all([
+    agentStore.loadAgents(),
+    agentTeamsStore.loadExperts(true)
+  ])
+  const expert = agentTeamsStore.builtinGeneralExpert || agentTeamsStore.enabledExperts[0] || null
+  const runtime = resolveExpertRuntime(expert, agentStore.agents)
+  return sessionStore.createSession({
+    projectId,
+    name: '',
+    expertId: expert?.id,
+    agentId: runtime?.agent.id,
+    agentType: runtime?.agent.provider || runtime?.agent.type || 'cli',
+    status: 'idle'
+  })
+}
+
 const handleSplitPane = async (sessionId?: string) => {
   const targetId = sessionId ?? sessionStore.currentSessionId
   if (!targetId) return
@@ -248,12 +270,7 @@ const handleSplitPane = async (sessionId?: string) => {
     splitPaneStore.addPane(targetId)
   } else {
     const session = sessionStore.sessions.find(s => s.id === targetId)
-    const newSession = await sessionStore.createSession({
-      projectId: session?.projectId ?? '',
-      name: '',
-      agentType: session?.agentType ?? 'cli',
-      status: 'idle'
-    })
+    const newSession = await resolveDefaultExpertSession(session?.projectId ?? '')
     splitPaneStore.enterSplitMode(targetId, newSession.id)
   }
   splitPaneStore.focusPane(splitPaneStore.focusedPaneId!)
@@ -275,12 +292,7 @@ const handleAddPane = async () => {
   const session = sessionStore.currentSession
   if (!session) return
 
-  const newSession = await sessionStore.createSession({
-    projectId: session.projectId,
-    name: '',
-    agentType: session.agentType ?? 'cli',
-    status: 'idle'
-  })
+  const newSession = await resolveDefaultExpertSession(session.projectId)
 
   if (!splitPaneStore.isSplitActive) {
     splitPaneStore.enterSplitMode(session.id, newSession.id)

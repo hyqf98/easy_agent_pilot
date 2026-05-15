@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use super::support::{now_rfc3339, open_db_connection, open_db_connection_with_foreign_keys};
+use super::support::{now_rfc3339, open_db_connection};
 
 /// SOLO 运行主记录。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -577,7 +577,7 @@ pub fn update_solo_run(id: String, input: UpdateSoloRunInput) -> Result<SoloRun,
 /// 删除 SOLO 运行及其关联步骤、日志与运行时绑定。
 #[tauri::command]
 pub fn delete_solo_run(id: String) -> Result<(), String> {
-    let conn = open_db_connection_with_foreign_keys().map_err(|error| error.to_string())?;
+    let conn = open_db_connection().map_err(|error| error.to_string())?;
     conn.execute("DELETE FROM solo_runs WHERE id = ?1", [&id])
         .map_err(|error| error.to_string())?;
     Ok(())
@@ -849,7 +849,7 @@ pub fn list_solo_logs(run_id: String, step_id: Option<String>) -> Result<Vec<Sol
 /// 清理 SOLO 运行下的全部步骤与日志，并重置运行状态。
 #[tauri::command]
 pub fn clear_solo_run_progress(run_id: String) -> Result<(), String> {
-    let conn = open_db_connection_with_foreign_keys().map_err(|error| error.to_string())?;
+    let conn = open_db_connection().map_err(|error| error.to_string())?;
     let tx = conn
         .unchecked_transaction()
         .map_err(|error| error.to_string())?;

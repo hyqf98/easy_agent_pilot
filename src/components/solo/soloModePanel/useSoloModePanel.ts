@@ -1,16 +1,15 @@
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useConfirmDialog } from '@/composables'
-import { resolveExpertRuntime } from '@/services/agentTeams/runtime'
 import { compactSoloSummary } from '@/services/solo/prompts'
+import { resolveExpertById, resolveExpertRuntime } from '@/services/agentTeams/runtime'
 import { useAgentStore } from '@/stores/agent'
-import { useAgentConfigStore } from '@/stores/agentConfig'
 import { useAgentTeamsStore } from '@/stores/agentTeams'
 import { useProjectStore } from '@/stores/project'
 import { useSoloExecutionStore } from '@/stores/soloExecution'
 import { useSoloRunStore } from '@/stores/soloRun'
 import type { SoloRun, SoloStep } from '@/types/solo'
-import type { SoloAgentOption, SoloCreateFormState, SoloModelOption, SoloRunFormMode } from '../soloShared'
+import type { SoloAgentOption, SoloCreateFormState, SoloRunFormMode } from '../soloShared'
 
 /**
  * 管理 SOLO 面板的运行列表、创建表单和执行时间线状态。
@@ -21,13 +20,11 @@ export function useSoloModePanel() {
   const soloExecutionStore = useSoloExecutionStore()
   const agentStore = useAgentStore()
   const agentTeamsStore = useAgentTeamsStore()
-  const agentConfigStore = useAgentConfigStore()
   const confirmDialog = useConfirmDialog()
 
   const showCreateDialog = ref(false)
   const dialogMode = ref<SoloRunFormMode>('create')
   const editingRunId = ref<string | null>(null)
-  const createDialogModelOptions = ref<SoloModelOption[]>([])
   const selectedStepId = ref<string | null>(null)
   const isLogPanelOpen = ref(false)
   const logPanelWidth = ref(380)
@@ -44,8 +41,7 @@ export function useSoloModePanel() {
     memoryLibraryIds: [],
     maxDispatchDepth: 100,
     participantExpertIds: [],
-    coordinatorExpertId: null,
-    coordinatorModelId: ''
+    coordinatorExpertId: null
   })
 
   const runs = computed(() => {
@@ -64,8 +60,88 @@ export function useSoloModePanel() {
     ))
   ))
   const currentExecutionState = computed(() => currentRun.value ? soloExecutionStore.getExecutionState(currentRun.value.id) : undefined)
+  const coordinatorLogs = computed(() =>
+    (currentRunLogs.value ?? []).filter((log) => !log.stepId && log.scope !== 'step')
+  )
+  const hasCoordinatorLogs = computed(() => coordinatorLogs.value.length > 0)
+  const coordinatorLogCount = computed(() => coordinatorLogs.value.length)
+  const coordinatorModelLabel = computed(() => {
+    const state = currentExecutionState.value
+    if (state?.tokenUsage.model) return state.tokenUsage.model
+    const runtime = resolveExpertRuntime(
+      resolveExpertById(currentRun.value?.coordinatorExpertId, agentTeamsStore.experts),
+      agentStore.agents,
+      currentRun.value?.coordinatorModelId
+    )
+    return runtime?.modelId || runtime?.agent.modelId || runtime?.agent.provider || ''
+  })
+
+  const coordinatorStatusLabel = computed(() => {
+    const status = currentExecutionState.value?.status
+    if (status === 'running') {
+      const hasRunningStep = currentSteps.value.some((step) => step.status === 'running')
+      return hasRunningStep ? '等待专家' : '调度中'
+    }
+    if (status === 'completed') return '已完成'
+    if (status === 'error') return '异常'
+    if (status === 'stopped') return '已停止'
+    if (status === 'paused') return '已暂停'
+    if (status === 'blocked') return '待输入'
+    if (hasCoordinatorLogs.value) return '已调度'
+    return '空闲'
+  })
+
+  const coordinatorStatusBadge = computed(() => {
+    const status = currentExecutionState.value?.status
+    if (status === 'running') return 'solo-step-card__status--primary'
+    if (status === 'completed') return 'solo-step-card__status--success'
+    if (status === 'error') return 'solo-step-card__status--error'
+    if (status === 'stopped' || status === 'paused') return 'solo-step-card__status--gray'
+    if (status === 'blocked') return 'solo-step-card__status--warning'
+    if (hasCoordinatorLogs.value) return 'solo-step-card__status--success'
+    return 'solo-step-card__status--gray'
+  })
+
+  const coordinatorSummaryText = computed(() => {
+    const lastSystemLog = [...coordinatorLogs.value]
+      .reverse()
+      .find((log) => log.type === 'system')
+    if (lastSystemLog) {
+      return compactSoloSummary(lastSystemLog.content, '协调 AI 正在调度...')
+    }
+    return '协调 AI 的调度决策、专家选择与执行状态日志。'
+  })
+
   const currentRunLogs = computed(() => currentExecutionState.value?.logs ?? [])
-  const selectedStep = computed(() => currentSteps.value.find((step) => step.id === selectedStepId.value) || null)
+  const selectedStep = computed(() =>
+    selectedStepId.value && selectedStepId.value !== '__coordinator__'
+      ? currentSteps.value.find((step) => step.id === selectedStepId.value) || null
+      : null
+  )
+  const isCoordinatorSelected = computed(() => selectedStepId.value === '__coordinator__')
+
+  const runtimeStatusLabel = computed(() => {
+    const status = currentExecutionState.value?.status
+    if (!status || status === 'idle') return '空闲'
+
+    switch (status) {
+      case 'running': {
+        const currentStep = currentSteps.value.find((step) => step.status === 'running')
+        if (currentStep) {
+          const expert = agentTeamsStore.experts.find((item) => item.id === currentStep.selectedExpertId)
+          const expertLabel = expert?.name || currentStep.selectedExpertId || '专家'
+          return `${expertLabel} 执行中`
+        }
+        return '调度中'
+      }
+      case 'stopped': return '已停止'
+      case 'completed': return '已完成'
+      case 'error': return '执行异常'
+      case 'blocked': return '待输入'
+      case 'paused': return '已暂停'
+      default: return status
+    }
+  })
 
   const builtinExpertPool = computed(() => {
     const enabledBuiltins = agentTeamsStore.enabledExperts.filter((expert) => expert.isBuiltin)
@@ -286,74 +362,6 @@ export function useSoloModePanel() {
     return segments[segments.length - 1] || 'SOLO 项目'
   }
 
-  async function loadCoordinatorModelOptions(
-    coordinatorExpertId?: string | null,
-    preferredModelId?: string | null
-  ): Promise<SoloModelOption[]> {
-    const runtimeExpert = builtinExpertPool.value.find((expert) => expert.id === coordinatorExpertId)
-      || agentTeamsStore.getExpertById(coordinatorExpertId)
-      || agentTeamsStore.builtinSoloCoordinatorExpert
-      || agentTeamsStore.builtinPlannerExpert
-      || agentTeamsStore.builtinGeneralExpert
-      || builtinExpertPool.value[0]
-      || null
-    const runtime = resolveExpertRuntime(runtimeExpert, agentStore.agents)
-    const agent = runtime?.agent
-      || agentStore.agents.find((item) => item.type === 'cli')
-      || agentStore.agents[0]
-
-    if (!agent) {
-      return []
-    }
-
-    const configs = await agentConfigStore.ensureModelsConfigs(agent.id, agent.provider)
-    const enabledOptions = configs
-      .filter((item) => item.enabled)
-      .map((item) => ({
-        label: item.displayName,
-        value: item.modelId,
-        isDefault: item.isDefault
-      }))
-
-    if (preferredModelId?.trim() && !enabledOptions.some((item) => item.value === preferredModelId.trim())) {
-      enabledOptions.unshift({
-        label: preferredModelId.trim(),
-        value: preferredModelId.trim(),
-        isDefault: false
-      })
-    }
-
-    if (enabledOptions.length > 0) {
-      return enabledOptions
-    }
-
-    return (preferredModelId?.trim() || agent.modelId)
-      ? [{
-        label: preferredModelId?.trim() || agent.modelId || '',
-        value: preferredModelId?.trim() || agent.modelId || '',
-        isDefault: true
-      }]
-      : []
-  }
-
-  function pickDefaultModel(models: SoloModelOption[]): string {
-    return models.find((model) => model.isDefault)?.value || models[0]?.value || ''
-  }
-
-  async function syncCreateDialogModels(preferredModelId?: string | null) {
-    createDialogModelOptions.value = await loadCoordinatorModelOptions(
-      createForm.coordinatorExpertId,
-      preferredModelId ?? createForm.coordinatorModelId
-    )
-
-    const hasCurrentModel = createForm.coordinatorModelId
-      && createDialogModelOptions.value.some((model) => model.value === createForm.coordinatorModelId)
-
-    createForm.coordinatorModelId = hasCurrentModel
-      ? createForm.coordinatorModelId
-      : pickDefaultModel(createDialogModelOptions.value)
-  }
-
   function updateCreateForm(patch: Partial<SoloCreateFormState>) {
     Object.assign(createForm, patch)
   }
@@ -368,10 +376,8 @@ export function useSoloModePanel() {
       memoryLibraryIds: [],
       maxDispatchDepth: 100,
       participantExpertIds: [],
-      coordinatorExpertId: getDefaultCoordinatorExpertId(),
-      coordinatorModelId: ''
+      coordinatorExpertId: getDefaultCoordinatorExpertId()
     })
-    createDialogModelOptions.value = []
   }
 
   async function openCreateDialog() {
@@ -385,7 +391,6 @@ export function useSoloModePanel() {
     createForm.memoryLibraryIds = [...(projectStore.currentProject?.memoryLibraryIds || [])]
     createForm.participantExpertIds = getDefaultParticipantExpertIds()
     createForm.coordinatorExpertId = getDefaultCoordinatorExpertId()
-    await syncCreateDialogModels()
     dialogMode.value = 'create'
     editingRunId.value = null
     showCreateDialog.value = true
@@ -410,10 +415,8 @@ export function useSoloModePanel() {
       memoryLibraryIds: [...run.memoryLibraryIds],
       maxDispatchDepth: run.maxDispatchDepth,
       participantExpertIds: [...run.participantExpertIds],
-      coordinatorExpertId: run.coordinatorExpertId || getDefaultCoordinatorExpertId(),
-      coordinatorModelId: run.coordinatorModelId || ''
+      coordinatorExpertId: run.coordinatorExpertId || getDefaultCoordinatorExpertId()
     })
-    await syncCreateDialogModels(run.coordinatorModelId)
     dialogMode.value = 'edit'
     editingRunId.value = run.id
     showCreateDialog.value = true
@@ -456,7 +459,6 @@ export function useSoloModePanel() {
       memoryLibraryIds: [...createForm.memoryLibraryIds],
       participantExpertIds: createForm.participantExpertIds,
       coordinatorExpertId: createForm.coordinatorExpertId || undefined,
-      coordinatorModelId: createForm.coordinatorModelId || undefined,
       maxDispatchDepth: Math.max(1, Math.min(100, createForm.maxDispatchDepth))
     })
     await selectRun(run.id)
@@ -480,7 +482,6 @@ export function useSoloModePanel() {
       memoryLibraryIds: [...createForm.memoryLibraryIds],
       participantExpertIds: [...createForm.participantExpertIds],
       coordinatorExpertId: createForm.coordinatorExpertId || null,
-      coordinatorModelId: createForm.coordinatorModelId || null,
       maxDispatchDepth: Math.max(1, Math.min(100, createForm.maxDispatchDepth))
     })
 
@@ -505,6 +506,8 @@ export function useSoloModePanel() {
       return
     }
 
+    if (selectedStepId.value === '__coordinator__') return
+
     const candidateId = currentRun.value.currentStepId || currentSteps.value[currentSteps.value.length - 1]?.id || null
     if (candidateId && currentSteps.value.some((step) => step.id === candidateId)) {
       selectedStepId.value = candidateId
@@ -515,6 +518,11 @@ export function useSoloModePanel() {
   }
 
   function selectStep(stepId: string) {
+    if (selectedStepId.value === stepId && isLogPanelOpen.value) {
+      isLogPanelOpen.value = false
+      selectedStepId.value = null
+      return
+    }
     selectedStepId.value = stepId
     isLogPanelOpen.value = true
   }
@@ -557,6 +565,28 @@ export function useSoloModePanel() {
 
   async function handleStart() {
     if (!currentRun.value) return
+    await soloExecutionStore.startRun(currentRun.value.id)
+  }
+
+  async function handleRetry() {
+    if (!currentRun.value) return
+    await soloExecutionStore.startRun(currentRun.value.id)
+  }
+
+  async function handleReExecute() {
+    if (!currentRun.value) return
+    const confirmed = await confirmDialog.warning(
+      `重新执行将清除「${currentRun.value.name}」的所有步骤和日志，从头开始执行。确定继续吗？`,
+      '重新执行'
+    )
+    if (!confirmed) return
+    await soloRunStore.clearRunProgress(currentRun.value.id)
+    await Promise.all([
+      soloRunStore.getRun(currentRun.value.id),
+      soloExecutionStore.loadSteps(currentRun.value.id),
+      soloExecutionStore.loadLogs(currentRun.value.id)
+    ])
+    syncSelectedStep()
     await soloExecutionStore.startRun(currentRun.value.id)
   }
 
@@ -668,14 +698,6 @@ export function useSoloModePanel() {
     }
   )
 
-  watch(
-    () => createForm.coordinatorExpertId,
-    async (expertId, previousExpertId) => {
-      if (!showCreateDialog.value || expertId === previousExpertId) return
-      await syncCreateDialogModels()
-    }
-  )
-
   onMounted(async () => {
     document.addEventListener('mousemove', handleLogPanelResize)
     document.addEventListener('mouseup', stopLogPanelResize)
@@ -704,16 +726,16 @@ export function useSoloModePanel() {
   watch(
     () => selectedStep.value?.id ?? null,
     (stepId) => {
-      if (!stepId) {
+      if (!stepId && selectedStepId.value && selectedStepId.value !== '__coordinator__') {
         isLogPanelOpen.value = false
       }
     }
   )
 
   watch(
-    () => currentSteps.value.some((step) => step.id === selectedStepId.value),
-    (exists) => {
-      if (!exists) {
+    () => selectedStepId.value !== '__coordinator__' && !currentSteps.value.some((step) => step.id === selectedStepId.value),
+    (notFound) => {
+      if (notFound && selectedStepId.value) {
         isLogPanelOpen.value = false
       }
     }
@@ -737,9 +759,14 @@ export function useSoloModePanel() {
     canCreate,
     canEditCurrentRun,
     completedCount,
+    coordinatorLogCount,
+    coordinatorLogs,
+    coordinatorModelLabel,
+    coordinatorStatusLabel,
+    coordinatorStatusBadge,
+    coordinatorSummaryText,
     dialogMode,
     coordinatorExpertOptions,
-    createDialogModelOptions,
     createForm,
     currentExecutionState,
     currentRunDurationLabel,
@@ -750,6 +777,8 @@ export function useSoloModePanel() {
     currentRunCoordinatorLabel,
     currentRunParticipants,
     currentSteps,
+    hasCoordinatorLogs,
+    isCoordinatorSelected,
     timelineSteps,
     failedCount,
     blockedCount,
@@ -757,11 +786,14 @@ export function useSoloModePanel() {
     getStepExpertLabel,
     getStepLogCount,
     handleBrowseExecutionPath,
+    runtimeStatusLabel,
     handleDelete,
     openEditDialog,
     handlePause,
     handleReset,
+    handleReExecute,
     handleResume,
+    handleRetry,
     handleStart,
     handleStop,
     closeLogPanel,

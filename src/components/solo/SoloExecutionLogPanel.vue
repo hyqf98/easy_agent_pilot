@@ -17,6 +17,7 @@ import { resolveExpertById, resolveExpertRuntime } from '@/services/agentTeams/r
 const props = defineProps<{
   runId: string
   stepId?: string | null
+  forceCoordinatorScope?: boolean
 }>()
 
 interface SoloCliRetryState {
@@ -37,6 +38,7 @@ const run = computed(() => soloRunStore.runs.find((item) => item.id === props.ru
 const state = computed(() => soloExecutionStore.getExecutionState(props.runId))
 const allLogs = computed(() => state.value?.logs ?? [])
 const steps = computed(() => soloExecutionStore.getSteps(props.runId))
+const currentSteps = computed(() => steps.value)
 const selectedStep = computed<SoloStep | null>(() =>
   props.stepId ? steps.value.find((step) => step.id === props.stepId) || null : null
 )
@@ -44,6 +46,10 @@ const selectedStep = computed<SoloStep | null>(() =>
 const visibleLogs = computed<SoloLogEntry[]>(() => {
   if (props.stepId) {
     return allLogs.value.filter((log) => log.stepId === props.stepId)
+  }
+
+  if (props.forceCoordinatorScope) {
+    return allLogs.value.filter((log) => !log.stepId && log.scope !== 'step')
   }
 
   return allLogs.value.filter((log) => !log.stepId && log.scope !== 'step')
@@ -65,6 +71,9 @@ const currentRuntime = computed(() => {
 })
 
 const selectedExpertLabel = computed(() => {
+  if (props.forceCoordinatorScope) {
+    return coordinatorExpert.value?.name || run.value?.coordinatorExpertId || '规划智能体'
+  }
   if (selectedStep.value) {
     return selectedExpert.value?.name || selectedStep.value.selectedExpertId || '未指定'
   }
@@ -72,12 +81,43 @@ const selectedExpertLabel = computed(() => {
   return coordinatorExpert.value?.name || run.value?.coordinatorExpertId || '规划智能体'
 })
 
-const tokenUsage = computed(() => state.value?.tokenUsage ?? {
-  inputTokens: 0,
-  outputTokens: 0,
-  model: undefined,
-  resetCount: 0,
-  lastUpdatedAt: null
+const scopedTokenUsage = computed(() => {
+  let inputTokens = 0
+  let outputTokens = 0
+  let model: string | undefined
+  for (const log of visibleLogs.value) {
+    if (log.metadata) {
+      if (typeof log.metadata.inputTokens === 'number') {
+        inputTokens += log.metadata.inputTokens
+      }
+      if (typeof log.metadata.outputTokens === 'number') {
+        outputTokens += log.metadata.outputTokens
+      }
+      if (typeof log.metadata.model === 'string' && log.metadata.model.trim()) {
+        model = log.metadata.model.trim()
+      }
+    }
+  }
+  return { inputTokens, outputTokens, model }
+})
+
+const tokenUsage = computed(() => {
+  if (props.stepId || props.forceCoordinatorScope) {
+    return {
+      inputTokens: scopedTokenUsage.value.inputTokens,
+      outputTokens: scopedTokenUsage.value.outputTokens,
+      model: scopedTokenUsage.value.model,
+      resetCount: 0,
+      lastUpdatedAt: null as string | null
+    }
+  }
+  return state.value?.tokenUsage ?? {
+    inputTokens: 0,
+    outputTokens: 0,
+    model: undefined,
+    resetCount: 0,
+    lastUpdatedAt: null
+  }
 })
 
 const tokenUsageTotal = computed(() =>
@@ -89,6 +129,7 @@ const resolvedModelId = computed(() =>
   tokenUsage.value.model
   || currentRuntime.value?.modelId
   || currentRuntime.value?.agent.modelId
+  || currentRuntime.value?.agent.provider
   || run.value?.coordinatorModelId
   || ''
 )
@@ -133,6 +174,13 @@ const pendingInputVisible = computed(() => {
 })
 
 const isScopeRunning = computed(() => {
+  if (props.forceCoordinatorScope) {
+    const es = state.value?.status
+    if (es === 'running') {
+      return !currentSteps.value.some((step) => step.status === 'running')
+    }
+    return false
+  }
   if (selectedStep.value) {
     return selectedStep.value.status === 'running'
   }
@@ -140,9 +188,18 @@ const isScopeRunning = computed(() => {
   return run.value?.executionStatus === 'running'
 })
 
-const headerTitle = computed(() => selectedStep.value?.title || '协调日志流程')
-const headerMetaLabel = computed(() => selectedStep.value ? '执行节点' : '调度节点')
+const headerTitle = computed(() => {
+  if (props.forceCoordinatorScope) return '调度器执行日志'
+  return selectedStep.value?.title || '协调日志流程'
+})
+const headerMetaLabel = computed(() => {
+  if (props.forceCoordinatorScope) return '调度节点'
+  return selectedStep.value ? '执行节点' : '调度节点'
+})
 const panelSubtitle = computed(() => {
+  if (props.forceCoordinatorScope) {
+    return '展示规划智能体的调度决策、专家选择、异常与状态回写。'
+  }
   if (selectedStep.value) {
     return selectedStep.value.resultSummary
       || selectedStep.value.summary
@@ -478,7 +535,7 @@ onMounted(async () => {
 
     <section class="solo-execution-log__summary">
       <p class="solo-execution-log__summary-eyebrow">
-        {{ selectedStep ? 'Execution Summary' : 'Coordinator Summary' }}
+        {{ (selectedStep && !props.forceCoordinatorScope) ? 'Execution Summary' : 'Coordinator Summary' }}
       </p>
       <p class="solo-execution-log__summary-text">
         {{ panelSubtitle }}

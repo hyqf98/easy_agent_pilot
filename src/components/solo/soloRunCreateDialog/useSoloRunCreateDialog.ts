@@ -1,5 +1,5 @@
 import { computed, ref, watch } from 'vue'
-import type { SoloAgentOption, SoloCreateFormState, SoloModelOption, SoloRunFormMode } from '../soloShared'
+import type { SoloAgentOption, SoloCreateFormState, SoloRunFormMode } from '../soloShared'
 
 export interface SoloRunCreateDialogProps {
   visible: boolean
@@ -7,7 +7,6 @@ export interface SoloRunCreateDialogProps {
   form: SoloCreateFormState
   coordinatorOptions: SoloAgentOption[]
   expertOptions: SoloAgentOption[]
-  modelOptions: SoloModelOption[]
   canCreate: boolean
 }
 
@@ -20,9 +19,6 @@ export type SoloRunCreateDialogEmits = {
   (e: 'update:form', patch: Partial<SoloCreateFormState>): void
 }
 
-/**
- * 管理 SOLO 创建弹窗的专家勾选、字段回写和折叠展示状态。
- */
 export function useSoloRunCreateDialog(
   props: Readonly<SoloRunCreateDialogProps>,
   emit: SoloRunCreateDialogEmits

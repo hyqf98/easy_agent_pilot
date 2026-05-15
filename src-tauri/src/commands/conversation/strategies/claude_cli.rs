@@ -1158,6 +1158,10 @@ impl AgentExecutionStrategy for ClaudeCliStrategy {
                 return Ok(());
             }
             let failure_message = format!("CLI 执行失败，退出码: {:?}, {}", status.code(), summary);
+            if !(stdout_outcome.emitted_error || stderr_outcome.emitted_error) {
+                let error_event = build_error_event(&session_id, failure_message.clone());
+                emit_cli_event(&app, &event_name, plan_id.as_ref(), &error_event);
+            }
             let report = build_cli_failure_report(
                 "Claude",
                 "CLI异常退出",

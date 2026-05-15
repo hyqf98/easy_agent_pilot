@@ -13,10 +13,13 @@ const {
   completedCount,
   dialogMode,
   coordinatorExpertOptions,
-  createDialogModelOptions,
+  coordinatorLogCount,
+  coordinatorModelLabel,
+  coordinatorStatusLabel,
+  coordinatorStatusBadge,
+  coordinatorSummaryText,
   createForm,
   createRun,
-  currentExecutionState,
   currentRunDurationLabel,
   currentRunHistoryMetrics,
   currentRunHistoryRows,
@@ -25,6 +28,8 @@ const {
   currentRunCoordinatorLabel,
   currentRunParticipants,
   currentSteps,
+  hasCoordinatorLogs,
+  isCoordinatorSelected,
   timelineSteps,
   failedCount,
   blockedCount,
@@ -35,7 +40,9 @@ const {
   handleDelete,
   handlePause,
   handleReset,
+  handleReExecute,
   handleResume,
+  handleRetry,
   handleStart,
   handleStop,
   isLogPanelOpen,
@@ -88,11 +95,32 @@ const {
 
           <div class="solo-run-header__actions">
             <button
-              v-if="['draft', 'failed', 'stopped'].includes(currentRun.status)"
+              v-if="currentRun.status === 'draft'"
               class="solo-run-header__button solo-run-header__button--primary"
               @click="handleStart"
             >
               启动
+            </button>
+            <button
+              v-if="['failed', 'stopped'].includes(currentRun.status)"
+              class="solo-run-header__button solo-run-header__button--primary"
+              @click="handleRetry"
+            >
+              重试
+            </button>
+            <button
+              v-if="currentRun.status === 'failed'"
+              class="solo-run-header__button solo-run-header__button--ghost"
+              @click="handleStart"
+            >
+              启动
+            </button>
+            <button
+              v-if="currentRun.status === 'completed'"
+              class="solo-run-header__button solo-run-header__button--primary"
+              @click="handleReExecute"
+            >
+              重新执行
             </button>
             <button
               v-if="currentRun.status === 'running'"
@@ -246,19 +274,11 @@ const {
               <h3>任务过程时间线</h3>
               <p>点击任一步骤卡片，右侧会展开该步骤的执行日志流程。</p>
             </div>
-            <div class="solo-timeline__header-side">
-              <div
-                v-if="currentExecutionState?.status"
-                class="solo-timeline__runtime"
-              >
-                <span>运行态</span>
-                <strong>{{ currentExecutionState.status }}</strong>
-              </div>
-            </div>
+            <div class="solo-timeline__header-side" />
           </div>
 
           <div
-            v-if="currentSteps.length === 0"
+            v-if="currentSteps.length === 0 && !hasCoordinatorLogs"
             class="solo-timeline__empty"
           >
             <p>还没有任何步骤。</p>
@@ -269,6 +289,38 @@ const {
             v-else
             class="solo-timeline__track"
           >
+            <article
+              class="solo-step-card solo-step-card--coordinator"
+              :class="{ 'solo-step-card--active': selectedStepId === '__coordinator__' }"
+              @click="selectStep('__coordinator__')"
+            >
+              <div class="solo-step-card__connector" />
+              <div class="solo-step-card__marker solo-step-card__marker--coordinator" />
+              <div class="solo-step-card__surface">
+                <div class="solo-step-card__top">
+                  <div>
+                    <span class="solo-step-card__depth">调度器</span>
+                    <h4>{{ currentRunCoordinatorLabel }}</h4>
+                  </div>
+                  <span
+                    class="solo-step-card__status"
+                    :class="coordinatorStatusBadge"
+                  >
+                    {{ coordinatorStatusLabel }}
+                  </span>
+                </div>
+
+                <p class="solo-step-card__summary">
+                  {{ coordinatorSummaryText }}
+                </p>
+
+                <div class="solo-step-card__meta">
+                  <span>{{ coordinatorLogCount }} 条日志</span>
+                  <span v-if="coordinatorModelLabel">{{ coordinatorModelLabel }}</span>
+                </div>
+              </div>
+            </article>
+
             <article
               v-for="step in timelineSteps"
               :key="step.id"
@@ -368,7 +420,8 @@ const {
       </button>
       <SoloExecutionLogPanel
         :run-id="currentRun.id"
-        :step-id="selectedStep?.id ?? null"
+        :step-id="isCoordinatorSelected ? null : selectedStep?.id ?? null"
+        :force-coordinator-scope="isCoordinatorSelected"
       />
     </div>
 
@@ -378,7 +431,6 @@ const {
       :form="createForm"
       :coordinator-options="coordinatorExpertOptions"
       :expert-options="participantExpertOptions"
-      :model-options="createDialogModelOptions"
       :can-create="canCreate"
       @browse-execution-path="handleBrowseExecutionPath"
       @close="closeCreateDialog"

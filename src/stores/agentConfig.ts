@@ -154,6 +154,14 @@ interface RawAgentModelConfig {
   updated_at: string
 }
 
+export interface ConfiguredOpenCodeProvider {
+  provider: string
+  displayName: string
+  models: string[]
+  defaultModel: string | null
+  hasApiKey: boolean
+}
+
 // ============================================================================
 // 转换函数
 // ============================================================================
@@ -615,9 +623,20 @@ export const useAgentConfigStore = defineStore('agentConfig', () => {
     }
 
     const loadedConfigs = await loadModelsConfigs(agentId)
-    if (loadedConfigs.length > 0 || !provider) {
+    if (loadedConfigs.length > 0) {
       return loadedConfigs
     }
+
+    if (provider === 'opencode') {
+      try {
+        const synced = await syncConfiguredOpencodeModels(agentId)
+        if (synced.length > 0) return synced
+      } catch {
+        // fallback to initBuiltinModels
+      }
+    }
+
+    if (!provider) return loadedConfigs
 
     return initBuiltinModels(agentId, provider)
   }
@@ -834,6 +853,93 @@ export const useAgentConfigStore = defineStore('agentConfig', () => {
     }
   }
 
+  async function syncConfiguredOpencodeModels(agentId: string): Promise<AgentModelConfig[]> {
+    const notificationStore = useNotificationStore()
+    try {
+      const providers = await invoke<ConfiguredOpenCodeProvider[]>('read_configured_opencode_models')
+
+      let knownModels: RemoteModelDef[] = []
+      try {
+        const data = await loadRemoteModels()
+        knownModels = data.providers.opencode || []
+      } catch {
+        // ignore
+      }
+      const contextWindows = Object.fromEntries(
+        knownModels
+          .filter(m => typeof m.contextWindow === 'number' && m.contextWindow > 0)
+          .map(m => [m.modelId.trim().toLowerCase(), m.contextWindow as number])
+      )
+
+      type SyncInput = {
+        agentId: string
+        providers: { provider: string; models: string[]; defaultModel: string | null }[]
+        contextWindows: Record<string, number>
+      }
+
+      const rawConfigs = await invoke<RawAgentModelConfig[]>('sync_configured_opencode_models', {
+        input: {
+          agentId: agentId,
+          providers: providers.map(p => ({
+            provider: p.provider,
+            models: p.models,
+            defaultModel: p.defaultModel
+          })),
+          contextWindows: contextWindows
+        } satisfies SyncInput
+      })
+      const configs = rawConfigs.map(transformModelConfig)
+      modelConfigs.value.set(agentId, configs)
+      return configs
+    } catch (error) {
+      console.error('Failed to sync configured opencode models:', error)
+      notificationStore.databaseError(
+        '同步已配置模型失败',
+        getErrorMessage(error),
+        async () => { void await syncConfiguredOpencodeModels(agentId) }
+      )
+      throw error
+    }
+  }
+
+  async function addOpencodeModelToConfig(params: {
+    agentId: string
+    provider: string
+    modelId: string
+    displayName: string
+    contextWindow: number
+    baseUrl?: string
+    apiKey?: string
+    npm?: string
+    providerModels?: string[]
+  }): Promise<void> {
+    const notificationStore = useNotificationStore()
+    try {
+      await invoke('add_opencode_model_to_config', {
+        input: {
+          agentId: params.agentId,
+          provider: params.provider,
+          modelId: params.modelId,
+          displayName: params.displayName,
+          contextWindow: params.contextWindow,
+          baseUrl: params.baseUrl || undefined,
+          apiKey: params.apiKey || undefined,
+          npm: params.npm || undefined,
+          providerModels: params.providerModels || undefined,
+        }
+      })
+      await loadModelsConfigs(params.agentId)
+    } catch (error) {
+      console.error('Failed to add opencode model:', error)
+      notificationStore.databaseError(
+        '添加模型失败',
+        getErrorMessage(error),
+        async () => { void await addOpencodeModelToConfig(params) }
+      )
+      throw error
+    }
+  }
+
   // 加载所有配置
   async function loadAllConfigs(agentId: string) {
     await Promise.all([
@@ -884,6 +990,8 @@ export const useAgentConfigStore = defineStore('agentConfig', () => {
     initBuiltinModels,
     syncRemoteModels,
     syncOpencodeModels,
+    syncConfiguredOpencodeModels,
+    addOpencodeModelToConfig,
     updateModelConfig,
     deleteModelConfig,
     getModelsConfigs,

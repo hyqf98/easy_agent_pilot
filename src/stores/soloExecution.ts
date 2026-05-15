@@ -39,7 +39,6 @@ import {
 } from '@/services/conversation/runtimeBindings'
 import {
   buildSoloBuiltinCoordinatorPrompt,
-  buildSoloControlJsonSchema,
   buildSoloControlPrompt,
   buildSoloControlRepairPrompt,
   buildSoloCoordinatorSystemPrompt,
@@ -256,7 +255,8 @@ interface SoloResolvedRuntime {
 function buildSoloBindingKey(
   agent: Pick<AgentConfig, 'type' | 'provider' | 'name' | 'cliPath'>,
   role: SoloBindingRole,
-  expertId?: string | null
+  expertId?: string | null,
+  stepId?: string | null
 ): string | null {
   const runtimeKey = resolveRuntimeBindingKey(agent)
   if (!runtimeKey) {
@@ -265,6 +265,10 @@ function buildSoloBindingKey(
 
   if (role === 'coordinator') {
     return `${runtimeKey}::solo::coordinator`
+  }
+
+  if (stepId) {
+    return `${runtimeKey}::solo::step::${stepId}`
   }
 
   return `${runtimeKey}::solo::expert::${expertId?.trim() || 'default'}`
@@ -619,6 +623,19 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
       ...agent,
       modelId: runtime?.modelId || run.coordinatorModelId || agent.modelId
     }
+
+    console.info('[SOLO] coordinator runtime resolved', {
+      runId: run.id,
+      expertId: runtimeExpert?.id,
+      expertName: runtimeExpert?.name,
+      runtimeModelId: runtime?.modelId,
+      agentModelId: agent.modelId,
+      coordinatorModelId: run.coordinatorModelId,
+      resolvedModelId: resolvedAgent.modelId,
+      agentType: agent.type,
+      agentProvider: agent.provider
+    })
+
     const project = projectStore.projects.find((item) => item.id === run.projectId)
     const mcpServers = await loadAgentMcpServers(resolvedAgent).catch(() => [] as McpServerConfig[])
 
@@ -675,7 +692,7 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
       expertName: selectedExpert?.name || 'SOLO Expert',
       expertId: selectedExpert?.id || step.selectedExpertId,
       runtimeKey: resolveRuntimeBindingKey(agent),
-      bindingKey: buildSoloBindingKey(agent, 'expert', selectedExpert?.id || step.selectedExpertId)
+      bindingKey: buildSoloBindingKey(agent, 'expert', selectedExpert?.id || step.selectedExpertId, step.id)
     }
   }
 
@@ -768,6 +785,17 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
     if (!resumeSessionId || !isCumulativeUsageRuntime(inferAgentProvider(agent))) {
       usageBaselines.delete(run.id)
     }
+
+    console.info('[SOLO] executeTurn start', {
+      runId: run.id,
+      sessionId,
+      responseMode,
+      modelId: agent.modelId,
+      scope,
+      strategy,
+      runtimeLabel,
+      messageCount: messages.length
+    })
 
     let fullContent: string
 
@@ -870,6 +898,15 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
           }
 
           cliRetryCount += 1
+
+          console.warn('[SOLO] CLI failure retry', {
+            runId: run.id,
+            attempt: cliRetryCount,
+            maxRetries: maxCliRetries,
+            runtime: runtimeFailureLabel,
+            errorPreview: errorMessage.substring(0, 200)
+          })
+
           const metadata: ExecutionLogMetadata = {
             retryGroup: 'cli_failure_retry',
             retryCount: cliRetryCount,
@@ -1092,11 +1129,30 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
     try {
       decision = parseSoloCoordinatorDecision(content)
     } catch (error) {
+      console.warn('[SOLO] coordinator decision parse failed', {
+        runId: run.id,
+        error: error instanceof Error ? error.message : String(error),
+        contentPreview: content.substring(0, 300)
+      })
       throw new SoloRecoverableOutputError(
         error instanceof Error ? error.message : '协调 AI 返回结果无法解析',
         content
       )
     }
+
+    console.info('[SOLO] coordinator decision parsed', {
+      runId: run.id,
+      type: decision.type,
+      ...(decision.type === 'dispatch_step' ? {
+        stepRef: decision.step.stepRef,
+        title: decision.step.title,
+        depth: decision.step.depth,
+        selectedExpertId: decision.step.selectedExpertId,
+        doneWhen: decision.step.doneWhen
+      } : {}),
+      ...(decision.type === 'complete_run' ? { summary: decision.summary } : {}),
+      ...(decision.type === 'block_run' ? { reason: decision.reason } : {})
+    })
 
     if (decision.type === 'dispatch_step' && decision.step.depth > run.maxDispatchDepth) {
       throw new SoloRecoverableOutputError(
@@ -1202,8 +1258,10 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
     state.accumulatedThinking = ''
     state.currentStepId = null
     const participantExperts = resolveParticipantExperts(run)
-    const provider = inferAgentProvider(runtime.agent)
-    const useSchemaResponse = provider !== 'codex'
+    const coordinatorBinding = runtime.bindingKey
+      ? await getSoloRuntimeBinding(run.id, runtime.bindingKey).catch(() => null)
+      : null
+    const coordinatorResumeSessionId = coordinatorBinding?.externalSessionId?.trim() || undefined
     const systemPrompt = buildSoloCoordinatorSystemPrompt(
       runtime.expertPrompt,
       buildExpertCatalogPrompt(participantExperts, useAgentStore().agents)
@@ -1214,6 +1272,20 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
       inputResponse: run.inputResponse
     })
 
+    const coordinatorModelLabel = runtime.agent.modelId
+      || runtime.agent.provider
+      || runtime.agent.type
+      || '未知模型'
+    const coordinatorExpertLabel = runtime.expertName || '规划智能体'
+
+    console.info('[SOLO] executeControlTurn', {
+      runId: run.id,
+      expertLabel: coordinatorExpertLabel,
+      modelLabel: coordinatorModelLabel,
+      existingSteps: steps.length,
+      participantExpertCount: participantExperts.length
+    })
+
     return retrySoloAiOperation({
       run,
       state,
@@ -1221,6 +1293,13 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
       scope: 'coordinator',
       label: '协调回合',
       execute: async () => {
+        await addLog({
+          runId: run.id,
+          scope: 'coordinator',
+          type: 'system',
+          content: `${coordinatorExpertLabel} 正在分析当前状态并做出调度决策 (模式: 流式文本, 已有 ${steps.length} 个步骤)...`
+        })
+
         const response = await executeTurn({
           run,
           state,
@@ -1228,19 +1307,47 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
           workingDirectory: runtime.workingDirectory,
           mcpServers: undefined,
           messages: [
-            ...(mountedMemoryPrompt ? [createMessage(run.id, 'system', mountedMemoryPrompt)] : []),
-            createMessage(run.id, 'system', systemPrompt),
+            ...(!coordinatorResumeSessionId && mountedMemoryPrompt
+              ? [createMessage(run.id, 'system', mountedMemoryPrompt)]
+              : []),
+            ...(!coordinatorResumeSessionId
+              ? [createMessage(run.id, 'system', systemPrompt)]
+              : []),
             createMessage(run.id, 'user', controlPrompt)
           ],
-          responseMode: useSchemaResponse ? 'json_once' : 'stream_text',
-          jsonSchema: useSchemaResponse ? buildSoloControlJsonSchema() : undefined,
+          responseMode: 'stream_text',
+          jsonSchema: undefined,
           scope: 'coordinator',
-          strategy: 'solo_control',
+          strategy: coordinatorResumeSessionId ? 'solo_control_resume' : 'solo_control',
           runtimeLabel: inferAgentProvider(runtime.agent)?.toUpperCase() || runtime.agent.type,
           expertLabel: runtime.expertName,
-          persistContentLogs: !useSchemaResponse,
-          runtimeBindingKey: null
+          persistContentLogs: false,
+          resumeSessionId: coordinatorResumeSessionId,
+          runtimeBindingKey: runtime.bindingKey
         })
+
+        console.info('[SOLO] control turn raw output', {
+          runId: run.id,
+          responseMode: 'stream_text',
+          contentLength: response.content.length,
+          contentPreview: response.content.substring(0, 500),
+          externalSessionId: response.externalSessionId,
+          turnTokens: response.turnTokens
+        })
+
+        if (response.turnTokens.inputTokens > 0 || response.turnTokens.outputTokens > 0) {
+          await addLog({
+            runId: run.id,
+            scope: 'coordinator',
+            type: 'system',
+            content: `AI 响应已接收 · 输入 ${response.turnTokens.inputTokens} · 输出 ${response.turnTokens.outputTokens} · 正在解析决策...`,
+            metadata: {
+              model: response.turnTokens.model,
+              inputTokens: response.turnTokens.inputTokens,
+              outputTokens: response.turnTokens.outputTokens
+            }
+          })
+        }
 
         let latestContent = response.content
         let repairError: unknown = null
@@ -1270,7 +1377,6 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
               workingDirectory: runtime.workingDirectory,
               mcpServers: undefined,
               messages: [
-                ...(mountedMemoryPrompt ? [createMessage(run.id, 'system', mountedMemoryPrompt)] : []),
                 createMessage(run.id, 'system', systemPrompt),
                 createMessage(run.id, 'user', controlPrompt),
                 createMessage(run.id, 'assistant', latestContent),
@@ -1280,14 +1386,14 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
                   maxDispatchDepth: run.maxDispatchDepth
                 }))
               ],
-              responseMode: useSchemaResponse ? 'json_once' : 'stream_text',
-              jsonSchema: useSchemaResponse ? buildSoloControlJsonSchema() : undefined,
+          responseMode: 'stream_text',
+              jsonSchema: undefined,
               scope: 'coordinator',
               strategy: 'solo_control_repair',
               runtimeLabel: inferAgentProvider(runtime.agent)?.toUpperCase() || runtime.agent.type,
               expertLabel: runtime.expertName,
               persistContentLogs: false,
-              runtimeBindingKey: null
+              runtimeBindingKey: runtime.bindingKey
             })
 
             latestContent = repaired.content
@@ -1496,6 +1602,9 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
     }
 
     const parsedResult = validatedOutput.parsedResult
+    if (stepRuntime.bindingKey) {
+      await deleteSoloRuntimeBinding(run.id, stepRuntime.bindingKey).catch(() => {})
+    }
     await updateStep(step.id, {
       status: 'completed',
       summary: compactSoloSummary(parsedResult.summary),
@@ -1519,6 +1628,15 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
     const runtime = await resolveCoordinatorRuntime(run)
     const state = initExecutionState(runId)
 
+    console.info('[SOLO] runLoop start', {
+      runId,
+      status: run.status,
+      resume: Boolean(options.resume),
+      modelId: runtime.agent.modelId,
+      expertName: runtime.expertName,
+      executionPath: run.executionPath
+    })
+
     state.status = 'running'
     state.startedAt = state.startedAt || new Date().toISOString()
     state.completedAt = null
@@ -1539,6 +1657,18 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
       if (run.status === 'blocked' || run.status === 'completed' || run.status === 'failed' || run.status === 'stopped') {
         break
       }
+
+      const displayModel = runtime.agent.modelId
+        || runtime.agent.provider
+        || runtime.agent.type
+        || '未知'
+
+      await addLog({
+        runId,
+        scope: 'coordinator',
+        type: 'system',
+        content: `调度器开始决策轮次 · 专家: ${runtime.expertName || '规划智能体'} · 模型: ${displayModel}`
+      })
 
       let decision: ReturnType<typeof parseSoloCoordinatorDecision>
       try {
@@ -1567,6 +1697,7 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
       }
 
       if (decision.type === 'complete_run') {
+        console.info('[SOLO] runLoop → complete_run', { runId, summary: decision.summary, totalSteps: getSteps.value(runId).length })
         finalizeRunningToolCalls(runId)
         state.status = 'completed'
         state.completedAt = new Date().toISOString()
@@ -1575,7 +1706,7 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
           runId,
           scope: 'coordinator',
           type: 'system',
-          content: `SOLO 运行完成: ${decision.summary}`
+          content: `调度器决策: 运行完成 · ${decision.summary || '目标已达成'} · 共 ${getSteps.value(runId).length} 个步骤`
         })
         await runStore.updateRun(runId, {
           status: 'completed',
@@ -1589,6 +1720,7 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
       }
 
       if (decision.type === 'block_run') {
+        console.info('[SOLO] runLoop → block_run', { runId, reason: decision.reason })
         finalizeRunningToolCalls(runId)
         state.status = 'blocked'
         state.completedAt = new Date().toISOString()
@@ -1596,7 +1728,7 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
           runId,
           scope: 'coordinator',
           type: 'system',
-          content: `SOLO 暂停等待输入: ${decision.reason}`
+          content: `调度器决策: 暂停等待输入 · ${decision.reason}`
         })
         await runStore.updateRun(runId, {
           status: 'blocked',
@@ -1609,17 +1741,29 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
         return
       }
 
-      await addLog({
+      console.info('[SOLO] runLoop → dispatch_step', {
         runId,
-        scope: 'coordinator',
-        type: 'system',
-        content: `协调 AI 派发步骤: ${decision.step.title}`
+        stepRef: decision.step.stepRef,
+        title: decision.step.title,
+        depth: decision.step.depth,
+        selectedExpertId: decision.step.selectedExpertId,
+        doneWhen: decision.step.doneWhen
       })
 
       const participantExpertIds = new Set(resolveParticipantExperts(run).map((expert) => expert.id))
       const selectedExpertId = decision.step.selectedExpertId && participantExpertIds.has(decision.step.selectedExpertId)
         ? decision.step.selectedExpertId
         : undefined
+      const expertForStep = selectedExpertId
+        ? resolveExpertById(selectedExpertId, useAgentTeamsStore().experts)
+        : null
+
+      await addLog({
+        runId,
+        scope: 'coordinator',
+        type: 'system',
+        content: `调度器决策: 派发步骤「${decision.step.title}」 → ${expertForStep?.name || selectedExpertId || '自动分配专家'} (depth=${decision.step.depth})`
+      })
 
       const step = await createStep({
         runId,
@@ -1838,25 +1982,6 @@ export const useSoloExecutionStore = defineStore('soloExecution', () => {
       const key = buildSoloBindingKey(coordinatorRuntime.agent, 'coordinator', run.coordinatorExpertId)
       if (key) {
         bindingKeys.add(key)
-      }
-    }
-
-    resolveParticipantExperts(run).forEach((expert) => {
-      const runtime = resolveExpertRuntime(expert, agentStore.agents)
-      if (!runtime?.agent) {
-        return
-      }
-      const key = buildSoloBindingKey(runtime.agent, 'expert', expert.id)
-      if (key) {
-        bindingKeys.add(key)
-      }
-    })
-
-    const fallbackAgent = agentStore.agents.find((item) => item.type === 'cli') || agentStore.agents[0]
-    if (fallbackAgent) {
-      const fallbackKey = buildSoloBindingKey(fallbackAgent, 'expert', 'default')
-      if (fallbackKey) {
-        bindingKeys.add(fallbackKey)
       }
     }
 

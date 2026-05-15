@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -10,6 +10,8 @@ use uuid::Uuid;
 use crate::commands::cli_support::{
     configure_windows_std_command, find_cli_executable, get_cli_version,
 };
+
+use super::support::open_db_connection;
 
 /// CLI 工具信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,13 +46,6 @@ pub struct CliPathEntry {
     pub version: Option<String>,
     pub created_at: String,
     pub updated_at: String,
-}
-
-/// 获取数据库连接
-fn get_db_connection() -> Result<Connection, String> {
-    let persistence_dir = crate::commands::get_persistence_dir_path().map_err(|e| e.to_string())?;
-    let db_path = persistence_dir.join("data").join("easy-agent.db");
-    Connection::open(&db_path).map_err(|e| e.to_string())
 }
 
 /// 获取不同操作系统的扫描路径
@@ -282,7 +277,7 @@ pub async fn detect_cli_tools() -> Result<DetectionResult, String> {
 /// 获取所有 CLI 路径配置 (Tauri 命令)
 #[tauri::command]
 pub fn list_cli_paths() -> Result<Vec<CliPathEntry>, String> {
-    let conn = get_db_connection()?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
 
     let mut stmt = conn
         .prepare(
@@ -311,7 +306,7 @@ pub fn list_cli_paths() -> Result<Vec<CliPathEntry>, String> {
 /// 添加 CLI 路径配置 (Tauri 命令)
 #[tauri::command]
 pub fn add_cli_path(name: String, path: String) -> Result<CliPathEntry, String> {
-    let conn = get_db_connection()?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
 
     // 验证路径并获取版本
     let cli_path = PathBuf::from(&path);
@@ -339,7 +334,7 @@ pub fn add_cli_path(name: String, path: String) -> Result<CliPathEntry, String> 
 /// 更新 CLI 路径配置 (Tauri 命令)
 #[tauri::command]
 pub fn update_cli_path(id: String, name: String, path: String) -> Result<CliPathEntry, String> {
-    let conn = get_db_connection()?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
 
     // 验证路径并获取版本
     let cli_path = PathBuf::from(&path);
@@ -366,7 +361,7 @@ pub fn update_cli_path(id: String, name: String, path: String) -> Result<CliPath
 /// 删除 CLI 路径配置 (Tauri 命令)
 #[tauri::command]
 pub fn delete_cli_path(id: String) -> Result<(), String> {
-    let conn = get_db_connection()?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
 
     conn.execute("DELETE FROM cli_paths WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
@@ -397,7 +392,7 @@ pub struct MigrationResult {
 /// 检查是否需要迁移（是否存在旧的 CLI 路径配置且未迁移过）
 #[tauri::command]
 pub fn check_cli_paths_migration_needed() -> Result<bool, String> {
-    let conn = get_db_connection()?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
 
     // 检查是否已经迁移过
     let mut stmt = conn
@@ -424,7 +419,7 @@ pub fn check_cli_paths_migration_needed() -> Result<bool, String> {
 /// 获取待迁移的 CLI 路径数量
 #[tauri::command]
 pub fn get_pending_migration_count() -> Result<usize, String> {
-    let conn = get_db_connection()?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
 
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM cli_paths", [], |row| row.get(0))
@@ -436,7 +431,7 @@ pub fn get_pending_migration_count() -> Result<usize, String> {
 /// 执行 CLI 路径迁移到智能体配置
 #[tauri::command]
 pub fn migrate_cli_paths_to_agents() -> Result<MigrationResult, String> {
-    let conn = get_db_connection()?;
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
 
     // 检查是否已经迁移过
     let mut stmt = conn

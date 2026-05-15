@@ -4,11 +4,13 @@ mod logging;
 mod scheduler;
 mod unattended;
 
+fn log_bootstrap_error(tag: &str, message: &str) {
+    eprintln!("{}: {}", tag, message);
+    crate::logging::write_log("ERROR", "bootstrap", &format!("{}: {}", tag, message));
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    if let Err(error) = commands::init_persistence_dirs() {
-        eprintln!("Failed to initialize persistence directories: {}", error);
-    }
     if let Err(error) = logging::init_runtime_logging() {
         eprintln!("Failed to initialize runtime logging: {}", error);
     }
@@ -51,24 +53,12 @@ pub fn run() {
         .manage(unattended::runtime::UnattendedRuntimeState::default())
         .manage(commands::terminal::TerminalState::default())
         .setup(|app| {
-            // 初始化持久化目录
             if let Err(e) = commands::init_persistence_dirs() {
-                eprintln!("Failed to initialize persistence directories: {}", e);
-                crate::logging::write_log(
-                    "ERROR",
-                    "bootstrap",
-                    &format!("Failed to initialize persistence directories: {}", e),
-                );
+                log_bootstrap_error("Persistence", &format!("Failed to initialize persistence directories: {}", e));
             }
 
-            // 初始化数据库
             if let Err(e) = database::init_database() {
-                eprintln!("Failed to initialize database: {}", e);
-                crate::logging::write_log(
-                    "ERROR",
-                    "bootstrap",
-                    &format!("Failed to initialize database: {}", e),
-                );
+                log_bootstrap_error("Database", &format!("Failed to initialize database: {}", e));
             }
 
             // 初始化策略注册表
@@ -79,11 +69,7 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 scheduler::restore_scheduled_plans(&app_handle).await;
                 if let Err(error) = unattended::runtime::restore_runtime(&app_handle).await {
-                    crate::logging::write_log(
-                        "ERROR",
-                        "bootstrap",
-                        &format!("Failed to restore unattended runtime: {}", error),
-                    );
+                    log_bootstrap_error("Unattended", &format!("Failed to restore unattended runtime: {}", error));
                 }
 
                 // 启动后台调度器（需要在 Tokio 运行时上下文中）
@@ -227,6 +213,7 @@ pub fn run() {
             commands::agent_config::sync_remote_models,
             commands::agent_config::sync_opencode_models,
             commands::agent_config::sync_all_opencode_models,
+            commands::agent_config::sync_configured_opencode_models,
             commands::agent_config::list_opencode_provider_models,
             commands::agent_config::update_agent_model,
             commands::agent_config::delete_agent_model,
@@ -289,6 +276,8 @@ pub fn run() {
             commands::provider_profile::read_opencode_auth_providers,
             commands::provider_profile::list_opencode_models,
             commands::provider_profile::read_opencode_provider_api_key,
+            commands::provider_profile::read_configured_opencode_models,
+            commands::provider_profile::add_opencode_model_to_config,
             // Skill Plugin commands
             commands::skill_plugin::read_skill_file,
             commands::skill_plugin::list_skill_references,

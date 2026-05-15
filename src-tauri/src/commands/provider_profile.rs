@@ -1747,37 +1747,39 @@ pub fn list_opencode_models(provider: String) -> Result<Vec<String>, String> {
     let configured_models = load_configured_opencode_models(&provider);
 
     let output =
-        crate::commands::cli_support::run_cli_command(Path::new("opencode"), &["models", &provider])
-        .map_err(|e| format!("执行 opencode models {} 失败: {}", provider, e))?;
+        crate::commands::cli_support::run_cli_command(Path::new("opencode"), &["models", &provider]);
 
-    if !output.status.success() {
-        if !configured_models.is_empty() {
-            return Ok(configured_models);
+    let cli_models = match output {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+            let prefix = format!("{}/", provider);
+            let models: Vec<String> = stdout
+                .lines()
+                .filter_map(|line| {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with(&prefix) {
+                        Some(trimmed[prefix.len()..].to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            Some(models)
         }
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(format!("查询模型失败: {}", stderr.trim()));
+        _ => None,
+    };
+
+    if let Some(ref models) = cli_models {
+        if !models.is_empty() {
+            return Ok(models.clone());
+        }
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let prefix = format!("{}/", provider);
-
-    let models: Vec<String> = stdout
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            if trimmed.starts_with(&prefix) {
-                Some(trimmed[prefix.len()..].to_string())
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    if models.is_empty() && !configured_models.is_empty() {
+    if !configured_models.is_empty() {
         return Ok(configured_models);
     }
 
-    Ok(models)
+    Ok(cli_models.unwrap_or_default())
 }
 
 /// 将 provider ID 格式化为人类可读的 display name
@@ -1788,7 +1790,7 @@ fn format_provider_display_name(id: &str) -> String {
         "ai", "api", "sdk", "llm", "cpu", "gpu", "db", "io", "url", "gpt",
     ];
 
-    id.split(|c: char| c == '-' || c == '.')
+    id.split(|c: char| c == '-')
         .filter(|word| *word != "plan")
         .map(|word| {
             if upper_words.contains(&word.to_lowercase().as_str()) {
@@ -1807,4 +1809,275 @@ fn format_provider_display_name(id: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfiguredOpenCodeProvider {
+    pub provider: String,
+    pub display_name: String,
+    pub models: Vec<String>,
+    pub default_model: Option<String>,
+    pub has_api_key: bool,
+}
+
+#[tauri::command]
+pub fn read_configured_opencode_models() -> Result<Vec<ConfiguredOpenCodeProvider>, String> {
+    let config = load_opencode_config_json();
+    let auth = load_opencode_auth_json();
+
+    let mut default_provider: Option<String> = None;
+    let mut default_model_name: Option<String> = None;
+
+    if let Some(ref cfg) = config {
+        if let Some(model_str) = cfg.get("model").and_then(|v| v.as_str()) {
+            if let Some(slash_pos) = model_str.find('/') {
+                default_provider = Some(model_str[..slash_pos].to_string());
+                default_model_name = Some(model_str[slash_pos + 1..].to_string());
+            } else {
+                default_model_name = Some(model_str.to_string());
+            }
+        }
+    }
+
+    let auth_keys: std::collections::HashSet<String> = auth
+        .and_then(|a| a.as_object().map(|obj| obj.keys().cloned().collect()))
+        .unwrap_or_default();
+
+    let providers_obj = config
+        .as_ref()
+        .and_then(|c| c.get("provider").and_then(|p| p.as_object()));
+
+    let mut result = Vec::new();
+
+    if let Some(providers) = providers_obj {
+        for (provider_id, provider_val) in providers {
+            let mut models = Vec::new();
+            let mut is_default = false;
+
+            if let Some(pcfg) = provider_val.as_object() {
+                if let Some(models_obj) = pcfg.get("models").and_then(|m| m.as_object()) {
+                    models = models_obj.keys().cloned().collect();
+                    models.sort();
+                }
+            }
+
+            if default_provider.as_deref() == Some(provider_id.as_str()) {
+                is_default = true;
+            }
+
+            if !is_default && models.is_empty() {
+                continue;
+            }
+
+            let display_name = format_provider_display_name(provider_id);
+            let has_api_key = auth_keys.contains(provider_id);
+
+            let default_model = if is_default {
+                default_model_name.clone()
+            } else {
+                None
+            };
+
+            result.push(ConfiguredOpenCodeProvider {
+                provider: provider_id.clone(),
+                display_name,
+                models,
+                default_model,
+                has_api_key,
+            });
+        }
+    }
+
+    if default_provider.is_some() && !result.iter().any(|p| p.default_model.is_some()) {
+        if let Some(ref dp) = default_provider {
+            let display_name = format_provider_display_name(dp);
+            let has_api_key = auth_keys.contains(dp.as_str());
+            result.push(ConfiguredOpenCodeProvider {
+                provider: dp.clone(),
+                display_name,
+                models: Vec::new(),
+                default_model: default_model_name.clone(),
+                has_api_key,
+            });
+        }
+    }
+
+    if result.is_empty() && default_provider.is_none() {
+        if let Some(ref cfg) = config {
+            if let Some(providers) = cfg.get("provider").and_then(|p| p.as_object()) {
+                for (provider_id, _) in providers {
+                    let display_name = format_provider_display_name(provider_id);
+                    let has_api_key = auth_keys.contains(provider_id.as_str());
+                    result.push(ConfiguredOpenCodeProvider {
+                        provider: provider_id.clone(),
+                        display_name,
+                        models: Vec::new(),
+                        default_model: None,
+                        has_api_key,
+                    });
+                }
+            }
+        }
+    }
+
+    result.sort_by(|a, b| {
+        let a_is_default = a.default_model.is_some();
+        let b_is_default = b.default_model.is_some();
+        b_is_default.cmp(&a_is_default).then(a.provider.cmp(&b.provider))
+    });
+
+    Ok(result)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddOpencodeModelToConfigInput {
+    pub agent_id: String,
+    pub provider: String,
+    pub model_id: String,
+    pub display_name: String,
+    pub context_window: i64,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub npm: Option<String>,
+    pub provider_models: Option<Vec<String>>,
+}
+
+#[tauri::command]
+pub fn add_opencode_model_to_config(input: AddOpencodeModelToConfigInput) -> Result<(), String> {
+    let config_dir = opencode_config_dir()?;
+    fs::create_dir_all(&config_dir)
+        .map_err(|e| format!("Failed to create opencode config directory: {}", e))?;
+    let config_path = config_dir.join("opencode.json");
+
+    let mut config: serde_json::Value = if config_path.exists() {
+        let content = fs::read_to_string(&config_path)
+            .map_err(|e| format!("Failed to read opencode.json: {}", e))?;
+        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    if let Some(obj) = config.as_object_mut() {
+        let mut providers_map = parse_json_object_map(obj.get("provider"));
+        let mut provider_config = parse_json_object_map(providers_map.get(&input.provider));
+
+        let is_custom = input.base_url.is_some()
+            || input.npm.is_some()
+            || input.provider_models.as_ref().map_or(false, |m| !m.is_empty());
+
+        if is_custom {
+            if let Some(ref npm) = input.npm {
+                provider_config.insert("npm".to_string(), serde_json::json!(npm));
+            }
+
+            let mut options_map = parse_json_object_map(provider_config.get("options"));
+
+            if let Some(ref base_url) = input.base_url {
+                options_map.insert("baseURL".to_string(), serde_json::json!(base_url));
+            }
+            if let Some(ref api_key) = input.api_key {
+                options_map.insert("apiKey".to_string(), serde_json::json!(api_key));
+            }
+
+            if !options_map.is_empty() {
+                provider_config.insert(
+                    "options".to_string(),
+                    serde_json::Value::Object(options_map),
+                );
+            }
+
+            if let Some(ref extra_models) = input.provider_models {
+                let mut models_map = parse_json_object_map(provider_config.get("models"));
+                for m in extra_models {
+                    if !models_map.contains_key(m) {
+                        models_map.insert(m.clone(), serde_json::json!({ "name": m }));
+                    }
+                }
+                provider_config.insert(
+                    "models".to_string(),
+                    serde_json::Value::Object(models_map),
+                );
+            }
+        }
+
+        let mut models_map = parse_json_object_map(provider_config.get("models"));
+        if !models_map.contains_key(&input.model_id) {
+            models_map.insert(
+                input.model_id.clone(),
+                serde_json::json!({ "name": input.model_id }),
+            );
+        }
+        provider_config.insert(
+            "models".to_string(),
+            serde_json::Value::Object(models_map),
+        );
+
+        providers_map.insert(
+            input.provider.clone(),
+            serde_json::Value::Object(provider_config),
+        );
+        obj.insert(
+            "provider".to_string(),
+            serde_json::Value::Object(providers_map),
+        );
+    }
+
+    let content = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("Failed to serialize opencode.json: {}", e))?;
+    fs::write(&config_path, content)
+        .map_err(|e| format!("Failed to write opencode.json: {}", e))?;
+
+    if let Some(ref api_key) = input.api_key {
+        let auth_dir = opencode_auth_dir()?;
+        fs::create_dir_all(&auth_dir)
+            .map_err(|e| format!("Failed to create opencode auth directory: {}", e))?;
+        let auth_path = auth_dir.join("auth.json");
+
+        let mut auth: serde_json::Value = if auth_path.exists() {
+            let content = fs::read_to_string(&auth_path)
+                .map_err(|e| format!("Failed to read auth.json: {}", e))?;
+            serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+        } else {
+            serde_json::json!({})
+        };
+
+        if let Some(auth_obj) = auth.as_object_mut() {
+            auth_obj.insert(
+                input.provider.clone(),
+                serde_json::json!({
+                    "type": "api",
+                    "key": api_key
+                }),
+            );
+        }
+
+        let auth_content = serde_json::to_string_pretty(&auth)
+            .map_err(|e| format!("Failed to serialize auth.json: {}", e))?;
+        fs::write(&auth_path, auth_content)
+            .map_err(|e| format!("Failed to write auth.json: {}", e))?;
+    }
+
+    let full_model_id = format!("{}/{}", input.provider, input.model_id);
+    let conn = open_db_connection().map_err(|e| e.to_string())?;
+    let now = now_rfc3339();
+    let id = uuid::Uuid::new_v4().to_string();
+
+    conn.execute(
+        "INSERT INTO agent_models (id, agent_id, model_id, display_name, is_builtin, is_default, sort_order, enabled, context_window, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, 0, 0, 0, 1, ?5, ?6, ?7)",
+        rusqlite::params![
+            &id,
+            &input.agent_id,
+            &full_model_id,
+            &input.display_name,
+            input.context_window,
+            &now,
+            &now
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
 }
