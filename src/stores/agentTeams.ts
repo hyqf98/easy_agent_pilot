@@ -88,36 +88,22 @@ export const useAgentTeamsStore = defineStore('agentTeams', () => {
     experts.value.find(expert => expert.id === selectedExpertId.value) || null
   )
 
-  const builtinGeneralExpert = computed(() =>
-    experts.value.find(expert => expert.builtinCode === 'builtin-general') || null
-  )
-  const builtinSoloCoordinatorExpert = computed(() =>
-    experts.value.find(expert => expert.builtinCode === 'builtin-solo-coordinator') || null
-  )
-  const builtinPlannerExpert = computed(() =>
-    experts.value.find(expert => expert.builtinCode === 'builtin-planner') || null
-  )
-  const builtinDeveloperExpert = computed(() =>
-    experts.value.find(expert => expert.builtinCode === 'builtin-developer') || null
-  )
-  const builtinArchitectExpert = computed(() =>
-    experts.value.find(expert => expert.builtinCode === 'builtin-architect') || null
-  )
-  const builtinTesterExpert = computed(() =>
-    experts.value.find(expert => expert.builtinCode === 'builtin-tester') || null
-  )
-  const builtinWriterExpert = computed(() =>
-    experts.value.find(expert => expert.builtinCode === 'builtin-writer') || null
-  )
-  const builtinDesignerExpert = computed(() =>
-    experts.value.find(expert => expert.builtinCode === 'builtin-designer') || null
-  )
-  const builtinReviewerExpert = computed(() =>
-    experts.value.find(expert => expert.builtinCode === 'builtin-reviewer') || null
-  )
-  const builtinOpsExpert = computed(() =>
-    experts.value.find(expert => expert.builtinCode === 'builtin-ops') || null
-  )
+  function getBuiltinExpert(builtinCode: string) {
+    return computed(() =>
+      experts.value.find(expert => expert.builtinCode === builtinCode) || null
+    )
+  }
+
+  const builtinGeneralExpert = getBuiltinExpert('builtin-general')
+  const builtinSoloCoordinatorExpert = getBuiltinExpert('builtin-solo-coordinator')
+  const builtinPlannerExpert = getBuiltinExpert('builtin-planner')
+  const builtinDeveloperExpert = getBuiltinExpert('builtin-developer')
+  const builtinArchitectExpert = getBuiltinExpert('builtin-architect')
+  const builtinTesterExpert = getBuiltinExpert('builtin-tester')
+  const builtinWriterExpert = getBuiltinExpert('builtin-writer')
+  const builtinDesignerExpert = getBuiltinExpert('builtin-designer')
+  const builtinReviewerExpert = getBuiltinExpert('builtin-reviewer')
+  const builtinOpsExpert = getBuiltinExpert('builtin-ops')
 
   async function loadExperts(force = false): Promise<AgentExpert[]> {
     if (isLoading.value) {

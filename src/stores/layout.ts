@@ -46,50 +46,45 @@ const AGENT_TYPE_FILTER_KEY = 'ea-agent-type-filter'
 // 会话排序存储 key
 const SESSION_SORT_BY_KEY = 'ea-session-sort-by'
 
-// 从 localStorage 读取状态
-function loadPanelState(): { activePanel: LeftPanelType; panelWidth: number } {
+function loadFromStorage<T>(key: string, defaultValue: T): T {
   try {
-    const saved = localStorage.getItem(LEFT_PANEL_STATE_KEY)
-    if (saved) {
-      return JSON.parse(saved)
-    }
+    const saved = localStorage.getItem(key)
+    if (saved) return JSON.parse(saved)
   } catch {
     // ignore
   }
-  return { activePanel: 'unified', panelWidth: DEFAULT_PANEL_WIDTH }
+  return defaultValue
+}
+
+function saveToStorage(key: string, value: unknown): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    // ignore
+  }
+}
+
+// 从 localStorage 读取状态
+function loadPanelState(): { activePanel: LeftPanelType; panelWidth: number } {
+  return loadFromStorage(LEFT_PANEL_STATE_KEY, { activePanel: 'unified' as LeftPanelType, panelWidth: DEFAULT_PANEL_WIDTH })
 }
 
 // 从 localStorage 读取项目 Tab 状态
 function loadProjectTabStates(): Map<string, ProjectTabType> {
-  try {
-    const saved = localStorage.getItem(PROJECT_TAB_STATES_KEY)
-    if (saved) {
-      const parsed = JSON.parse(saved) as Record<string, ProjectTabType>
-      return new Map(Object.entries(parsed))
-    }
-  } catch {
-    // ignore
-  }
-  return new Map()
+  const parsed = loadFromStorage<Record<string, ProjectTabType> | null>(PROJECT_TAB_STATES_KEY, null)
+  return parsed ? new Map(Object.entries(parsed)) : new Map()
 }
 
 // 保存项目 Tab 状态到 localStorage
 function saveProjectTabStates(states: Map<string, ProjectTabType>) {
-  try {
-    const obj = Object.fromEntries(states)
-    localStorage.setItem(PROJECT_TAB_STATES_KEY, JSON.stringify(obj))
-  } catch {
-    // ignore
-  }
+  saveToStorage(PROJECT_TAB_STATES_KEY, Object.fromEntries(states))
 }
 
 // 从 localStorage 读取智能体筛选
 function loadAgentFilter(): AgentFilter {
   try {
     const saved = localStorage.getItem(AGENT_TYPE_FILTER_KEY)
-    if (saved) {
-      return saved as AgentFilter
-    }
+    if (saved) return saved as AgentFilter
   } catch {
     // ignore
   }
@@ -107,33 +102,18 @@ function saveAgentFilter(filter: AgentFilter) {
 
 // 从 localStorage 读取会话排序
 function loadSessionSortBy(): SessionSortBy {
-  try {
-    const saved = localStorage.getItem(SESSION_SORT_BY_KEY)
-    if (saved === 'createdAt' || saved === 'updatedAt') {
-      return saved
-    }
-  } catch {
-    // ignore
-  }
-  return 'updatedAt'
+  const saved = loadFromStorage<string | null>(SESSION_SORT_BY_KEY, null)
+  return saved === 'createdAt' || saved === 'updatedAt' ? saved : 'updatedAt'
 }
 
 // 保存会话排序到 localStorage
 function saveSessionSortBy(sortBy: SessionSortBy) {
-  try {
-    localStorage.setItem(SESSION_SORT_BY_KEY, sortBy)
-  } catch {
-    // ignore
-  }
+  saveToStorage(SESSION_SORT_BY_KEY, sortBy)
 }
 
 // 保存状态到 localStorage
 function savePanelState(state: { activePanel: LeftPanelType; panelWidth: number }) {
-  try {
-    localStorage.setItem(LEFT_PANEL_STATE_KEY, JSON.stringify(state))
-  } catch {
-    // ignore
-  }
+  saveToStorage(LEFT_PANEL_STATE_KEY, state)
 }
 
 export const useLayoutStore = defineStore('layout', () => {

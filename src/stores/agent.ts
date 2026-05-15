@@ -11,8 +11,7 @@ export type AgentProvider = 'claude' | 'codex' | 'opencode'
 // 智能体状态
 export type AgentStatus = 'online' | 'offline' | 'error' | 'testing'
 
-/**
- */
+/** 智能体配置 */
 export interface AgentConfig {
   id: string
   name: string
@@ -412,10 +411,7 @@ export const useAgentStore = defineStore('agent', () => {
 
   // 快速添加检测到的 CLI 工具
   async function addDetectedTool(tool: CliTool) {
-    const provider = tool.name.toLowerCase().includes('claude') ? 'claude' as AgentProvider
-                   : tool.name.toLowerCase().includes('codex') ? 'codex' as AgentProvider
-                   : tool.name.toLowerCase().includes('opencode') ? 'opencode' as AgentProvider
-                   : undefined
+    const provider = inferAgentProvider({ name: tool.name, cliPath: tool.command })
 
     const name = tool.name === 'claude' ? 'Claude CLI'
                : tool.name === 'codex' ? 'Codex CLI'

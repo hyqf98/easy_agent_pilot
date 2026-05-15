@@ -32,6 +32,7 @@ import { conversationService } from '@/services/conversation'
 import { clearPluginCommandsCache, loadPluginSlashCommands, toSlashCommandDescriptor } from '@/services/pluginCommands'
 import { writeFrontendRuntimeLog } from '@/services/runtimeLog/client'
 import { getErrorMessage } from '@/utils/api'
+import logger from '@/utils/logger'
 import {
   executeSlashCommand,
   parseSlashCommandInput,
@@ -105,7 +106,7 @@ const COMPOSER_DEBUG = false
 function composerDebug(tag: string, payload: Record<string, unknown>) {
   if (!COMPOSER_DEBUG) return
   const ts = performance.now().toFixed(1)
-  console.log(`%c[composer:${tag}] @${ts}ms`, 'color:#0ea5e9;font-weight:600', payload)
+  logger.log(`%c[composer:${tag}] @${ts}ms`, 'color:#0ea5e9;font-weight:600', payload)
 }
 const MEMORY_SUGGESTION_AUTO_HIDE_MS = 3000
 const MEMORY_SUGGESTION_EMPTY_STATE_DELAY_MS = 3000

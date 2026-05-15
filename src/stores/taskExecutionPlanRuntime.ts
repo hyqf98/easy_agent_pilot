@@ -1,6 +1,7 @@
 import type { Task, TaskStatus, Plan } from '@/types/plan'
 import type { ExecutionQueue, TaskExecutionState } from '@/types/taskExecution'
 import { ACTIVE_EXECUTION_STATUSES, TERMINAL_TASK_STATUSES } from './taskExecutionShared'
+import logger from '@/utils/logger'
 
 export function getPlanTasks(tasks: Task[], planId: string): Task[] {
   return tasks.filter(task => task.planId === planId)
@@ -101,12 +102,12 @@ export function findNextExecutableTask(
     }
 
     if (task.status === 'blocked') {
-      console.log('[TaskExecution] Skipping blocked task:', task.title)
+      logger.log('[TaskExecution] Skipping blocked task:', task.title)
       continue
     }
 
     if (!areDependenciesMet(taskId)) {
-      console.log('[TaskExecution] Task dependencies not met:', task.title)
+      logger.log('[TaskExecution] Task dependencies not met:', task.title)
       continue
     }
 

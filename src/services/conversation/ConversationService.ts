@@ -5,6 +5,7 @@ import { useSessionExecutionStore, type ComposerMemoryReference } from '@/stores
 import { useProjectStore } from '@/stores/project'
 import { useAgentStore, type AgentConfig, inferAgentProvider } from '@/stores/agent'
 import { useNotificationStore } from '@/stores/notification'
+import logger from '@/utils/logger'
 import { useTokenStore } from '@/stores/token'
 import { useMemoryStore } from '@/stores/memory'
 import { useAgentTeamsStore } from '@/stores/agentTeams'
@@ -1078,7 +1079,7 @@ export class ConversationService {
       }
       if (updates.toolCalls) {
         const summary = updates.toolCalls.map((tc: { id: string; name: string; status: string }) => `${tc.name}(${tc.id?.slice(-6)})=${tc.status}`)
-        console.log('[🔧 flushUi] toolCalls update:', summary)
+        logger.log('[🔧 flushUi] toolCalls update:', summary)
       }
       messageStore.updateMessageBuffered(aiMessage.id, updates, options)
     }
@@ -1445,7 +1446,7 @@ export class ConversationService {
           onToolUse: (toolCall) => {
             clearRetryPresentationOnRecoveredStream()
             markMetric('firstToolAt')
-            console.log('[🔧 tool_use] received:', { id: toolCall.id, name: toolCall.name, status: toolCall.status, toolCallsCount: toolCalls.length })
+            logger.log('[🔧 tool_use] received:', { id: toolCall.id, name: toolCall.name, status: toolCall.status, toolCallsCount: toolCalls.length })
             const existingIndex = toolCalls.findIndex(tc => tc.id === toolCall.id)
             let isNewToolCall = false
             if (existingIndex >= 0) {
@@ -1464,9 +1465,9 @@ export class ConversationService {
             } else {
               toolCalls.push(toolCall)
               isNewToolCall = true
-              console.log('[🔧 tool_use] NEW tool pushed, total:', toolCalls.length)
+              logger.log('[🔧 tool_use] NEW tool pushed, total:', toolCalls.length)
             }
-            console.log('[🔧 tool_use] buffering update, msgStatus:', getCurrentAiMessage()?.status)
+            logger.log('[🔧 tool_use] buffering update, msgStatus:', getCurrentAiMessage()?.status)
             bufferMessageUpdate({
               toolCalls: [...toolCalls]
             })
@@ -1499,7 +1500,7 @@ export class ConversationService {
             })
           },
           onToolResult: (toolCallId, result, isError) => {
-            console.log('[🔧 tool_result] received:', { toolCallId, isError, resultLen: result?.length })
+            logger.log('[🔧 tool_result] received:', { toolCallId, isError, resultLen: result?.length })
             if (!isError) {
               clearRetryPresentationOnRecoveredStream()
             }
@@ -1510,7 +1511,7 @@ export class ConversationService {
               if (isError) {
                 tc.errorMessage = result
               }
-              console.log('[🔧 tool_result] updating tool status to', tc.status)
+              logger.log('[🔧 tool_result] updating tool status to', tc.status)
               bufferMessageUpdate({
                 toolCalls: [...toolCalls]
               })

@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
 import { usePlanStore } from '@/stores/plan'
+import logger from '@/utils/logger'
 import { useTaskStore } from '@/stores/task'
 import { useTaskExecutionStore } from '@/stores/taskExecution'
 
@@ -43,7 +44,7 @@ export function useWindowEvents() {
     // 前端这里负责补上真正的执行队列恢复，否则计划只会进入“执行中”状态而不会启动任务执行器。
     const unlistenScheduledTrigger = await listen<string>('plan:scheduled-trigger', async (event) => {
       const planId = event.payload
-      console.log('Scheduled plan triggered:', planId)
+      logger.log('Scheduled plan triggered:', planId)
 
       try {
         const plan = await planStore.getPlan(planId)

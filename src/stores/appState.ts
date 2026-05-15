@@ -67,30 +67,26 @@ export const useAppStateStore = defineStore('appState', () => {
     }
   }
 
-  // 监听状态变化并自动保存
-  watch(lastProjectId, (newVal) => {
-    if (isInitialized.value && newVal) {
-      saveState(APP_STATE_KEYS.LAST_PROJECT_ID, newVal)
-    }
-  })
+  function watchAndPersist(
+    source: ReturnType<typeof ref>,
+    key: string,
+    transform: (val: unknown) => string | null,
+    options?: Record<string, unknown>
+  ) {
+    watch(source, (newVal) => {
+      if (isInitialized.value) {
+        const serialized = transform(newVal)
+        if (serialized !== null) {
+          saveState(key, serialized)
+        }
+      }
+    }, options)
+  }
 
-  watch(lastSessionIds, (newVal) => {
-    if (isInitialized.value) {
-      saveState(APP_STATE_KEYS.LAST_SESSION_IDS, JSON.stringify(newVal))
-    }
-  }, { deep: true })
-
-  watch(lastActiveSessionId, (newVal) => {
-    if (isInitialized.value) {
-      saveState(APP_STATE_KEYS.LAST_ACTIVE_SESSION_ID, newVal ?? '')
-    }
-  })
-
-  watch(panelExpanded, (newVal) => {
-    if (isInitialized.value) {
-      saveState(APP_STATE_KEYS.PANEL_EXPANDED, String(newVal))
-    }
-  })
+  watchAndPersist(lastProjectId, APP_STATE_KEYS.LAST_PROJECT_ID, (val) => val ? val as string : null)
+  watchAndPersist(lastSessionIds, APP_STATE_KEYS.LAST_SESSION_IDS, (val) => JSON.stringify(val), { deep: true })
+  watchAndPersist(lastActiveSessionId, APP_STATE_KEYS.LAST_ACTIVE_SESSION_ID, (val) => (val as string) ?? '')
+  watchAndPersist(panelExpanded, APP_STATE_KEYS.PANEL_EXPANDED, (val) => String(val))
 
   // 设置上次项目
   function setLastProject(projectId: string | null) {

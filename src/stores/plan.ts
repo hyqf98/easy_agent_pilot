@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useNotificationStore } from './notification'
+import logger from '@/utils/logger'
 import { useTaskExecutionStore } from './taskExecution'
 import { useTaskStore } from './task'
 import { useTaskSplitStore } from './taskSplit'
@@ -257,11 +258,11 @@ export const usePlanStore = defineStore('plan', () => {
       if (scheduledTime > now) {
         // 定时时间在未来，设置为 scheduled 状态
         updatedPlan = await updatePlan(planId, { scheduleStatus: 'scheduled' })
-        console.log(`Plan ${planId} set as scheduled for ${scheduledTime.toLocaleString('zh-CN')}`)
+        logger.log(`Plan ${planId} set as scheduled for ${scheduledTime.toLocaleString('zh-CN')}`)
       } else {
         // 时间已过，清除定时设置
         updatedPlan = await updatePlan(planId, { scheduledAt: undefined, scheduleStatus: 'none' })
-        console.log(`Plan ${planId} scheduled time has passed, cleared schedule`)
+        logger.log(`Plan ${planId} scheduled time has passed, cleared schedule`)
       }
     }
 

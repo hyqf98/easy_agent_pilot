@@ -2,6 +2,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import type { AgentConfig } from '@/stores/agent'
 import { getErrorMessage } from '@/utils/api'
+import logger from '@/utils/logger'
 import {
   buildAgentExecutionRequest,
   getAgentRuntimeProfile,
@@ -97,7 +98,7 @@ export abstract class BaseAgentStrategy implements AgentStrategy {
         this.getEventName(context.sessionId),
         (event) => {
           if (event.payload?.type === 'tool_use' || event.payload?.type === 'tool_result') {
-            console.log('[🔧 BackendEvent] raw:', event.payload?.type, {
+            logger.log('[🔧 BackendEvent] raw:', event.payload?.type, {
               toolName: event.payload?.toolName,
               toolCallId: event.payload?.toolCallId,
               hasResult: event.payload?.type === 'tool_result' ? !!event.payload?.toolResult : undefined
