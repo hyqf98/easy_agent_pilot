@@ -9,12 +9,14 @@
   聚合 Claude CLI / Codex CLI / OpenCode CLI，统一管理项目、会话、计划与执行
 </p>
 
-[![GitHub](./images/badge-github.svg)](https://github.com/hyqf98/easy_agent_pilot)
-![Tauri 2](./images/badge-tauri.svg)
-![Vue 3](./images/badge-vue.svg)
-![Rust](./images/badge-rust.svg)
-![SQLite](./images/badge-sqlite.svg)
-![MIT License](./images/badge-license.svg)
+<p align="center">
+  [![GitHub](./images/badge-github.svg)](https://github.com/hyqf98/easy_agent_pilot)
+  ![Tauri 2](./images/badge-tauri.svg)
+  ![Vue 3](./images/badge-vue.svg)
+  ![Rust](./images/badge-rust.svg)
+  ![SQLite](./images/badge-sqlite.svg)
+  ![MIT License](./images/badge-license.svg)
+</p>
 
 ---
 
