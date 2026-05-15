@@ -10,12 +10,12 @@
 </p>
 
 <p align="center">
-  [![GitHub](./images/badge-github.svg)](https://github.com/hyqf98/easy_agent_pilot)
-  ![Tauri 2](./images/badge-tauri.svg)
-  ![Vue 3](./images/badge-vue.svg)
-  ![Rust](./images/badge-rust.svg)
-  ![SQLite](./images/badge-sqlite.svg)
-  ![MIT License](./images/badge-license.svg)
+  <a href="https://github.com/hyqf98/easy_agent_pilot"><img src="./images/badge-github.svg" alt="GitHub" /></a>
+  <img src="./images/badge-tauri.svg" alt="Tauri 2" />
+  <img src="./images/badge-vue.svg" alt="Vue 3" />
+  <img src="./images/badge-rust.svg" alt="Rust" />
+  <img src="./images/badge-sqlite.svg" alt="SQLite" />
+  <img src="./images/badge-license.svg" alt="MIT License" />
 </p>
 
 ---
