@@ -32,9 +32,7 @@ screenshots/
 src-tauri/data/
 data/
 
-# Claude / GitNexus auto-generated skills
 .claude/skills/generated/
-.claude/skills/gitnexus/
 
 # Local agent skills config
 .agents/
@@ -45,9 +43,6 @@ data/
 
 # 开发驾驭规范（本地维护，不入库）
 .tauri-harness/
-
-# GitNexus 代码索引（含 lbug 大文件 + 缓存，仅本地）
-.gitnexus/
 
 # Superpowers 规划/设计临时文档（本地草稿）
 docs/superpowers/
